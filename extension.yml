@@ -28,12 +28,6 @@ hooks:
     optional: true
     prompt: "Generate blueprint from tasks?"
     description: "Auto-generate blueprint.md after task generation"
-  before_implement:
-    command: "speckit.blueprint.generate"
-    optional: true
-    prompt: "Blueprint available. Review before implementing?"
-    description: "Optional reminder — suggests reviewing the blueprint before implementation if one exists"
-
 tags:
   - "blueprint"
   - "pre-implementation"

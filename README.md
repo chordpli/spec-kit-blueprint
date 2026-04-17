@@ -123,16 +123,15 @@ Exit code `0` = pass. Exit code `1` = failure.
 
 ## Hooks
 
-Two optional hooks:
+One optional hook:
 
 | Hook | When | Prompt |
 |------|------|--------|
 | `after_tasks` | After `/speckit.tasks` completes | "Generate blueprint from tasks?" |
-| `before_implement` | When `/speckit.implement` is called and `blueprint.md` exists | "Blueprint available. Review before implementing?" |
 
-The `before_implement` hook is an optional reminder — it suggests reviewing the blueprint if one exists. Blueprint is not required for implementation. Answer `n` to proceed directly.
+Answer `y` to generate in doc-only mode. You can always run the command manually with a different mode afterward.
 
-Disable hooks: `specify extension disable blueprint`
+Disable hook: `specify extension disable blueprint`
 
 ## Validation Script
 
