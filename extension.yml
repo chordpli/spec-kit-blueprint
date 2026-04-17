@@ -31,8 +31,8 @@ hooks:
   before_implement:
     command: "speckit.blueprint.generate"
     optional: true
-    prompt: "No blueprint.md found. Generate blueprint before implementing?"
-    description: "Safety net — prompt to generate the blueprint if it does not exist when /speckit.implement is called"
+    prompt: "Blueprint available. Review before implementing?"
+    description: "Optional reminder — suggests reviewing the blueprint before implementation if one exists"
 
 tags:
   - "blueprint"

@@ -128,9 +128,9 @@ Two optional hooks:
 | Hook | When | Prompt |
 |------|------|--------|
 | `after_tasks` | After `/speckit.tasks` completes | "Generate blueprint from tasks?" |
-| `before_implement` | When `/speckit.implement` is called without `blueprint.md` | "No blueprint.md found. Generate blueprint before implementing?" |
+| `before_implement` | When `/speckit.implement` is called and `blueprint.md` exists | "Blueprint available. Review before implementing?" |
 
-The `before_implement` hook is a safety net — it prevents accidentally skipping the review step. Answer `n` to proceed without a blueprint.
+The `before_implement` hook is an optional reminder — it suggests reviewing the blueprint if one exists. Blueprint is not required for implementation. Answer `n` to proceed directly.
 
 Disable hooks: `specify extension disable blueprint`
 
