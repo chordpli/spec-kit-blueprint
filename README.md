@@ -1,3 +1,5 @@
+
+
 # Blueprint
 
 Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` with complete, ready-to-use content for every task — so you can review, understand, and type through the implementation before `/speckit.implement` runs.
@@ -108,7 +110,7 @@ Exit code `0` = pass. Exit code `1` = failure.
 | _(none)_ | doc-only — generate `blueprint.md` only |
 | `scaffold` | Generate blueprint + stub files with TODO markers |
 
-**Requires**: `tasks.md` in the feature directory.
+**Requires**: `tasks.md`, `spec.md`, and `plan.md` in the feature directory.
 
 **Produces**: `specs/{feature}/blueprint.md` — structured by phase and task, with full content blocks, before/after diffs, key decisions, implementation order, and checklist.
 
