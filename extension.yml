@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: "blueprint"
   name: "Blueprint"
-  version: "1.0.0"
+  version: "1.1.0"
   description: "Stay code-literate in AI-driven development: review a complete code blueprint for every task from spec artifacts before /implement runs"
   author: "chordpli"
   repository: "https://github.com/chordpli/spec-kit-blueprint"
@@ -21,6 +21,16 @@ provides:
     - name: "speckit.blueprint.validate"
       file: "commands/speckit.blueprint.validate.md"
       description: "Validate scaffold files against the blueprint"
+    - name: "speckit.blueprint.cleanup"
+      file: "commands/speckit.blueprint.cleanup.md"
+      description: "Sweep leftover scaffold markers and stale comments after implementation"
+
+  scripts:
+    - name: "validate-scaffold"
+      file: "scripts/bash/validate-scaffold.sh"
+      description: "Checks scaffold files against blueprint.md (existence, TODO markers, over-implementation)"
+      runtimes:
+        - bash
 
 hooks:
   after_tasks:
@@ -28,6 +38,12 @@ hooks:
     optional: true
     prompt: "Generate blueprint from tasks?"
     description: "Auto-generate blueprint.md after task generation"
+  after_implement:
+    command: "speckit.blueprint.cleanup"
+    optional: true
+    prompt: "Sweep leftover scaffold markers and stale comments?"
+    description: "Clean up blueprint scaffold residue after implementation"
+
 tags:
   - "blueprint"
   - "pre-implementation"
