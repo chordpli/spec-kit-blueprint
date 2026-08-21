@@ -37,10 +37,10 @@ Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided b
 
 ## Validation Checks
 
-The script performs four checks:
+The script reads the `**Mode**:` line from `blueprint.md` first. `doc-only` and `guide` write nothing to disk, so for those modes only check 1 runs and missing files are reported as expected, not as failures. Scaffold modes (`scaffold`, `guide scaffold`) run all four checks:
 
 1. **Blueprint Document**: Verifies `blueprint.md` exists
-2. **File Existence**: All NEW files referenced in the blueprint exist on disk
+2. **File Existence**: All NEW files referenced in the blueprint exist on disk (placeholder/glob paths such as `docs/2026-MM-DD-*.md` are skipped)
 3. **TODO Markers**: Service and test files contain TODO comments (confirming scaffold mode)
 4. **Over-Implementation Detection**: No scaffold file is suspiciously complete (zero TODOs + many methods + many lines)
 
