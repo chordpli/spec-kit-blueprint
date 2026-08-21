@@ -8,8 +8,10 @@
 #   3. Do scaffold files contain TODO markers? (business logic not yet implemented)
 #   4. Are any scaffold files over-implemented? (no TODOs in files that should have them)
 #
-# Usage: bash validate-scaffold.sh [feature-dir]
+# Usage: bash validate-scaffold.sh [feature-dir] [--strict]
 #   feature-dir: specs/{feature}/ path (default: auto-detect from current branch)
+#   --strict:    validate files on disk even when blueprint.md records a doc-only/guide
+#                mode — for scaffolding done after the blueprint was generated
 
 set -eo pipefail
 
@@ -31,8 +33,17 @@ header(){ echo -e "\n${CYAN}[$1]${NC}"; }
 # === Resolve feature directory ===
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-if [[ -n "${1:-}" ]]; then
-    FEATURE_DIR="$1"
+STRICT=false
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --strict) STRICT=true ;;
+        *)        ARGS+=("$arg") ;;
+    esac
+done
+
+if [[ -n "${ARGS[0]:-}" ]]; then
+    FEATURE_DIR="${ARGS[0]}"
 else
     BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
     if [[ "$BRANCH" =~ ^([0-9]{3})- ]]; then
@@ -56,6 +67,35 @@ echo -e "${CYAN}=== Blueprint Scaffold Validator ===${NC}"
 echo "Feature: $FEATURE_DIR"
 echo "Blueprint: $GUIDE"
 
+# === Detect the mode the blueprint was generated in ===
+# doc-only and guide write nothing to disk, so "file missing" is the expected
+# state there, not a failure. Only scaffold modes are validated strictly.
+MODE="unknown"
+if [[ -f "$GUIDE" ]]; then
+    # Only the mode token itself is parsed — the rest of the line is prose that may
+    # mention other mode names (e.g. a link to a scaffolding decision doc).
+    MODE_LINE="$(grep -m1 -i '^\*\*Mode\*\*:' "$GUIDE" || true)"
+    MODE_TOKENS="$(echo "${MODE_LINE#*:}" | tr '[:upper:]' '[:lower:]' | awk '{print $1, $2}')"
+    case "$MODE_TOKENS" in
+        "guide scaffold"*) MODE="guide-scaffold" ;;
+        guide-scaffold*)   MODE="guide-scaffold" ;;
+        guide*)            MODE="guide" ;;
+        scaffold*)         MODE="scaffold" ;;
+        doc-only*)         MODE="doc-only" ;;
+    esac
+fi
+
+SCAFFOLD_EXPECTED=true
+case "$MODE" in
+    doc-only|guide) SCAFFOLD_EXPECTED=false ;;
+esac
+if [[ "$STRICT" == true ]]; then
+    SCAFFOLD_EXPECTED=true
+    echo "Mode: $MODE (--strict: validating files on disk anyway)"
+else
+    echo "Mode: $MODE"
+fi
+
 # =============================================
 # CHECK 1: blueprint.md existence
 # =============================================
@@ -76,9 +116,17 @@ header "2. File Existence (NEW files from blueprint)"
 
 NEW_FILES=()
 while IFS= read -r line; do
-    # Pattern 1: **File**: `path` (new...)
-    if [[ "$line" =~ \*\*File\*\*:\ \`([^\`]+)\`.*\(new ]]; then
-        NEW_FILES+=("${BASH_REMATCH[1]}")
+    # Pattern 1: **File**: `path` (new...) — a task may list several paths on one line
+    if [[ "$line" =~ \*\*File\*\*: ]] && [[ "$line" == *"(new"* ]]; then
+        rest="$line"
+        while [[ "$rest" =~ \`([^\`]+)\`(.*) ]]; do
+            candidate="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+            # Only real paths: must contain a directory separator and an extension
+            if [[ "$candidate" == */* ]] && [[ "$candidate" == *.* ]]; then
+                NEW_FILES+=("$candidate")
+            fi
+        done
     # Pattern 2: table row with "New" — | `path` | ... | New |
     elif [[ "$line" =~ \|[[:space:]]*\`?([a-zA-Z][^\`\|]+\.[a-zA-Z]+)\`?[[:space:]]*\|.*[Nn]ew ]]; then
         NEW_FILES+=("${BASH_REMATCH[1]}")
@@ -90,8 +138,23 @@ done < "$GUIDE"
 
 if [[ ${#NEW_FILES[@]} -eq 0 ]]; then
     warn "No NEW file paths detected in blueprint (check blueprint format)"
+elif [[ "$SCAFFOLD_EXPECTED" == false ]]; then
+    MISSING_COUNT=0
+    PRESENT_COUNT=0
+    for f in "${NEW_FILES[@]}"; do
+        if [[ -f "$REPO_ROOT/$f" ]]; then
+            PRESENT_COUNT=$((PRESENT_COUNT + 1))
+        else
+            MISSING_COUNT=$((MISSING_COUNT + 1))
+        fi
+    done
+    pass "$MODE mode writes nothing to disk — file existence not required (${PRESENT_COUNT} present, ${MISSING_COUNT} not yet created)"
 else
     for f in "${NEW_FILES[@]}"; do
+        # Skip placeholder/glob paths (e.g. docs/2026-MM-DD-*.md) — not real targets
+        if [[ "$f" == *"*"* ]] || [[ "$f" == *"MM-DD"* ]] || [[ "$f" == *"{"* ]]; then
+            continue
+        fi
         FULL_PATH="$REPO_ROOT/$f"
         if [[ -f "$FULL_PATH" ]]; then
             pass "$f exists"
@@ -105,6 +168,21 @@ fi
 # CHECK 3: TODO markers in scaffold files
 # =============================================
 header "3. TODO Markers in Scaffold Files"
+
+if [[ "$SCAFFOLD_EXPECTED" == false ]]; then
+    pass "$MODE mode — no scaffold files on disk to check"
+    echo ""
+    echo -e "${CYAN}=== Summary ===${NC}"
+    echo -e "  ${GREEN}PASS${NC}: $PASS"
+    echo -e "  ${YELLOW}WARN${NC}: $WARN"
+    echo -e "  ${RED}FAIL${NC}: $FAIL"
+    if [[ $FAIL -gt 0 ]]; then
+        echo -e "\n${RED}Validation FAILED — $FAIL issue(s) found${NC}"
+        exit 1
+    fi
+    echo -e "\n${GREEN}All checks passed${NC} (doc-only/guide blueprint — pass --strict to validate files scaffolded after generation)"
+    exit 0
+fi
 
 # Collect scaffold files referenced in the blueprint that exist on disk
 SCAFFOLD_FILES=()
@@ -142,10 +220,11 @@ check_todo_in_file() {
     fi
 
     local has_todo=$(grep -ci "TODO" "$file" 2>/dev/null || echo 0)
+    local has_bp_todo=$(grep -c "TODO(blueprint)" "$file" 2>/dev/null || echo 0)
     local has_not_impl=$(grep -ci "NotImplemented\|not_implemented\|raise NotImplementedError\|throw.*NotImplemented" "$file" 2>/dev/null || echo 0)
 
     if [[ "$has_todo" -gt 0 ]] || [[ "$has_not_impl" -gt 0 ]]; then
-        pass "$rel_path — ${has_todo} TODO(s), ${has_not_impl} NotImplemented(s) [$label]"
+        pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
     else
         warn "$rel_path — NO TODO markers found (fully implemented or boilerplate?) [$label]"
     fi
@@ -223,6 +302,8 @@ echo -e "${CYAN}=== Summary ===${NC}"
 echo -e "  ${GREEN}PASS${NC}: $PASS"
 echo -e "  ${YELLOW}WARN${NC}: $WARN"
 echo -e "  ${RED}FAIL${NC}: $FAIL"
+
+echo -e "  After implementing, run /speckit.blueprint.cleanup to sweep leftover markers."
 
 if [[ $FAIL -gt 0 ]]; then
     echo -e "\n${RED}Validation FAILED — $FAIL issue(s) found${NC}"
