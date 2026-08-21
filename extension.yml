@@ -31,6 +31,11 @@ provides:
       description: "Checks scaffold files against blueprint.md (existence, TODO markers, over-implementation)"
       runtimes:
         - bash
+    - name: "validate-blueprint"
+      file: "scripts/python/validate_blueprint.py"
+      description: "Checks blueprint.md itself (task coverage, rationale, working-tree claims, multi-file labels, placeholders)"
+      runtimes:
+        - python
 
 hooks:
   after_tasks:

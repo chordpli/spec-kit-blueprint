@@ -21,13 +21,14 @@ If arguments contain a directory path, use it as the feature directory. Otherwis
 
 ## Execution
 
-Run the validation script from the repository root:
-
-**Bash (macOS/Linux)**:
+Run both validators from the repository root. The first checks the blueprint document, the second checks what it put on disk:
 
 ```bash
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR"
 ```
+
+The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The scaffold validator short-circuits for those modes unless you pass `--strict`.
 
 Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided by the user, resolve it automatically:
 
@@ -36,6 +37,18 @@ Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided b
 3. Find the matching directory under `specs/`
 
 ## Validation Checks
+
+### Document checks (`validate_blueprint.py`)
+
+Format-level, so they hold for any language:
+
+1. **Task coverage**: every task id in `tasks.md` reaches the blueprint
+2. **Rationale**: every task section carries a `**Why**`
+3. **Working-tree claims**: `Before` line references land inside their files, and every `After` differs from its `Before`
+4. **Multi-file labels**: a task naming more than one file labels each authored code block with its path
+5. **Placeholders**: no ellipsis stubs; in `doc-only`/`scaffold` modes, no TODO/FIXME markers in code blocks
+
+### Scaffold checks (`validate-scaffold.sh`)
 
 The script reads the `**Mode**:` line from `blueprint.md` first. `doc-only` and `guide` write nothing to disk, so for those modes only check 1 runs and missing files are reported as expected, not as failures. Scaffold modes (`scaffold`, `guide scaffold`) run all four checks:
 

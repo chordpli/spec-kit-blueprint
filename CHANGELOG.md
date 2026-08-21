@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `validate_blueprint.py` — validates the blueprint document itself (task coverage, a Why per task, Before/After claims checked against the working tree, multi-file label discipline, placeholder scan), complementing the scaffold validator. Runs in every mode, including doc-only and guide where nothing is written to disk
 - `guide` mode for `/speckit.blueprint.generate` — a design-guidance blueprint with signatures, rationale, implementation notes, pitfalls, and references but **no body code**, for learning-first workflows where the developer designs the logic; `guide scaffold` also writes compilable skeletons to disk
 
 - `/speckit.blueprint.cleanup` command — post-implementation sweep of scaffold residue: stale `TODO(blueprint):` markers, narration comments, commented-out code. Report-only by default, `apply` to edit; never deletes honest unfinished markers or constraint comments

@@ -108,7 +108,9 @@ Produces a blueprint that hands over everything *except* the implementation: agr
 /speckit.blueprint.validate specs/003-user-auth
 ```
 
-Checks: blueprint exists, all referenced files exist on disk, TODO markers present in core files, no over-implemented scaffolds.
+Runs two validators: one over `blueprint.md` itself (task coverage, a Why per task, Before/After claims that hold against the working tree, multi-file label discipline, no placeholders) and one over what scaffold mode wrote to disk (files exist, TODO markers present in core files, nothing over-implemented).
+
+The document validator runs in every mode — a doc-only or guide blueprint has nothing on disk, but its own contents still have to hold up.
 
 Exit code `0` = pass. Exit code `1` = failure.
 
@@ -169,15 +171,18 @@ Answer `y` to run with default arguments (doc-only generation / report-only clea
 
 Disable hook: `specify extension disable blueprint`
 
-## Validation Script
+## Validation Scripts
 
-The validate command runs a bundled Bash script:
+The validate command runs two bundled scripts:
 
 ```bash
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature}
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh specs/{feature}
 ```
 
-Color-coded output: green (pass), yellow (warning), red (failure). Usable in CI or pre-commit hooks.
+Color-coded output: green (pass), yellow (warning), red (failure). Both exit non-zero on failure, so they work in CI or a pre-commit hook.
+
+Why a document validator: rules that live only in prose get followed inconsistently. Running this against two independently generated blueprints for the same feature caught the same defect in both — multi-file tasks that never said which code block belonged to which file — which no amount of reading had surfaced.
 
 ## Troubleshooting
 

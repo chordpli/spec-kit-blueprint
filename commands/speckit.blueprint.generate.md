@@ -292,6 +292,7 @@ Also run the Step 3d closure checks as verification — these catch the defects 
 - **Tree check**: every Before block matches the file verbatim at the stated line number, every After differs from its Before, and ripple claims (add vs. update, forced signature changes) match the tree
 - **Schema check**: every declared field maps to a column or is marked non-persistent; every NOT NULL column written by a task has a named supplier
 - **Declaration check**: every required collaborator is in the constructor and has a task; every declared type is constructed somewhere or labeled with where it first will be
+- **Label check**: every task whose `**File**:` line names more than one path has each of its authored code blocks labeled with its own path (Before/After quotes of existing code are exempt) — count the labels against the blocks rather than trusting that you did it
 
 Also verify:
 - Every import/dependency reference either exists on disk or is created by an earlier task in the blueprint
