@@ -1,0 +1,5 @@
+# oh-my-claudecode runtime state (session artifacts, not part of the extension)
+.omc/
+
+# macOS
+.DS_Store
