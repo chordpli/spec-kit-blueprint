@@ -260,9 +260,81 @@ def main() -> int:
         else:
             record("pass", f"{mode} blueprint has no stub markers")
 
-    # 6. Staleness — the header records what the blueprint was built from, so drift is a
+    # 5a. Guide mode's one promise: the bodies are the developer's work. "No body logic"
+    #     lived only in the prompt, so a skeleton that quietly carried a branch or a query
+    #     read as compliant. Control flow inside an authored block is the tell — a
+    #     signature and a not-implemented marker need none of it.
+    if mode.startswith("guide"):
+        print(f"\n{CYAN}[6] Guide-mode bodies{NC}")
+        CONTROL = re.compile(
+            r"^\s*(if|for|while|switch|when|elif|else\s+if|do|try|catch|except|match)\b[\s({:]"
+        )
+        smuggled = []
+        for tid, sec in sections.items():
+            for blk in re.findall(r"```\w*\n(.*?)```", strip_quoted(sec), re.S):
+                if re.search(r"TODO\(|NotImplementedError|UnsupportedOperationException|fatalError\(|todo!\(|unimplemented!\(", blk):
+                    # A block that still carries its marker is a skeleton; a branch beside
+                    # the marker is a hint the author started writing the body.
+                    hits = [ln.strip() for ln in blk.split("\n") if CONTROL.match(ln)]
+                    if len(hits) >= 2:
+                        smuggled.append(f"{tid}: {len(hits)} control-flow lines beside a not-implemented marker")
+                    continue
+                hits = [ln.strip() for ln in blk.split("\n") if CONTROL.match(ln)]
+                if len(hits) >= 3:
+                    smuggled.append(f"{tid}: {len(hits)} control-flow lines in a block with no marker — {hits[0][:50]!r}")
+        if smuggled:
+            record(
+                "warn",
+                "a guide-mode block looks like it contains body logic",
+                "\n".join(smuggled[:6]) + "\nguide skeletons carry signatures and markers; the branches are the developer's to write",
+            )
+        else:
+            record("pass", "no guide-mode block carries body logic")
+
+    # 5b. Regeneration discipline. The generate spec says a regeneration keeps unchanged
+    #     tasks verbatim, so the diff stays reviewable — and until now that was a sentence
+    #     in a prompt with nothing behind it. If the previous blueprint is in git, the
+    #     claim is checkable: sources that did not move cannot justify rewritten tasks.
+    print(f"\n{CYAN}[7] Regeneration{NC}")
+    prev = ""
+    try:
+        prev = subprocess.run(
+            ["git", "show", f"HEAD:{os.path.relpath(bp_path, root)}"],
+            capture_output=True, text=True, cwd=root, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    if not prev:
+        record("pass", "no committed version to compare against")
+    else:
+        prev_sections = dict(split_tasks(prev))
+        def stamp(text: str) -> str:
+            ln = next((l for l in text.split("\n") if l.lower().startswith("**sources**")), "")
+            return ln.strip()
+
+        rewritten = sorted(
+            tid for tid, sec in sections.items()
+            if tid in prev_sections and sec.strip() != prev_sections[tid].strip()
+        )
+        if not rewritten:
+            record("pass", "no task text changed since the committed version")
+        elif stamp(bp) and stamp(bp) == stamp(prev):
+            record(
+                "fail",
+                f"{len(rewritten)} task(s) rewritten while every source stayed the same",
+                ", ".join(rewritten[:12])
+                + "\nunchanged inputs cannot justify new text — keep those tasks verbatim",
+            )
+        else:
+            record(
+                "pass",
+                f"{len(rewritten)} of {len(sections)} task(s) rewritten, {len(sections) - len(rewritten)} kept verbatim",
+                ", ".join(rewritten[:12]) if len(rewritten) <= 12 else "",
+            )
+
+    # 7. Staleness — the header records what the blueprint was built from, so drift is a
     #    fact to check rather than something everyone assumes away.
-    print(f"\n{CYAN}[6] Freshness{NC}")
+    print(f"\n{CYAN}[8] Freshness{NC}")
     src_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**sources**")), "")
     if not src_line:
         record("warn", "no **Sources** stamp — staleness cannot be checked (regenerate to add one)")
@@ -294,7 +366,7 @@ def main() -> int:
     # 7. Cited requirements are reproduced, not just named. A task header pointing at
     #    "FR-002" is useless to a reader working from this document alone if FR-002's text
     #    lives only in spec.md — the rule exists, but nothing enforced it until here.
-    print(f"\n{CYAN}[7] Cited requirements reproduced{NC}")
+    print(f"\n{CYAN}[9] Cited requirements reproduced{NC}")
     ID_RE = r"\b((?:FR|NFR|SC|AC|US)[- ]?\d+(?:\.\d+)*)\b"
     cited: set[str] = set()
     for sec in sections.values():
@@ -337,7 +409,7 @@ def main() -> int:
             rows = re.findall(r"^#+\s*(OQ-\d+[^\n]*)", body, re.M)
             blocking = [r for r in rows if re.search(r"blocking|blocks|차단", r, re.I)
                         and not re.search(r"non-?blocking|미차단", r, re.I)]
-        print(f"\n{CYAN}[8] Open questions{NC}")
+        print(f"\n{CYAN}[10] Open questions{NC}")
         record(
             "warn" if blocking else "pass",
             f"{len(rows)} open question(s), {len(blocking)} blocking",

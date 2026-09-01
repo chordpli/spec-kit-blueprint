@@ -19,6 +19,7 @@ explain their choices — and now it checks them.
 - `/speckit.blueprint.review` — after implementing, asks about the decisions the blueprint delegated, grades the answers against the code and the blueprint, and exports a decision list for the PR
 - `**Sources**` and `**Build**` header stamps, with the document validator failing a blueprint whose inputs have moved; regeneration keeps unchanged tasks verbatim so the diff stays reviewable
 - Rule and check for undetermined specs: what the artifacts do not decide, the blueprint does not decide either — it builds to the seam, marks the task blocked, and collects the gaps in an Open Questions section, which the document validator reports with its blocking count
+- Two rules that lived only in the prompt are now checked: a regeneration that rewrites tasks whose sources never moved fails against the committed blueprint, and a guide-mode block carrying control flow beside its marker is flagged as body logic the developer was supposed to write
 - `_blueprint_parse.py` — one reading of a blueprint shared by both Python tools, after a path fix landed in one and not the other and quietly disabled a check in the second
 
 ### Fixed
