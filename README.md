@@ -176,7 +176,8 @@ Two things worth deciding up front on a team:
 |----------|-------------|
 | _(none)_ | ask — quiz the decisions the blueprint delegated, then grade the answers |
 | `export` | Skip the questions and produce the PR decision list only |
-| `US2`, `T012-T018`, a phase name | Limit the scope; defaults to the last fully implemented phase |
+| `upstream` | Take the doubts typing raised and send them back to the artifacts that caused them |
+| `US2`, `T012-T018`, a phase name | Limit the scope; defaults to every implemented task in the feature |
 
 **Requires**: `blueprint.md`, and the tasks in scope actually implemented.
 
@@ -184,6 +185,14 @@ Run it after implementing and before opening the PR. It separates what the bluep
 what it handed to you, asks about the second set against your real code, grades the answers, and
 exports a list a reviewer can use without opening the blueprint. It never writes code, and never
 answers its own questions.
+
+`upstream` handles the other thing typing produces. Transcribing a signature is when an earlier
+decision gets tested — you reach a shape that feels wrong, and the doubt is about `spec.md` or a
+decision record, not about the line under your cursor. That doubt has nowhere to go and is gone by
+the time the PR opens. This mode collects them, works out from each task's **Why** which artifact
+and section the doubt is really aimed at, and separates the three cases that feel identical at the
+keyboard: you misread the design, the blueprint misquoted it, or the artifact genuinely does not
+hold. Only the last becomes a change request; the first two come back to you with the answer.
 
 ## Hooks
 

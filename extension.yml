@@ -26,7 +26,7 @@ provides:
       description: "Sweep leftover scaffold markers and stale comments after implementation"
     - name: "speckit.blueprint.review"
       file: "commands/speckit.blueprint.review.md"
-      description: "Check what the developer decided after implementing, and export the decision list for review"
+      description: "Check what the developer decided after implementing, export the decision list for review, and send the doubts typing raised back to the artifacts that caused them"
 
   scripts:
     - name: "validate-scaffold"

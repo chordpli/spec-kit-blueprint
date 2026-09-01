@@ -1,5 +1,5 @@
 ---
-description: "Check what the developer decided after implementing, and export the decision list for review"
+description: "Check what the developer decided after implementing, export the decision list for review, and send the doubts typing raised back to the artifacts that caused them"
 ---
 
 # Blueprint Review
@@ -10,7 +10,9 @@ A blueprint states obligations and never collects on them. A guide-mode task say
 
 The second cost is paid by the reviewer. From the final diff, nobody can tell which lines the blueprint dictated and which the developer designed alone. A reviewer who wants to ask a useful question must first read the whole blueprint — so they don't, and attention spreads evenly across code that deserves it very unevenly. The lines nobody agreed on in advance are exactly the lines review is for.
 
-This command runs **after implementing a phase or story and before opening the PR**. It asks about the decisions the blueprint delegated, grades the answers against what the blueprint and the code actually say, and exports a decision list a reviewer can use without opening `blueprint.md`. It reads code — it never writes it.
+The third cost is paid upstream, and it is paid in silence. Typing is when earlier decisions get tested: you are transcribing a signature, you reach a shape that feels wrong, and the doubt is not about the line under the cursor but about `spec.md`, `plan.md`, or a decision record. A blueprint is unusually good at producing that moment — it puts a decision, its rationale, its rejected alternative, and the code it yields on one screen, which is exactly the material you need to notice that an earlier decision does not hold. Until now this extension had nowhere to put it. Open Questions record what the *generator* could not decide; `ask` records what the *developer* decided; nothing recorded what the developer came to **doubt about the stages before the blueprint**. By the time the PR is open the doubt has been typed past and rationalized away, and the spec keeps the flaw.
+
+This command runs **after implementing a phase or story and before opening the PR** — except in `upstream` mode, which runs while the typing is still happening. It asks about the decisions the blueprint delegated, grades the answers against what the blueprint and the code actually say, exports a decision list a reviewer can use without opening `blueprint.md`, and routes doubts back to the artifact that caused them. It reads code — it never writes it.
 
 ## User Input
 
@@ -22,10 +24,11 @@ $ARGUMENTS
 |---------|------|----------|
 | _(default)_ | `ask` | Extract decisions, ask the questions, wait for answers, grade, export. |
 | `export` | `export` | Skip the questions entirely. Produce only the decision list for the PR description. |
+| `upstream` | `upstream` | Collect the doubts typing raised about the stages *before* the blueprint, classify them, and write a change request for each one the artifacts cannot answer. Does not require the scope to be implemented. |
 
-The rest of the argument is the **scope**: a phase (`Phase 3`), a user story (`US2`), a task range (`T012-T018`), or a single task ID. A directory path overrides the feature directory (otherwise auto-detect from the current branch, same as `/speckit.blueprint.validate`).
+The rest of the argument is the **scope**: a phase (`Phase 3`), a user story (`US2`), a task range (`T012-T018`), or a single task ID. A directory path overrides the feature directory (otherwise auto-detect from the current branch, same as `/speckit.blueprint.validate`). In `upstream` mode the remaining text may also be the doubt itself — `upstream T014 why is the lock taken here and not in the caller`.
 
-With no scope given, the scope is **every implemented task in the feature**, across all phases — that is the unit the developer just finished and the unit the PR will cover. Name a phase, a story, or a range explicitly to narrow it. Step 2 decides what "implemented" means and makes the command state the scope it picked before it asks anything.
+With no scope given, the scope is **every implemented task in the feature**, across all phases — that is the unit the developer just finished and the unit the PR will cover. Name a phase, a story, or a range explicitly to narrow it. Step 2 decides what "implemented" means and makes the command state the scope it picked before it asks anything. `upstream` mode scopes differently, for reasons given in Step U1: it takes every task the developer has read or started, finished or not.
 
 ## Workflow
 
@@ -39,9 +42,11 @@ Run the prerequisites check from the repository root:
 
 Parse `FEATURE_DIR` and load `blueprint.md`. Read the `**Mode**:` token from the header — it tells you how much the blueprint dictated, which changes where the questions come from (Step 3). If the header carries a `**Sources**:` line, compare the recorded hashes against the current artifacts; on a mismatch, say so in the report and continue — the questions still stand, but the blueprint they came from is describing an older intention.
 
-Resolve the scope to a concrete task list — Step 2 decides which tasks count as implemented, and what the scope is when the arguments name none — then read **the developer's actual files** for those tasks from disk. Every question and every verdict must be grounded in the code as it exists now, not in what the blueprint said it would be.
+Resolve the scope to a concrete task list — Step 2 decides which tasks count as implemented, and what the scope is when the arguments name none; in `upstream` mode Step U1 does, and implementation is not required — then read **the developer's actual files** for those tasks from disk. Every question and every verdict must be grounded in the code as it exists now, not in what the blueprint said it would be.
 
 ### Step 2: Decide What Is Implemented, Then Refuse to Run on Nothing
+
+> This step governs `ask` and `export`. `upstream` mode keeps only the missing-blueprint stop and the unknown-scope stop; unimplemented code is its normal input, not a reason to stop. See Step U1.
 
 A fabricated quiz is worse than no quiz — it teaches the developer that the exercise is theater. So the scope has to rest on evidence in the code, and a file sitting on disk is not evidence.
 
@@ -171,6 +176,109 @@ In `export` mode, produce this section only: the first table from the blueprint,
 - The checklist tracks implementation, not comprehension. A DOES NOT HOLD verdict never unchecks a task and never edits the blueprint — it belongs in the report and in the export's "Open for the reviewer" list.
 - Suggest the next step: fix what the grading surfaced, then open the PR with the exported section.
 
+## Upstream Mode: Doubts That Point Backwards
+
+`ask` runs forwards — it takes the blueprint as settled and checks the developer against it. `upstream` runs the other way: it takes the developer's doubt as the signal and checks the blueprint, and then the artifact behind it, against the code. Steps U1-U5 replace Steps 3-7; Step 1 still loads the blueprint and resolves the feature directory.
+
+This mode adds **nothing** to the blueprint format. Everything it needs — a `**Why**` that cites its source, `**Requirements**` ids, a Key Decisions row with a `Source` column, an Open Questions table with an owner — is already required by `/speckit.blueprint.generate`. A per-task "doubt" field would be one more prose rule no script can enforce, on a generation spec that is already long, and the citation the Why already carries is a better address than anything a new field would hold.
+
+### Step U1: Collect the Doubts — Never Invent Them
+
+**Scope, and why it is not the implemented set.** Unlike `ask`, this mode does not require the scope to be implemented. The strongest doubts arrive three lines into a signature, before anything runs; a mode that waited for green tests would collect them after they had been argued away. The scope is every task the developer has read or started — with none named, the phase they are working in. Say the scope you picked, as Step 2 requires, and mark which tasks in it are unfinished, because Step U3 holds them to a different evidence bar.
+
+**Where the doubts come from — two sources, and neither is you:**
+
+1. **The developer states them**, in the arguments or in answer to the prompt below. A doubt in their own words is the input; paraphrase it in the report but never replace it.
+2. **With no doubt given**, print one line per task in scope — the task id, what it does, and the address its Why resolves to — and ask which of them felt wrong while typing. Then **stop and wait**, on the same terms as Step 4: do not supply doubts on the developer's behalf, and do not proceed on invented ones. A manufactured doubt sent to a spec owner is worse than having no mode at all.
+
+One thing you may raise unprompted: a contradiction you find between a task's Why and the section it cites while resolving addresses in Step U2. It carries its own evidence and needs nobody to have felt it. Label it *found, not reported*, and classify it like any other.
+
+### Step U2: Address Each Doubt from Its Why
+
+A doubt is useless until it has a destination. The blueprint already records one for every task, because Step 3b of the generation spec requires each Why to be traced to a real artifact and to cite it — `plan.md §Locking`, `ADR-0007`. That citation is the address.
+
+| The doubt is about | Read | The address it yields |
+|--------------------|------|-----------------------|
+| the shape of one task's code | that task's `**Why**` | the artifact and section it cites — the primary address |
+| what the task is meant to achieve at all | the task's `**Requirements**` ids | the requirement statement, reproduced in the blueprint's reference section and owned by `spec.md` |
+| a choice several tasks share | the Key Decisions row whose Tasks column contains the task | the row's `Source`, plus its rejected alternative — which is often the answer rather than the address |
+| the order things happen in | the phase's `**Why this phase**` | the story or plan section that fixed the ordering |
+
+**When the Why cites no artifact.** Step 3b lets a Why give the honest engineering reason where no artifact explains the choice. Such a task has no upstream address: the blueprint is where that decision was born. A doubt landing there is not a change request — it is an Open Questions row that was never written, and it goes to whoever owns the blueprint. Say that, rather than posting it to the nearest plausible section. This mode spends one scarce thing, a spec owner's attention, and misdelivery spends it for nothing.
+
+### Step U3: Classify — Three Things That Feel Identical While Typing
+
+Three places hold the story: the **code** on disk, the **blueprint's account** of the design, and the **cited artifact** itself. Every doubt is a mismatch between two of them — and at the keyboard all three failures feel the same, *this shape is wrong*, which is why the developer cannot be asked to classify their own doubt. Read all three yourself before naming a class.
+
+Compare them in this order. The order is the whole point: a blueprint that misquotes its source manufactures artifact defects that were never in the artifact, and checking the artifact last means filing one of them upstream.
+
+| # | Comparison | Outcome |
+|---|------------|---------|
+| 1 | Open the cited section. Does it say what the blueprint says it says? | No → **BLUEPRINT MISREADS**. Stop — the artifact is fine |
+| 2 | Do the blueprint's Why, its rejected alternative, or the cited section already answer the doubt? | Yes → **ANSWERED**. Stop — it goes back to the developer |
+| 3 | Does the artifact cover the case typing produced? | No, or covers it two ways at once → **ARTIFACT DOES NOT HOLD** |
+| — | none of the three can be established | **UNCLASSIFIED** |
+
+What each class costs and where it goes:
+
+| Class | Whose defect | Evidence the report must carry | Destination |
+|-------|--------------|--------------------------------|-------------|
+| **ANSWERED** | nobody's — the design was there and was missed | the sentence that answers it, quoted, with its location | back to the developer (Step U4) |
+| **BLUEPRINT MISREADS** | the blueprint's | the artifact's sentence and the blueprint's sentence, side by side | the blueprint's own fix list — correct the task or regenerate; upstream hears nothing |
+| **ARTIFACT DOES NOT HOLD** | the artifact's | the concrete case the artifact does not cover, and where it appeared in the code | a change request (Step U5) |
+| **UNCLASSIFIED** | unknown | all three readings, and the evidence that would settle it | the report, addressed to nobody |
+
+Rules for classifying:
+
+- **Never guess a class to avoid an UNCLASSIFIED.** This is the same discipline as "cannot verify from the code" in Step 5, and it matters more here, because the cost lands on someone else. A change request filed against a section that turns out to say the right thing costs a spec owner a reading and costs this mode its credibility — the second one will not get opened.
+- **Staleness is not a misreading.** If Step 1's `**Sources**` check flagged the cited artifact as changed since generation, comparison 1 will fail for a blueprint that was correct when it was written. Re-run comparison 1 against the artifact as it stands now: if it passes, continue to comparison 2; if it still fails, report the blueprint as **stale** rather than wrong. The distinction decides who fixes it — stale is a regeneration, wrong needs a person.
+- **Ambiguity is a defect, not a tie.** Where the cited section is compatible with both the blueprint's reading and the developer's, comparison 1 neither passes nor fails. That is `ARTIFACT DOES NOT HOLD`: an artifact that admits two readings has already failed at deciding. Its change request's evidence is the two readings, stated as such — do not dress an ambiguity up as a contradiction.
+- **The half-finished task.** Comparisons 1 and 2 are document work and need no code at all, so a doubt from a task typed halfway can still be ANSWERED or BLUEPRINT MISREADS with full evidence. Comparison 3 needs a case — but a case can exist before its code does: a signature with no defined behavior for an input, a type the artifact requires that no module supplies, a call order the declared port cannot express. Where the case exists only in code not yet written, record the doubt as **provisional**, say what would confirm it, and open no change request. A change request resting on code that does not exist is a prediction.
+
+### Step U4: Return What Is Already Answered
+
+This mode is not a complaint box, and the rule that keeps it from becoming one is stated here rather than implied. A doubt that names no line and no case is a feeling; a doubt the blueprint or the cited artifact already answers is a reading that did not happen. **Neither goes upstream.** Both go back to the developer — with the answer, not with a verdict:
+
+```
+Answered without going upstream
+
+- T014, "why is the lock taken here and not in the caller" — blueprint.md T014 **Why**, and `plan.md §Locking` para 3: the caller may be a batch, and a lock held across a batch serializes tenants. The caller-side lock you were reaching for is that section's rejected alternative.
+- T009, "the retry count feels arbitrary" — no line, no case: the doubt does not yet say what breaks at 3 that survives at 5. Bring it back with one.
+```
+
+In most runs this should be the longest section of the report. A run in which every doubt became a change request is a sign the classification was skipped, not a sign the spec is unusually bad — the same way a quiz where every answer MATCHES means the questions were too easy.
+
+### Step U5: Write the Change Requests
+
+One per surviving `ARTIFACT DOES NOT HOLD`, addressed to the artifact and section its Why cited. The reader is that section's owner, who has never opened `blueprint.md` and will not open it now:
+
+```markdown
+### CR-1 → `plan.md §Locking`
+
+**Assumed**: {what the section takes for granted, quoted in its own words}
+**Typing revealed**: {the case it does not cover — the input, state, or call order — and where it showed up: `OrderService.kt:88`, while typing T014}
+**Affected**: T014, T017 — {what each had to do about it}
+**What would have to change**: {the smallest edit that settles it: a sentence, a row in a table, a new decision record}
+**Who can answer**: {the Open Questions "Who can answer" entry for this artifact, or the section's owner}
+**Not verified**: {what you could not check — omit the line only when there is nothing}
+```
+
+Rules for a change request:
+
+- **It must survive without the blueprint.** Quote the artifact's own sentence and describe the code in its own terms. A request whose evidence is "see T014" is a pointer, not a report. Task ids stay in it so the owner can trace back, but nothing load-bearing may live only there.
+- **One doubt, one request** — two doubts about the same section stay two requests, unless a single edit settles both.
+- **Say what would change, not only what is wrong.** The owner's next action is an edit to their document; a request that stops at the complaint makes them design the fix from scratch.
+- **Carry the uncertainty.** `Not verified` is what keeps this mode usable a second time.
+
+### How This Relates to Open Questions and to `ask`
+
+An `ARTIFACT DOES NOT HOLD` doubt and an unanswered Open Questions row are the same finding at different times: both say the artifacts do not decide something the code needs. The generator finds them by reading artifacts; this mode finds them by typing against them. So they share machinery instead of duplicating it:
+
+- **Check the Open Questions table before writing a change request.** If a row already names this gap, do not open a CR — attach the case typing produced to that row and address it to that row's owner. A second ticket for a known gap is noise; a known gap with a concrete case attached is an escalation.
+- **Reuse the "Who can answer" column** as the addressee whenever a row names the same artifact. It is the only place the blueprint records who owns what.
+- **`ask` hands doubts to this mode.** Two of its outcomes are doubts in disguise: a silently resolved Open Question (Step 3) and an answer that surfaces a genuine defect in the blueprint (Step 5). Run both through Step U3 rather than writing them into the export as prose. Where both modes ran in one session, the export's "Open for the reviewer" list cites the CR id and lets the change request carry the detail.
+- **Neither mode edits an artifact.** `upstream` writes requests and nothing else: it never touches `spec.md`, `plan.md`, a decision record, or `blueprint.md` — not even the Checklist that Step 7 may write, since nothing here established that a task is done.
+
 ## Rules
 
 - **Ask before telling**: no blueprint rationale, implementation note, or rejected alternative appears before the developer has answered. After grading, quoting it is the whole point.
@@ -183,4 +291,9 @@ In `export` mode, produce this section only: the first table from the blueprint,
 - **Stop rather than fabricate**: no blueprint, an unknown scope, or an unimplemented one gets the message and a stop.
 - **Five questions, not fifteen**: aim for 5, cap at 8, and go under when the scope holds fewer real decisions. A long quiz gets skimmed, and a skimmed quiz grades nothing.
 - **The export must stand alone**: reproduce reasons in it; a reviewer who has to open `blueprint.md` to use it is back where they started.
+- **Never manufacture a doubt**: `upstream` mode collects what the developer felt while typing. With nobody to state one, it ends at the prompt — the same discipline as never grading your own answers.
+- **Check the blueprint against the artifact before blaming the artifact**: a blueprint that misquotes its source invents defects that were never upstream. Comparison order is not a preference; it is what keeps this mode from wasting a spec owner.
+- **Say UNCLASSIFIED rather than guess**: an honest "these three readings, and here is what would settle it" beats a confident misdelivery. A wrong change request is paid for by someone who cannot see how it was produced.
+- **A change request stands alone**: its reader has never opened `blueprint.md` and never will.
+- **Read-only on the artifacts too**: `upstream` mode never edits `spec.md`, `plan.md`, or a decision record. It writes requests; a person decides.
 - Follow the language used in existing spec/plan/tasks documents when writing questions and the report.
