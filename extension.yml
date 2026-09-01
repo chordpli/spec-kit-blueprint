@@ -24,6 +24,9 @@ provides:
     - name: "speckit.blueprint.cleanup"
       file: "commands/speckit.blueprint.cleanup.md"
       description: "Sweep leftover scaffold markers and stale comments after implementation"
+    - name: "speckit.blueprint.review"
+      file: "commands/speckit.blueprint.review.md"
+      description: "Check what the developer decided after implementing, and export the decision list for review"
 
   scripts:
     - name: "validate-scaffold"
@@ -44,10 +47,16 @@ hooks:
     prompt: "Generate blueprint from tasks?"
     description: "Auto-generate blueprint.md after task generation"
   after_implement:
-    command: "speckit.blueprint.cleanup"
-    optional: true
-    prompt: "Sweep leftover scaffold markers and stale comments?"
-    description: "Clean up blueprint scaffold residue after implementation"
+    - command: "speckit.blueprint.cleanup"
+      priority: 10
+      optional: true
+      prompt: "Sweep leftover scaffold markers and stale comments?"
+      description: "Clean up blueprint scaffold residue after implementation"
+    - command: "speckit.blueprint.review"
+      priority: 20
+      optional: true
+      prompt: "Review the decisions you made, and export them for the PR?"
+      description: "Check comprehension of delegated decisions and produce a reviewer-facing list"
 
 tags:
   - "blueprint"
