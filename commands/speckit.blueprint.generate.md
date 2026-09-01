@@ -182,9 +182,17 @@ was generated from so that staleness is detectable instead of assumed:
 - `**Sources**`: the first 12 characters of `sha256` for each artifact you read as a source of truth
   (`tasks.md`, `spec.md`, `plan.md`, plus any other you relied on), and the short commit the tree was
   at. `shasum -a 256 <file> | cut -c1-12` is enough.
-- `**Build**`: the single command that compiles or tests this project, taken from `plan.md` or the
-  build files you read in Step 1 — the applier and `/speckit.blueprint.validate --build` use it to
-  check that this document's code actually works. Omit the line if the project genuinely has none.
+- `**Build**`: the single command that checks this project's code, taken from `plan.md` or the build
+  files you read in Step 1 — the applier uses it to confirm that this document's code actually works.
+  Omit the line if the project genuinely has none.
+
+  **In `guide` mode, stamp a compile or syntax check, never a test run.** Guide skeletons are
+  not-implemented markers by design, so a test command fails by construction and tells you nothing.
+  In a compiled language this hides itself — Kotlin's `TODO()` and Java's
+  `UnsupportedOperationException` compile fine — but `python3 -m unittest` or `npm test` against
+  guide skeletons is red before the developer writes a line. Stamp `python3 -m compileall src`,
+  `tsc --noEmit`, `./gradlew compileKotlin` — whatever checks that the skeleton parses. The full
+  test command belongs in the full-code modes, where the bodies are real.
 
 **Regenerating**: if `blueprint.md` already exists, read it first. Keep the text of every task whose
 inputs have not changed **verbatim**, rewrite only the tasks the changed artifacts touch, and end

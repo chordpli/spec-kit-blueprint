@@ -213,6 +213,32 @@ def main() -> int:
     else:
         record("pass", "no Before/After pair silently drops an edge anchor")
 
+    # A modify task's code has to say where it goes. Prose like "append this at the end of
+    # the file" reads fine and is not a position, so the applier cannot place it — better to
+    # hear that here than after a build fails.
+    unanchored = []
+    for tid, sec in sections.items():
+        kinds = re.findall(r"`[^`]+`\s*\((new|modify|delete)[^)]*\)", sec)
+        if "modify" not in kinds:
+            continue
+        if re.search(r"\*\*Replace entire file\*\*", sec):
+            continue
+        blocks = len(re.findall(r"^```[a-zA-Z]", sec, re.M))
+        anchored = len(re.findall(r"\*\*Before\*\*[^\n]*\n+```", sec)) * 2
+        # A task may create new files and edit an existing one in the same breath. A block
+        # introduced by its own path label is that whole new file, and has nothing to anchor to.
+        labelled_new = len(re.findall(r"\*\*`[^`]+`\*\*[^\n]*:\s*\n+```", sec))
+        if blocks - labelled_new > anchored:
+            unanchored.append(f"{tid}: {blocks - labelled_new - anchored} block(s) with no Before/After or Replace marker")
+    if unanchored:
+        record(
+            "warn",
+            "modify task has code that is not anchored to a position",
+            "\n".join(unanchored[:6]) + "\nthe applier cannot place these; quote the surrounding lines in a Before block",
+        )
+    else:
+        record("pass", "every modify task anchors its code")
+
     # 4. Multi-file tasks map each block to a path
     print(f"\n{CYAN}[4] Multi-file task labels{NC}")
     unlabeled = []

@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Over-implementation fails only when nearly every file that should carry a marker still does; mid-implementation, a finished file is normal and no longer fails
 - Multi-file labels are counted whatever follows them, not only a colon
 - Only a task's File declaration says what gets created; reference tables are no longer scraped for paths
+- Guide-mode blueprints stamp a compile or syntax check as their `**Build**`, never a test run — guide skeletons are not-implemented by design, so a test command is red before the developer starts, and in a compiled language that trap hides itself
+- The document validator warns when a modify task's code is not anchored to a position, so prose like "append this at the end" is caught before the applier fails on it
 - `apply_blueprint.py` — applies a blueprint to a throwaway copy of the tree and builds it, so the document's central claim is checked by a compiler rather than asserted by its author. Deterministic: an anchor that does not match verbatim is a reported defect, never a guess
 - `/speckit.blueprint.review` — after implementing, asks about the decisions the blueprint delegated, grades the answers against the code and the blueprint, and exports a decision list for the PR
 - `**Sources**` and `**Build**` header stamps, with the document validator failing a blueprint whose inputs have moved; regeneration keeps unchanged tasks verbatim so the diff stays reviewable
