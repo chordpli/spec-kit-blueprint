@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Over-implementation fails only when nearly every file that should carry a marker still does; mid-implementation, a finished file is normal and no longer fails
 - Multi-file labels are counted whatever follows them, not only a colon
 - Only a task's File declaration says what gets created; reference tables are no longer scraped for paths
+- `apply_blueprint.py` — applies a blueprint to a throwaway copy of the tree and builds it, so the document's central claim is checked by a compiler rather than asserted by its author. Deterministic: an anchor that does not match verbatim is a reported defect, never a guess
+- `/speckit.blueprint.review` — after implementing, asks about the decisions the blueprint delegated, grades the answers against the code and the blueprint, and exports a decision list for the PR
+- `**Sources**` and `**Build**` header stamps, with the document validator failing a blueprint whose inputs have moved; regeneration keeps unchanged tasks verbatim so the diff stays reviewable
 - Cited requirements are now verified, not self-reported: the document validator fails when a task header names a requirement id whose text appears nowhere in the blueprint (markdown emphasis around the id still counts as a definition)
 - Both validators print their version, so a stale installed copy is visible
 - Rule and check for undetermined specs: what the artifacts do not decide, the blueprint does not decide either — it builds to the seam, marks the task blocked, and collects the gaps in an Open Questions section, which the document validator reports with its blocking count

@@ -20,6 +20,7 @@ A [Spec Kit](https://github.com/github/spec-kit) community extension.
 /speckit.implement                      → code
                                           ↓ after_implement hook (optional)
 /speckit.blueprint.cleanup [apply]      → comment sweep  ★
+/speckit.blueprint.review               → decisions + PR list  ★
 /speckit.checklist                      → verify
 ```
 
@@ -169,14 +170,30 @@ Two things worth deciding up front on a team:
 
 **Never removed**: honest unfinished markers, constraint/why comments, doc comments, license headers, pragmas.
 
+### `/speckit.blueprint.review [ask|export] [scope]`
+
+| Argument | Description |
+|----------|-------------|
+| _(none)_ | ask — quiz the decisions the blueprint delegated, then grade the answers |
+| `export` | Skip the questions and produce the PR decision list only |
+| `US2`, `T012-T018`, a phase name | Limit the scope; defaults to the last fully implemented phase |
+
+**Requires**: `blueprint.md`, and the tasks in scope actually implemented.
+
+Run it after implementing and before opening the PR. It separates what the blueprint decided from
+what it handed to you, asks about the second set against your real code, grades the answers, and
+exports a list a reviewer can use without opening the blueprint. It never writes code, and never
+answers its own questions.
+
 ## Hooks
 
-Two optional hooks:
+Three optional hooks, all prompted:
 
 | Hook | When | Prompt |
 |------|------|--------|
 | `after_tasks` | After `/speckit.tasks` completes | "Generate blueprint from tasks?" |
 | `after_implement` | After `/speckit.implement` completes | "Sweep leftover scaffold markers and stale comments?" |
+| `after_implement` | Same event, after the sweep | "Review the decisions you made, and export them for the PR?" |
 
 Answer `y` to run with default arguments (doc-only generation / report-only cleanup). You can always run the commands manually with different modes afterward.
 
@@ -188,8 +205,16 @@ The validate command runs two bundled scripts:
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature}
+python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py specs/{feature} --build
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh specs/{feature}
 ```
+
+The middle one is the important one. It copies the working tree aside, types every task's code
+into that copy the way a developer would, and runs the project's build — so "this blueprint
+compiles" stops being a claim the generator makes about itself. Applying is deterministic: a
+`**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect
+rather than repaired by guesswork. `--keep` leaves the copy behind to inspect; nothing ever
+touches your own tree.
 
 Color-coded output: green (pass), yellow (warning), red (failure). Both exit non-zero on failure, so they work in CI or a pre-commit hook.
 

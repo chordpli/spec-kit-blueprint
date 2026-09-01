@@ -39,6 +39,11 @@ provides:
       description: "Checks blueprint.md itself (task coverage, rationale, working-tree claims, multi-file labels, placeholders)"
       runtimes:
         - python
+    - name: "apply-blueprint"
+      file: "scripts/python/apply_blueprint.py"
+      description: "Applies the blueprint to a throwaway copy of the tree and builds it, so 'this compiles' is evidence rather than a claim"
+      runtimes:
+        - python
 
 hooks:
   after_tasks:

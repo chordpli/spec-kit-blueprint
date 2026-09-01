@@ -1,0 +1,469 @@
+#!/usr/bin/env python3
+"""apply_blueprint.py — turn a blueprint's promise into machine evidence.
+
+`validate_blueprint.py` checks the document's shape. This checks its *content*: it
+copies the working tree aside, types every task's code into that copy the way a
+developer would, and then builds it. A blueprint that says "this compiles" either
+survives that or it does not.
+
+Applying is deterministic and unforgiving on purpose. A `**Before**` block is an
+anchor into a real file; if it is not there verbatim, or is there twice, the task is
+reported as a defect rather than repaired by guesswork. Silent repair is what lets a
+lossy hunk reach a reader as if it were sound.
+
+The throwaway tree is a plain recursive copy, not `git worktree add`. A worktree needs
+a git repo and a clean index, and the blueprint most worth checking is the one written
+against uncommitted work; a copy needs neither and cannot touch the original.
+
+Usage: python3 apply_blueprint.py [feature-dir] [--build] [--keep]
+  feature-dir: specs/{feature}/ (default: auto-detect from the current branch)
+  --build:     run the project's build in the copy and report its exit code
+  --keep:      print the copy's path instead of deleting it
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0;36m", "\033[0m"
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    GREEN = YELLOW = RED = CYAN = NC = ""
+
+SCRIPT_VERSION = "1.0.0"
+
+# Build output and vendored dependencies are regenerated, never authored, so copying
+# them only slows the run down; .git would make the copy look like a second checkout.
+SKIP_DIRS = {".git", "build", "target", "node_modules", "__pycache__", "out", "dist", ".venv", ".gradle"}
+
+results: list[tuple[str, str, str]] = []  # (status, name, evidence)
+
+
+def record(status: str, name: str, evidence: str = "") -> None:
+    results.append((status, name, evidence))
+    mark = {"pass": f"{GREEN}✓{NC}", "warn": f"{YELLOW}⚠{NC}", "fail": f"{RED}✗{NC}"}[status]
+    print(f"  {mark} {name}")
+    if evidence:
+        for line in evidence.split("\n"):
+            print(f"      {line}")
+
+
+def repo_root() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return os.getcwd()
+
+
+def resolve_feature_dir(root: str, arg: str | None) -> str:
+    if arg:
+        return arg if os.path.isabs(arg) else os.path.join(root, arg)
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        branch = ""
+    m = re.match(r"^(\d{3}|\d{8})-", branch)
+    specs = os.path.join(root, "specs")
+    if m and os.path.isdir(specs):
+        for name in sorted(os.listdir(specs)):
+            if name.startswith(m.group(1)):
+                return os.path.join(specs, name)
+    return ""
+
+
+# --- Document parsing -------------------------------------------------------------
+#
+# Everything below is fence-aware. A blueprint quotes markdown, properties files and
+# ADRs inside its code blocks, so `^### ` and `^**File**:` occur *inside* blocks as
+# often as outside them, and a plain regex over the document reads those as structure.
+
+FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)\s*$")
+
+
+def scan(text: str):
+    """Yield (index, line, inside_fence, block) — block is set on a fence's last line."""
+    lines = text.split("\n")
+    marker, opened_at = "", -1
+    for i, line in enumerate(lines):
+        if marker:
+            m = FENCE_OPEN.match(line)
+            if m and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker) and not m.group(2):
+                yield i, line, True, "\n".join(lines[opened_at + 1:i]) + "\n"
+                marker = ""
+            else:
+                yield i, line, True, None
+            continue
+        m = FENCE_OPEN.match(line)
+        if m:
+            marker, opened_at = m.group(1), i
+            yield i, line, True, None
+        else:
+            yield i, line, False, None
+
+
+def split_tasks(text: str) -> list[tuple[str, str]]:
+    """(task id, section text) in document order.
+
+    A section ends at the next heading of level 1-3, not at the next `### T...`.
+    Blueprints put consolidated "Appendix" files under their own `###` heading with an
+    explicit "check your work, not a third edit" note; running to the next task id
+    would apply those appendices as if they were tasks.
+    """
+    lines = text.split("\n")
+    starts: list[tuple[int, str]] = []
+    ends: list[int] = []
+    for i, line, in_fence, _ in scan(text):
+        if in_fence or not line.startswith("#"):
+            continue
+        m = re.match(r"^#{1,3} ", line)
+        if not m:
+            continue
+        ends.append(i)
+        tid = re.match(r"^### (T\d+)\b", line)
+        if tid:
+            starts.append((i, tid.group(1)))
+    out = []
+    for at, tid in starts:
+        stop = next((e for e in ends if e > at), len(lines))
+        out.append((tid, "\n".join(lines[at:stop])))
+    return out
+
+
+FILE_DECL = re.compile(r"\*\*File\*\*:(.*?)(?:\n\s*\n|\n(?=\*\*))", re.S)
+KIND = re.compile(r"\((?:all\s+)?(new|modify|modified|delete|deleted)\)", re.I)
+
+
+def file_kinds(section: str) -> list[tuple[str, str]]:
+    """Every path in a task's **File**: declaration, paired with its (new)/(modify) kind.
+
+    The declaration wraps onto later lines and annotates each path separately, except
+    when one trailing `(all modify)` covers the whole list — so an unannotated path
+    inherits from the next annotated one, and failing that from the previous.
+    """
+    m = FILE_DECL.search(section)
+    if not m:
+        return []
+    decl = m.group(1)
+    found: list[tuple[str, str | None]] = []
+    for pm in re.finditer(r"`([^`]+)`", decl):
+        path = pm.group(1)
+        # Ten, not six: `config/app.properties` is a real target and a six-character
+        # cap silently drops it, leaving the task looking like a process step.
+        if not re.search(r"\.[A-Za-z0-9]{1,10}$", path):
+            continue
+        tail = decl[pm.end():decl.find("`", pm.end()) if "`" in decl[pm.end():] else len(decl)]
+        km = KIND.search(tail)
+        found.append((path, km.group(1).rstrip("d").lower() if km else None))
+    kinds: list[tuple[str, str]] = []
+    for i, (path, kind) in enumerate(found):
+        if kind is None:
+            kind = next((k for _, k in found[i + 1:] if k), None)
+        if kind is None:
+            kind = next((k for _, k in reversed(found[:i]) if k), "unknown")
+        kinds.append((path, kind))
+    return kinds
+
+
+LABEL = re.compile(r"^\*\*`([^`]+)`\*\*")
+
+
+def section_events(section: str):
+    """('label', path) / ('directive', before|after|replace) / ('block', text), in order."""
+    for _, line, in_fence, block in scan(section):
+        if block is not None:
+            yield "block", block
+            continue
+        if in_fence:
+            continue
+        m = LABEL.match(line)
+        if m and ("/" in m.group(1) or "." in m.group(1)):
+            yield "label", m.group(1)
+        if line.startswith("**Before**"):
+            yield "directive", "before"
+        elif line.startswith("**After**"):
+            yield "directive", "after"
+        elif line.startswith("**") and "**Replace entire file**" in line:
+            yield "directive", "replace"
+
+
+# --- Application ------------------------------------------------------------------
+
+
+class Defect(Exception):
+    """The blueprint cannot be applied as written. Never repaired, only reported."""
+
+
+def replace_once(path: str, before: str, after: str) -> None:
+    if not os.path.isfile(path):
+        raise Defect(f"{rel(path)}: Before block targets a file that does not exist")
+    text = open(path, encoding="utf-8", errors="replace").read()
+    # The fence contributes the block's final newline; the quoted region may sit at the
+    # end of a file that has none. Dropping that one newline is fence bookkeeping, not
+    # a loosened match — every other character still has to be there verbatim.
+    for b, a in ((before, after), (before[:-1], after[:-1])):
+        n = text.count(b)
+        if n == 1:
+            open(path, "w", encoding="utf-8").write(text.replace(b, a, 1))
+            return
+        if n > 1:
+            raise Defect(f"{rel(path)}: Before block matches {n} places — the anchor is ambiguous")
+    head = before.strip().split("\n")[0][:60]
+    raise Defect(f"{rel(path)}: Before block not found verbatim (starts {head!r})")
+
+
+def write_file(path: str, text: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    open(path, "w", encoding="utf-8").write(text)
+
+
+_tree = ""
+
+
+def rel(path: str) -> str:
+    return os.path.relpath(path, _tree) if _tree else path
+
+
+def apply_task(tree: str, section: str) -> tuple[str, int]:
+    """Apply one task section to the copied tree. Returns (note, blocks consumed)."""
+    kinds = dict(file_kinds(section))
+    paths = list(kinds)
+    if not paths:
+        return "no file declared", 0
+    if all(k == "delete" for k in kinds.values()):
+        return "delete task", 0
+
+    def hunk_target(current: str | None) -> str:
+        """Which file a **Before**/**After** pair edits.
+
+        A multi-file task labels its blocks, but a task that creates two files and edits
+        a third often introduces the hunks in prose ("the four TransferService edits
+        below") and leaves the last label pointing at a file it has finished writing. A
+        hunk can only edit a declared `(modify)` path, so when there is exactly one it is
+        the target and nothing is being guessed. When there are several, it is a real
+        ambiguity in the document and the task fails.
+        """
+        if current and kinds.get(current) in ("modify", "unknown"):
+            return current
+        mods = [p for p, k in kinds.items() if k == "modify"]
+        if len(mods) == 1:
+            return mods[0]
+        raise Defect(
+            "a Before/After hunk follows a **`"
+            + (current or "?")
+            + "`** block, and the task declares "
+            + (f"{len(mods)} modified files" if mods else "no modified file")
+            + " — label the hunk with its path"
+        )
+
+    current = paths[0] if len(paths) == 1 else None
+    # A single new file's one code block is that file, with nothing to announce it. For
+    # a modify, a bare block could be a fragment or the whole file, so it needs saying.
+    pending = "content" if current and kinds[current] == "new" else None
+    before: str | None = None
+    before_at: str | None = None
+    applied, unanchored, seen, inferred = 0, 0, 0, 0
+
+    for kind, payload in section_events(section):
+        if kind == "label":
+            current, pending = payload, "content"
+        elif kind == "directive":
+            if payload == "before":
+                resolved = hunk_target(current)
+                inferred += resolved != current
+                before_at = resolved
+            pending = payload
+        else:
+            seen += 1
+            if pending is None:
+                unanchored += 1
+                continue
+            if pending in ("before", "after"):
+                target = os.path.join(tree, before_at or "")
+            elif current is None:
+                raise Defect("multi-file task has a code block before any **`path`** label")
+            else:
+                target = os.path.join(tree, current)
+            if pending == "before":
+                before = payload
+                pending = None
+            elif pending == "after":
+                if before is None:
+                    raise Defect("an **After** block with no **Before** before it")
+                replace_once(target, before, payload)
+                before, pending, applied = None, None, applied + 1
+            elif pending == "replace":
+                write_file(target, payload)
+                pending, applied = None, applied + 1
+            elif pending == "content":
+                pending = None
+                if os.path.exists(target) and kinds.get(current) != "new":
+                    # No **Before**, no **Replace entire file** — whether this block is the
+                    # file or a piece of it is not written down anywhere, so it is not applied.
+                    unanchored += 1
+                    continue
+                write_file(target, payload)
+                applied += 1
+
+    if before is not None:
+        raise Defect(f"{before_at}: a **Before** block with no **After** after it")
+    if applied:
+        note = f"{applied} edit(s) -> {', '.join(sorted(set(paths)))}"
+        if inferred:
+            note += f"; {inferred} hunk(s) had no path label, resolved to the sole modified file"
+        if unanchored:
+            note += f"; {unanchored} unanchored block(s) left alone"
+        return note, applied
+    if unanchored:
+        return f"{unanchored} code block(s) with no Before/After or Replace marker", 0
+    return "no code block", 0 if seen == 0 else 0
+
+
+# --- Copying and building ---------------------------------------------------------
+
+
+def gitignored_dirs(root: str) -> set[str]:
+    """Bare directory names from .gitignore. Anything with a glob or a path is left in."""
+    names = set()
+    path = os.path.join(root, ".gitignore")
+    if os.path.isfile(path):
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.strip().rstrip("/")
+            if line and not line.startswith(("#", "!")) and not re.search(r"[*?\[\]/]", line):
+                names.add(line)
+    return names
+
+
+def copy_tree(root: str) -> str:
+    skip = SKIP_DIRS | gitignored_dirs(root)
+    dest = tempfile.mkdtemp(prefix="blueprint-apply-")
+    shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=True,
+                    ignore=lambda _d, names: [n for n in names if n in skip])
+    return dest
+
+
+BUILD_CANDIDATES = [
+    ("tools/build.sh", "bash tools/build.sh"),
+    ("gradlew", "./gradlew build"),
+    ("package.json", "npm test"),
+    ("Makefile", "make test"),
+    (None, "python3 -m unittest discover"),
+]
+
+
+def build_command(tree: str, blueprint: str) -> str | None:
+    for _, line, in_fence, _ in scan(blueprint):
+        if not in_fence and line.startswith("**Build**:"):
+            return line.split(":", 1)[1].strip().strip("`")
+    for marker, cmd in BUILD_CANDIDATES:
+        if marker and os.path.exists(os.path.join(tree, marker)):
+            return cmd
+    # Nothing declared and nothing recognised. A Python tree at least has a discover
+    # target; inventing a command for anything else would only report its own failure.
+    if any(f.startswith("test") for f in os.listdir(tree)) or os.path.isdir(os.path.join(tree, "tests")):
+        return "python3 -m unittest discover"
+    return None
+
+
+def run_build(tree: str, cmd: str) -> int:
+    print(f"\n{CYAN}=== Build ==={NC}")
+    print(f"  $ {cmd}")
+    proc = subprocess.run(cmd, shell=True, cwd=tree, capture_output=True, text=True)
+    tail = (proc.stdout + proc.stderr).rstrip().split("\n")[-20:]
+    record(
+        "pass" if proc.returncode == 0 else "fail",
+        f"exit code {proc.returncode}",
+        "\n".join(tail),
+    )
+    return proc.returncode
+
+
+def main() -> int:
+    global _tree
+    argv = sys.argv[1:]
+    do_build, keep = "--build" in argv, "--keep" in argv
+    args = [a for a in argv if not a.startswith("--")]
+
+    root = repo_root()
+    feature_dir = resolve_feature_dir(root, args[0] if args else None)
+    if not feature_dir or not os.path.isdir(feature_dir):
+        print(f"{RED}ERROR: feature directory not found.{NC}")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep]")
+        return 2
+
+    bp_path = os.path.join(feature_dir, "blueprint.md")
+    if not os.path.isfile(bp_path):
+        print(f"{RED}blueprint.md not found — run /speckit.blueprint.generate first.{NC}")
+        return 1
+    bp = open(bp_path, encoding="utf-8", errors="replace").read()
+    tasks = split_tasks(bp)
+
+    print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
+    print(f"Feature: {os.path.relpath(feature_dir, root)}")
+    mode_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**mode**:")), "")
+    mode = (mode_line.split(":", 1)[1].strip().split()[0].lower() if ":" in mode_line else "unknown")
+    print(f"Mode: {mode} | {len(tasks)} task sections")
+
+    _tree = tree = copy_tree(root)
+    print(f"Tree: {tree}\n")
+
+    print(f"{CYAN}[1] Applying tasks in document order{NC}")
+    failed, applied_tasks, unanchored_tasks = [], 0, []
+    try:
+        for tid, section in tasks:
+            try:
+                note, count = apply_task(tree, section)
+            except Defect as exc:
+                failed.append(tid)
+                record("fail", f"{tid}  FAILED", str(exc))
+                continue
+            if count:
+                applied_tasks += 1
+                record("pass", f"{tid}  applied", note)
+            elif "no file" in note or "delete" in note or note == "no code block":
+                record("warn", f"{tid}  skipped ({note})")
+            else:
+                unanchored_tasks.append(tid)
+                record("warn", f"{tid}  skipped ({note})")
+
+        print(f"\n{CYAN}=== Summary ==={NC}")
+        print(f"  applied: {applied_tasks}  skipped: {len(tasks) - applied_tasks - len(failed)}"
+              f"  {RED}FAILED{NC}: {len(failed)}")
+        if unanchored_tasks:
+            print(f"  {YELLOW}{len(unanchored_tasks)} task(s) carry code no marker anchors to a"
+                  f" position: {', '.join(unanchored_tasks[:10])}{NC}")
+
+        rc = 1 if failed else 0
+        if do_build:
+            cmd = build_command(tree, bp)
+            if cmd is None:
+                print(f"\n{YELLOW}WARN: no build command declared and none recognised — build skipped.{NC}")
+                print("      Add a `**Build**: <command>` line to the blueprint header.")
+            elif run_build(tree, cmd) != 0:
+                rc = 1
+    finally:
+        if keep:
+            print(f"\nTree kept at: {tree}")
+        else:
+            shutil.rmtree(tree, ignore_errors=True)
+
+    if rc:
+        print(f"\n{RED}Blueprint did NOT apply cleanly{NC}")
+    elif applied_tasks == 0:
+        # A build that passes over an unchanged tree is evidence about the tree, not
+        # about the blueprint, and saying "applied cleanly" here would claim otherwise.
+        print(f"\n{YELLOW}Nothing was applied — no task anchored its code to a position in a file.{NC}")
+        print("      The build result above describes the working tree, not this blueprint.")
+    else:
+        print(f"\n{GREEN}Blueprint applied{' and built' if do_build else ''} cleanly{NC}")
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
