@@ -156,7 +156,8 @@ while IFS= read -r line; do
                 fi
             else
                 # a (kind) closes the run of paths collected since the last one
-                if [[ "$token_kind" == new* ]] || [[ "$token_kind" == *"— 이동"* ]]; then
+                # "new", "new — moved from …", "new (renamed)" all create a file here.
+                if [[ "$token_kind" == new* ]]; then
                     for pp in "${pending[@]}"; do NEW_FILES+=("$pp"); done
                 fi
                 pending=()

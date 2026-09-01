@@ -1,5 +1,9 @@
 # oh-my-claudecode runtime state (session artifacts, not part of the extension)
 .omc/
 
+# Python
+__pycache__/
+*.pyc
+
 # macOS
 .DS_Store

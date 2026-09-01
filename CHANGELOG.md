@@ -23,6 +23,9 @@ explain their choices — and now it checks them.
 
 ### Fixed
 
+- `--require-anchors` makes the applier fail when a task's code is not anchored, or when nothing anchored at all — off by default, because a guide blueprint of pure instructions legitimately applies nothing, and on in CI, where "verified nothing" and "verified everything" must not share an exit code
+- The command spec and manifest describe the checks that actually run; three whole sections and half of a fourth had gone undocumented
+- The scaffold validator no longer special-cases one project's wording for a moved file
 - The dropped-anchor check compares positions instead of set membership: the real defect it was written for — a doc-comment opener deleted from the end of a hunk — was exempted by an unrelated opener at the top, while a legitimately rewritten condition was reported instead
 - Over-implementation fails only when nearly every file that should carry a marker still does; mid-implementation, a finished file is normal and no longer fails
 - Multi-file labels are counted whatever follows them, not only a colon

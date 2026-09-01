@@ -1,10 +1,10 @@
 ---
-description: "Validate scaffold files against the blueprint"
+description: "Check the blueprint document, apply its code to a throwaway tree, and validate scaffold files on disk"
 ---
 
-# Validate Blueprint Scaffold
+# Validate Blueprint
 
-Validate that scaffold files created by `/speckit.blueprint.generate scaffold` are correct — files exist, TODO markers are present in business logic, and no scaffold file is over-implemented.
+Validate a blueprint three ways: the document holds together, the code inside it actually works, and — in scaffold mode — the right things landed on disk.
 
 ## User Input
 
@@ -17,18 +17,28 @@ If arguments contain a directory path, use it as the feature directory. Otherwis
 ## Prerequisites
 
 - `blueprint.md` must exist (run `/speckit.blueprint.generate` first)
-- Scaffold mode must have been used to create files
+- The applier is a **pre-implementation** tool — run it before the tasks are typed, not after
+- The scaffold validator needs scaffold mode to have been used, or `--strict`
 
 ## Execution
 
-Run both validators from the repository root. The first checks the blueprint document, the second checks what it put on disk:
+Run all three from the repository root, in this order:
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
+python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR"
 ```
 
-The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The scaffold validator short-circuits for those modes unless you pass `--strict`.
+Each answers a different question:
+
+| Script | Question it answers |
+|--------|---------------------|
+| `validate_blueprint.py` | Does the document hold together? |
+| `apply_blueprint.py` | Does its code actually work? |
+| `validate-scaffold.sh` | Did scaffold mode put the right things on disk? |
+
+The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The applier also runs in every mode, and is the only one of the three that hands the blueprint to a compiler. The scaffold validator short-circuits for the file-less modes unless you pass `--strict`.
 
 Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided by the user, resolve it automatically:
 
@@ -36,43 +46,106 @@ Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided b
 2. Extract the numeric prefix (e.g., `003` from `003-user-auth`)
 3. Find the matching directory under `specs/`
 
+All three scripts do this themselves when the argument is omitted.
+
 ## Validation Checks
 
 ### Document checks (`validate_blueprint.py`)
 
-Format-level, so they hold for any language:
+Format-level, so they hold for any language. Eight numbered sections, in the order the script runs them:
 
-1. **Task coverage**: every task id in `tasks.md` reaches the blueprint
-2. **Rationale**: every task section carries a `**Why**`
-3. **Working-tree claims**: `Before` line references land inside their files, and every `After` differs from its `Before`
-4. **Multi-file labels**: a task naming more than one file labels each authored code block with its path
-5. **Placeholders**: no ellipsis stubs; in `doc-only`/`scaffold` modes, no TODO/FIXME markers in code blocks
+1. **Task coverage**: every task id declared in `tasks.md` appears somewhere in the blueprint (missing `tasks.md` is a warning, not a failure)
+2. **Rationale (Why)**: every task section carries a `**Why**`
+3. **Working-tree claims**, four results:
+   - a line number cited in a `**Before**` label is within the longest file the task declares
+   - every `**After**` differs from its `**Before**` — an identical pair is not a diff
+   - no `**Before**` quotes a structural edge anchor (a closing brace, `/**`, `*/`) that its `**After**` does not return; applying such a pair deletes that line
+   - every `modify` task anchors its code to a position — a code block with no `**Before**`/`**After**` pair, no path label, and no `**Replace entire file**` marker is reported as a warning, because the applier cannot place it
+4. **Multi-file task labels**: a task naming more than one file labels each authored code block with its path
+5. **Placeholder content**: no ellipsis stubs (`// ...`, `# ...`) in any mode; in `doc-only`/`scaffold` modes, additionally no `TODO`/`FIXME`/`HACK`/`XXX` markers in code blocks
+6. **Freshness**: the header's `**Sources**` stamp records each source artifact as `name@hash`; the script re-hashes those files and fails when one has changed since the blueprint was generated. No stamp at all is a warning
+7. **Cited requirements reproduced**: every requirement id cited in a `**Requirements**` line (`FR-`, `NFR-`, `SC-`, `AC-`, `US-`) is also stated somewhere else in the document — a citation alone leaves a reader working from this file unable to look it up
+8. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
+
+Before/After blocks are stripped before the placeholder and multi-file checks: they quote existing code, not content the blueprint authored.
+
+### Applying the blueprint (`apply_blueprint.py`)
+
+The document checks read the blueprint's shape. This one reads its content: it copies the working tree into a temporary directory, types every task's code into that copy in document order, and — with `--build` — runs the project's build there. A blueprint that claims its code compiles either survives that or it does not.
+
+The copy is a plain recursive copy, not `git worktree add`, so it needs neither a git repo nor a clean index and cannot touch your own tree. It skips `.git`, common build and dependency directories, and any bare directory name listed in `.gitignore`.
+
+**How a task is applied**:
+
+- A `**Before**`/`**After**` pair replaces the Before text in the target file. The match is verbatim and must be unique
+- `**Replace entire file**` writes the block as the whole file
+- A block introduced by a **`path`** label, or the single block of a single `(new)` file, is written as that file
+- A `(delete)`-only task, a task with no `**File**:` declaration, and a block the document never anchors are all skipped and reported
+
+**Flags**:
+
+- `--build` — run the project's build in the copy and report its exit code. The command comes from a `**Build**: <command>` line in the blueprint header if there is one; otherwise the script picks the first of `tools/build.sh`, `gradlew`, `package.json`, `Makefile` it finds, falling back to `python3 -m unittest discover` for a tree with tests. If nothing matches, the build is skipped with a warning
+- `--keep` — print the copy's path instead of deleting it, so you can inspect the applied result
+
+**A failure means the blueprint is wrong, not the applier.** Applying is deterministic and unforgiving on purpose: a `**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect and never repaired by guesswork. Silent repair is what lets a lossy hunk reach a reader as if it were sound. When the applier reports `T0NN FAILED`, fix that task's Before block against the real file and run it again.
+
+**Run it before the work is done.** The applier answers a question about a tree the blueprint has not been typed into yet. Once the implementation exists, a Before block no longer matches (the file already holds the After), and new files already on disk are left alone rather than written — so the applied result stops describing the blueprint. A blueprint validated after implementation tells you nothing about the blueprint.
+
+Exit code 1 if any task failed to apply or the build exited non-zero. Note that a run in which nothing was applied still exits 0; the script says so explicitly, and warns that the build result describes the working tree rather than the blueprint.
 
 ### Scaffold checks (`validate-scaffold.sh`)
 
-The script reads the `**Mode**:` line from `blueprint.md` first. `doc-only` and `guide` write nothing to disk, so for those modes only check 1 runs and missing files are reported as expected, not as failures. Scaffold modes (`scaffold`, `guide scaffold`) run all four checks:
+The script reads the `**Mode**:` line from `blueprint.md` first, taking only the first two tokens. `doc-only` and `guide` write nothing to disk, so for those modes checks 1-3 run informationally — file existence is reported as a present/missing count and passes either way, and check 4 is skipped entirely. Scaffold modes (`scaffold`, `guide scaffold`) run all four. `--strict` forces the on-disk checks regardless of mode, for scaffolding done after the blueprint was generated.
 
-1. **Blueprint Document**: Verifies `blueprint.md` exists
-2. **File Existence**: All NEW files referenced in the blueprint exist on disk (placeholder/glob paths such as `docs/2026-MM-DD-*.md` are skipped)
-3. **TODO Markers**: Service and test files contain TODO comments (confirming scaffold mode)
-4. **Over-Implementation Detection**: No scaffold file is suspiciously complete (zero TODOs + many methods + many lines)
+1. **Blueprint Document**: verifies `blueprint.md` exists (a hard exit if not)
+2. **File Existence**: all NEW files declared in the blueprint's `**File**:` lines exist on disk (placeholder/glob paths such as `docs/2026-MM-DD-*.md` are skipped)
+3. **TODO Markers**: service/handler and test files among those NEW files carry a `TODO` or a language-native not-implemented marker (`NotImplementedError`, `TODO(`, `unimplemented!(`, `UnsupportedOperationException`, …), confirming they were scaffolded rather than implemented
+4. **Over-Implementation Detection**: a service or test file with no marker, more than one method and more than 30 lines is suspicious. It **fails** when two-thirds or more of its sibling scaffold files still carry markers — nothing has been implemented yet, so this file was written complete instead of stubbed — and warns otherwise, since a finished file is normal during implementation
 
 ## Output
 
-The script outputs color-coded results:
+All three scripts output color-coded results:
+
 - Green checkmarks for passing checks
 - Yellow warnings for non-critical issues
 - Red failures for problems that must be fixed
 
-Exit code 0 means pass (possibly with warnings), exit code 1 means failure.
+Exit code 0 means pass (possibly with warnings), exit code 1 means failure, exit code 2 (Python scripts) means the feature directory could not be resolved.
 
 ## Troubleshooting
 
 ### "blueprint.md not found"
-Run `/speckit.blueprint.generate scaffold` first to generate the blueprint and scaffold files.
+
+Run `/speckit.blueprint.generate` first. For the scaffold checks specifically, generate in `scaffold` mode.
+
+### "N source artifact(s) changed since this blueprint was generated"
+
+The `**Sources**` stamp no longer matches `spec.md`, `plan.md` or `tasks.md` on disk. Regenerate the blueprint, or state in the document why the difference is fine.
+
+### "no **Sources** stamp"
+
+The blueprint predates the stamp, so staleness cannot be checked at all. Regenerate to add one.
+
+### "modify task has code that is not anchored to a position"
+
+A task edits an existing file but its code block says nothing about where it goes — prose like "append this at the end" reads fine and is not a position. Quote the surrounding lines in a `**Before**` block, or mark the block `**Replace entire file**`.
+
+### "T0NN FAILED — Before block not found verbatim"
+
+The task's `**Before**` does not match the file it claims to edit. This is a defect in the blueprint: open the real file, copy the lines as they are, and rewrite the Before block. Do not adjust the applier.
+
+### "Before block matches N places — the anchor is ambiguous"
+
+The quoted region occurs more than once in the file, so there is no single place to apply it. Widen the `**Before**` block until it is unique.
+
+### "no build command declared and none recognised"
+
+`--build` found nothing to run. Add a `**Build**: <command>` line to the blueprint header.
 
 ### "File MISSING"
+
 A file referenced in the blueprint was not created. Re-run `/speckit.blueprint.generate scaffold` or create the file manually.
 
-### "No TODO markers found"
-A service or test file appears fully implemented. In scaffold mode, business logic should contain TODO comments. Check if the file should have been generated in scaffold mode.
+### "NO TODO markers found"
+
+A service or test file appears fully implemented. In scaffold mode, business logic should carry TODO markers. Check whether the file was generated outside scaffold mode — or, if the feature is already implemented, this warning is expected.

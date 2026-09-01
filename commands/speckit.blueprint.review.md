@@ -25,7 +25,7 @@ $ARGUMENTS
 
 The rest of the argument is the **scope**: a phase (`Phase 3`), a user story (`US2`), a task range (`T012-T018`), or a single task ID. A directory path overrides the feature directory (otherwise auto-detect from the current branch, same as `/speckit.blueprint.validate`).
 
-With no scope given, take the last phase in blueprint order whose tasks are all implemented on disk. Name a phase explicitly to review an earlier one.
+With no scope given, the scope is **every implemented task in the feature**, across all phases — that is the unit the developer just finished and the unit the PR will cover. Name a phase, a story, or a range explicitly to narrow it. Step 2 decides what "implemented" means and makes the command state the scope it picked before it asks anything.
 
 ## Workflow
 
@@ -39,21 +39,48 @@ Run the prerequisites check from the repository root:
 
 Parse `FEATURE_DIR` and load `blueprint.md`. Read the `**Mode**:` token from the header — it tells you how much the blueprint dictated, which changes where the questions come from (Step 3). If the header carries a `**Sources**:` line, compare the recorded hashes against the current artifacts; on a mismatch, say so in the report and continue — the questions still stand, but the blueprint they came from is describing an older intention.
 
-Resolve the scope to a concrete task list, then read **the developer's actual files** for those tasks from disk. Every question and every verdict must be grounded in the code as it exists now, not in what the blueprint said it would be.
+Resolve the scope to a concrete task list — Step 2 decides which tasks count as implemented, and what the scope is when the arguments name none — then read **the developer's actual files** for those tasks from disk. Every question and every verdict must be grounded in the code as it exists now, not in what the blueprint said it would be.
 
-### Step 2: Refuse to Run on Nothing
+### Step 2: Decide What Is Implemented, Then Refuse to Run on Nothing
 
-A fabricated quiz is worse than no quiz — it teaches the developer that the exercise is theater. Stop, with the message, whenever:
+A fabricated quiz is worse than no quiz — it teaches the developer that the exercise is theater. So the scope has to rest on evidence in the code, and a file sitting on disk is not evidence.
+
+**What counts as implemented.** Judge each task by what its `**File**:` label says it does:
+
+| Task kind | Implemented when |
+|-----------|------------------|
+| `new` | The file exists and carries a real body — no `TODO(blueprint):` for this task, no not-implemented call standing in for the work |
+| `modify` | The change the task prescribes is **present in the file**. Existence proves nothing here — the file was there before the task was. Look for the substance of the `**After**` block: the symbols, calls, or lines that distinguish it from its `**Before**`, matched by meaning rather than character-for-character, since names and formatting drift while typing. For a task whose change is a structural instruction with no diff, or a guide-mode note, look for what the instruction asks for — the registration, the field, the entry, the wired call |
+| `delete` | The file is gone |
+
+Two consequences, both of them things the file-exists test gets wrong:
+
+- **A task that names several paths, or carries several Before/After blocks, is implemented only when every one of its changes is present.** Three registrations prescribed and one typed is a partially implemented task, and a partially implemented task is not implemented.
+- Where the **Verification** criterion can be checked by reading — a named symbol, an added route, a config key — check it, and let it override a guess. Where it needs a run, do not claim it; the marker and content evidence above stands on its own.
+
+**Choosing the scope.** With no scope in the arguments, select **every implemented task in the feature**, across all phases. Tasks that fail the table above are left out of the selection, not treated as a stop. An explicit scope argument overrides this and is taken as given: asked for `Phase 3`, review Phase 3.
+
+**Say which scope you selected, and why, before asking anything.** One line, before the first question:
+
+```
+Scope: 14 implemented tasks across Phases 2-6. Excluded: T017 (2 of its 3 route registrations missing from Router.kt), T018 (README has no `runOnce` section).
+```
+
+A guess the developer can see is a guess they can correct; a silent one sends them into a quiz about the wrong code.
+
+Then stop, with the message, whenever:
 
 | Condition | Message |
 |-----------|---------|
 | No `blueprint.md` | "No blueprint.md found — run `/speckit.blueprint.generate` first." |
 | Scope names a phase/story/task not in the blueprint | "Scope `{arg}` is not in this blueprint. Available: {phases}." |
-| Scope's files do not exist on disk | "{n} of {m} tasks in {scope} have no file on disk. Implement first, then run this." |
-| Scope still carries blueprint markers | "{scope} is not implemented yet — {n} tasks still carry `TODO(blueprint):` or a not-implemented body. Implement first, then run this." |
-| Fewer than two genuine decisions in scope | Report the decisions found, say the scope is too mechanical to quiz, and skip to the export. |
+| Nothing in scope is implemented | "Nothing in {scope} is implemented — {per task, what is missing: no file, a `TODO(blueprint):` or not-implemented body still standing, or a prescribed change absent from the file}. Implement first, then run this." |
+| A scope named in the arguments is only partly implemented | "{n} of {m} tasks in {scope} are not implemented — {per task, what is missing}. Implement first, then run this." |
+| Fewer than two genuine decisions across the whole selection | Report the decisions found, say the selection is too mechanical to quiz, and skip to the export. |
 
-Partial implementation is a stop, not a partial quiz: half-typed code produces questions about code the developer already knows is unfinished, and the answers grade nothing.
+Partial implementation of a **named** scope is a stop, not a partial quiz: half-typed code produces questions about code the developer already knows is unfinished, and the answers grade nothing. The default scope never contains an unfinished task to begin with — but it must still list what it excluded, so a skipped task is visible rather than quietly lost.
+
+The "too mechanical" outcome judges the whole selection. It is the right answer when a feature really did have almost nothing delegated to it, and it must never be reached by looking at one trivial phase while a phase full of decisions goes unexamined.
 
 ### Step 3: Separate What Was Dictated from What Was Delegated
 
@@ -151,6 +178,8 @@ In `export` mode, produce this section only: the first table from the blueprint,
 - **Never bluff a verdict**: cite the line or the blueprint section, or say you cannot verify. Sycophantic grading is the one failure mode that makes this command worse than useless.
 - **Ground every question in code on disk**: read the developer's files; never quiz from the blueprint's version of what the code would be.
 - **Read-only on code**: this command never edits source files. The single write it may make is checking off completed tasks in `blueprint.md`'s Checklist, under Step 7's conditions.
+- **State the scope before quizzing**: name the tasks selected and the ones excluded, with the reason each was excluded. A wrong guess about scope must be visible to the developer, not silent.
+- **Implemented means the change is there**: for a task that modifies an existing file, look for what the task prescribed; a file on disk proves only that it was on disk before.
 - **Stop rather than fabricate**: no blueprint, an unknown scope, or an unimplemented one gets the message and a stop.
 - **Five questions, not fifteen**: aim for 5, cap at 8, and go under when the scope holds fewer real decisions. A long quiz gets skimmed, and a skimmed quiz grades nothing.
 - **The export must stand alone**: reproduce reasons in it; a reviewer who has to open `blueprint.md` to use it is back where they started.

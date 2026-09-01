@@ -19,6 +19,11 @@ Usage: python3 apply_blueprint.py [feature-dir] [--build] [--keep]
   feature-dir: specs/{feature}/ (default: auto-detect from the current branch)
   --build:     run the project's build in the copy and report its exit code
   --keep:      print the copy's path instead of deleting it
+  --require-anchors:
+               fail when a task's code is not anchored, or when nothing anchored at
+               all. Off by default because a guide blueprint of pure instructions
+               legitimately applies nothing; on in CI, where "verified nothing" and
+               "verified everything" must not share an exit code.
 """
 from __future__ import annotations
 
@@ -290,13 +295,14 @@ def main() -> int:
     global _tree
     argv = sys.argv[1:]
     do_build, keep = "--build" in argv, "--keep" in argv
+    strict_anchors = "--require-anchors" in argv
     args = [a for a in argv if not a.startswith("--")]
 
     root = repo_root()
     feature_dir = resolve_feature_dir(root, args[0] if args else None)
     if not feature_dir or not os.path.isdir(feature_dir):
         print(f"{RED}ERROR: feature directory not found.{NC}")
-        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep]")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]")
         return 2
 
     bp_path = os.path.join(feature_dir, "blueprint.md")
@@ -353,6 +359,8 @@ def main() -> int:
                   f" position: {', '.join(unanchored_tasks[:10])}{NC}")
 
         rc = 1 if failed else 0
+        if strict_anchors and (unanchored_tasks or applied_tasks == 0):
+            rc = 1
         if do_build:
             cmd = build_command(tree, bp)
             if cmd is None:
@@ -373,6 +381,7 @@ def main() -> int:
         # about the blueprint, and saying "applied cleanly" here would claim otherwise.
         print(f"\n{YELLOW}Nothing was applied — no task anchored its code to a position in a file.{NC}")
         print("      The build result above describes the working tree, not this blueprint.")
+        print("      Pass --require-anchors to make this a failure.")
     else:
         print(f"\n{GREEN}Blueprint applied{' and built' if do_build else ''} cleanly{NC}")
     return rc
