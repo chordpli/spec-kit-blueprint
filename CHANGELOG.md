@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/speckit.blueprint.cleanup` command — post-implementation sweep of scaffold residue: stale `TODO(blueprint):` markers, narration comments, commented-out code. Report-only by default, `apply` to edit; never deletes honest unfinished markers or constraint comments
 - `after_implement` hook (optional) prompting the cleanup sweep
 - Two closure rules found by auditing a generated blueprint as a developer who has not read the design docs: requirements and acceptance criteria cited by task headers must be reproduced in the document (they were referenced 102 times and stated nowhere), and every "defined in T0NN" forward reference must actually be delivered by that task
+- The dropped-anchor check compares positions instead of set membership: the real defect it was written for — a doc-comment opener deleted from the end of a hunk — was exempted by an unrelated opener at the top, while a legitimately rewritten condition was reported instead
+- Over-implementation fails only when nearly every file that should carry a marker still does; mid-implementation, a finished file is normal and no longer fails
+- Multi-file labels are counted whatever follows them, not only a colon
+- Only a task's File declaration says what gets created; reference tables are no longer scraped for paths
 - Cited requirements are now verified, not self-reported: the document validator fails when a task header names a requirement id whose text appears nowhere in the blueprint (markdown emphasis around the id still counts as a definition)
 - Both validators print their version, so a stale installed copy is visible
 - Rule and check for undetermined specs: what the artifacts do not decide, the blueprint does not decide either — it builds to the seam, marks the task blocked, and collects the gaps in an Open Questions section, which the document validator reports with its blocking count

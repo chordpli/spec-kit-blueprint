@@ -162,11 +162,10 @@ while IFS= read -r line; do
                 pending=()
             fi
         done
-    # Pattern 2: table row with "New" — | `path` | ... | New |
-    elif [[ "$line" =~ \|[[:space:]]*\`?([a-zA-Z][^\`\|]+\.[a-zA-Z]+)\`?[[:space:]]*\|.*[Nn]ew ]]; then
-        NEW_FILES+=("${BASH_REMATCH[1]}")
-    # Pattern 3: backtick-quoted path with / and known extension
-    elif [[ "$line" =~ \|[[:space:]]*\`([a-zA-Z][^\`]*\/[^\`]*\.[a-zA-Z]+)\`[[:space:]]*\| ]]; then
+    # Only a task's **File**: declaration says what gets created. Scraping table rows
+    # also swept the reference sections the generator is required to write (existing-type
+    # API tables, requirement tables), reporting their paths as files that never appeared.
+    elif [[ "$line" =~ \|[[:space:]]*\`?([a-zA-Z][^\`\|]+\.[a-zA-Z]+)\`?[[:space:]]*\|.*[Nn]ew[[:space:]]*file ]]; then
         NEW_FILES+=("${BASH_REMATCH[1]}")
     fi
 done <<< "$JOINED"
@@ -318,7 +317,12 @@ check_over_implementation() {
             # SIBLING scaffold files still carry markers, nothing has been implemented yet
             # and this one was written complete against the mode's rules. That case breaks
             # the build (it can call APIs no other task has created), so it fails.
-            if [[ "$MARKED_SCAFFOLDS" -gt 0 ]]; then
+            # Fresh scaffold or work in progress? During implementation some files are
+            # done and some are not, and a finished file is not a violation. Only when
+            # nearly every sibling still carries a marker is nothing implemented yet —
+            # and then a complete file is the mode being broken, which breaks the build.
+            if [[ "$TOTAL_SCAFFOLDS" -gt 0 ]] && \
+               [[ $((MARKED_SCAFFOLDS * 3)) -ge $((TOTAL_SCAFFOLDS * 2)) ]]; then
                 fail "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} sibling scaffold file(s) still have them. This file was written complete instead of stubbed."
             else
                 warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers left. Expected once you have implemented it; look closer only if this file was just scaffolded."
@@ -331,10 +335,18 @@ check_over_implementation() {
 # How many scaffold files still carry a not-implemented marker. Zero means the
 # developer has implemented; non-zero means we are still looking at fresh scaffolds.
 MARKED_SCAFFOLDS=0
-for f in "${SCAFFOLD_FILES[@]}"; do
+TOTAL_SCAFFOLDS=0
+# Only files the mode says should carry markers count here. Structural scaffolds
+# (types, config, wiring) are written complete on purpose, and counting them would
+# dilute the ratio until a fresh scaffold looks like work in progress.
+MARKER_POPULATION=()
+[[ ${#SERVICE_FILES[@]} -gt 0 ]] && MARKER_POPULATION+=("${SERVICE_FILES[@]}")
+[[ ${#TEST_FILES[@]} -gt 0 ]] && MARKER_POPULATION+=("${TEST_FILES[@]}")
+for f in "${MARKER_POPULATION[@]}"; do
     [[ -f "$f" ]] || continue
     n_todo=$(count_matches -ci "TODO" "$f")
     n_impl=$(count_matches -ci "$NOT_IMPL_RE" "$f")
+    TOTAL_SCAFFOLDS=$((TOTAL_SCAFFOLDS + 1))
     if [[ "$n_todo" -gt 0 ]] || [[ "$n_impl" -gt 0 ]]; then
         MARKED_SCAFFOLDS=$((MARKED_SCAFFOLDS + 1))
     fi

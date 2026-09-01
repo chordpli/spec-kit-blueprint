@@ -176,39 +176,42 @@ def main() -> int:
     else:
         record("pass", "every After differs from its Before")
 
-    # A Before block quotes real lines so the reader can find the spot. Applying the pair
-    # replaces all of them, so any quoted line the After does not carry is deleted from the
-    # file — usually an anchor the task never meant to touch, and the build breaks somewhere
-    # else entirely. Blank lines and comment-fence noise are not evidence, so ignore them.
+    # A Before block quotes real lines so the reader can find the spot, and applying the
+    # pair replaces that whole region — so an anchor at its edges that the After does not
+    # reproduce is deleted from the file, usually a brace or a doc-comment opener the task
+    # never meant to touch, and the build breaks somewhere else entirely.
+    #
+    # Only the edges are checked. Interior lines are what the task is there to change, and
+    # comparing those reports every legitimate edit. Position matters too: an identical
+    # token elsewhere in the After is not the one that was dropped.
+    STRUCTURAL = re.compile(r"^(?:[)}\]]+[;,]?|/\*\*|\*/|\{|\)\s*[;{]?)$")
+
+    def edge_anchors(block: str) -> tuple[list[str], list[str]]:
+        lines = [ln.strip() for ln in block.split("\n") if ln.strip()]
+        return lines[:2], lines[-3:]
+
     lossy = []
     for tid, sec in sections.items():
         for before, after in re.findall(
             r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```.*?\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```", sec, re.S
         ):
-            after_lines = {ln.strip() for ln in after.split("\n") if ln.strip()}
-            # Reformatting is not loss: a one-line doc comment respread over three lines
-            # keeps its text. Compare on content alone before calling a line dropped.
-            after_sig = re.sub(r"[^0-9A-Za-z]", "", after)
-            for ln in before.split("\n"):
-                t = ln.strip()
-                if len(t) < 3 or t in after_lines:
-                    continue
-                sig = re.sub(r"[^0-9A-Za-z]", "", t)
-                if len(sig) >= 12 and sig in after_sig:
-                    continue
-                # A structural line that vanished: closing braces and doc openers are the
-                # ones that actually break compilation when swallowed.
-                if t in ("}", "};", "*/", "/**", ")", "],", "}," ) or t.startswith(("/**", "* ", "}")):
-                    lossy.append(f"{tid}: Before quotes {t!r}, After drops it")
+            b_head, b_tail = edge_anchors(before)
+            a_lines = [ln.strip() for ln in after.split("\n") if ln.strip()]
+            a_head, a_tail = a_lines[:5], a_lines[-5:]
+            for anchors, region, where in ((b_head, a_head, "opening"), (b_tail, a_tail, "closing")):
+                for t in anchors:
+                    if not STRUCTURAL.match(t) or t in region:
+                        continue
+                    lossy.append(f"{tid}: Before's {where} anchor {t!r} is not in the After's {where} lines")
                     break
     if lossy:
         record(
             "fail",
-            "Before quotes a structural line the After does not return — applying it deletes that line",
+            "Before quotes an edge anchor the After does not return — applying it deletes that line",
             "\n".join(lossy[:6]),
         )
     else:
-        record("pass", "no Before/After pair silently drops a quoted structural line")
+        record("pass", "no Before/After pair silently drops an edge anchor")
 
     # 4. Multi-file tasks map each block to a path
     print(f"\n{CYAN}[4] Multi-file task labels{NC}")
@@ -218,7 +221,9 @@ def main() -> int:
         authored = strip_quoted(sec)
         blocks = len(re.findall(r"^```[a-zA-Z]", authored, re.M))
         if len(paths) > 1 and blocks > 1:
-            labels = len(re.findall(r"\*\*`[^`]+\.[A-Za-z0-9]{1,6}`\*\*:", authored))
+            # A label may be followed by anything — ":", " (new):", " — **Replace entire
+            # file**". Requiring a colon counted four labelled blocks as one.
+            labels = len(re.findall(r"\*\*`[^`]+\.[A-Za-z0-9]{1,6}`\*\*", authored))
             if labels < blocks:
                 unlabeled.append(f"{tid}: {len(paths)} files, {blocks} blocks, {labels} labeled")
     if unlabeled:
