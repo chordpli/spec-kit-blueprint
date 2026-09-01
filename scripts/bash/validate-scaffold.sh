@@ -30,6 +30,14 @@ warn()  { ((WARN++)); echo -e "  ${YELLOW}⚠${NC} $1"; }
 fail()  { ((FAIL++)); echo -e "  ${RED}✗${NC} $1"; }
 header(){ echo -e "\n${CYAN}[$1]${NC}"; }
 
+# grep -c prints "0" and exits 1 when nothing matches, so `$(grep -c … || echo 0)`
+# yields "0\n0" and breaks every arithmetic test downstream. Always emit one integer.
+count_matches() {
+    local n
+    n=$(grep "$@" 2>/dev/null) || n=0
+    printf '%s' "${n:-0}"
+}
+
 # === Resolve feature directory ===
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -136,6 +144,12 @@ while IFS= read -r line; do
     fi
 done < "$GUIDE"
 
+# The patterns above can match the same path twice (a File line and a table row),
+# which would report and count that file twice.
+if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
+    NEW_FILES=($(printf '%s\n' "${NEW_FILES[@]}" | awk '!seen[$0]++'))
+fi
+
 if [[ ${#NEW_FILES[@]} -eq 0 ]]; then
     warn "No NEW file paths detected in blueprint (check blueprint format)"
 elif [[ "$SCAFFOLD_EXPECTED" == false ]]; then
@@ -219,9 +233,10 @@ check_todo_in_file() {
         return
     fi
 
-    local has_todo=$(grep -ci "TODO" "$file" 2>/dev/null || echo 0)
-    local has_bp_todo=$(grep -c "TODO(blueprint)" "$file" 2>/dev/null || echo 0)
-    local has_not_impl=$(grep -ci "NotImplemented\|not_implemented\|raise NotImplementedError\|throw.*NotImplemented" "$file" 2>/dev/null || echo 0)
+    local has_todo has_bp_todo has_not_impl
+    has_todo=$(count_matches -ci "TODO" "$file")
+    has_bp_todo=$(count_matches -c "TODO(blueprint)" "$file")
+    has_not_impl=$(count_matches -ci "NotImplemented\|not_implemented\|raise NotImplementedError\|throw.*NotImplemented" "$file")
 
     if [[ "$has_todo" -gt 0 ]] || [[ "$has_not_impl" -gt 0 ]]; then
         pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
@@ -261,16 +276,21 @@ check_over_implementation() {
 
     [[ -f "$file" ]] || return
 
-    local has_todo=$(grep -ci "TODO" "$file" 2>/dev/null || echo 0)
-    local has_not_impl=$(grep -ci "NotImplemented\|not_implemented\|raise NotImplementedError\|throw.*NotImplemented" "$file" 2>/dev/null || echo 0)
+    local has_todo has_not_impl
+    has_todo=$(count_matches -ci "TODO" "$file")
+    has_not_impl=$(count_matches -ci "NotImplemented\|not_implemented\|raise NotImplementedError\|throw.*NotImplemented" "$file")
 
     if [[ "$has_todo" -eq 0 ]] && [[ "$has_not_impl" -eq 0 ]]; then
         # Count function/method definitions (language-agnostic patterns)
-        local method_count=$(grep -cE "^\s*(def |fun |func |function |public |private |protected |async )" "$file" 2>/dev/null || echo 0)
+        local method_count
+        method_count=$(count_matches -cE "^[[:space:]]*(def |fun |func |function |public |private |protected |async )" "$file")
         local line_count=$(wc -l < "$file" | tr -d ' ')
 
         if [[ "$method_count" -gt 1 ]] && [[ "$line_count" -gt 30 ]]; then
-            fail "$rel_path — ${method_count} methods, ${line_count} lines, but NO TODO. May be over-implemented for scaffold mode."
+            # Expected once you have implemented the file — this check cannot tell that
+            # apart from a scaffold that was written too complete, so it warns rather than fails.
+            warn "$rel_path — ${method_count} methods, ${line_count} lines, no TODO markers left. Expected if you have already implemented it; look closer only if this file was just scaffolded."
+            OVER_IMPL_FOUND=true
         fi
     fi
 }
@@ -281,12 +301,9 @@ ALL_CHECK_FILES=()
 [[ ${#TEST_FILES[@]} -gt 0 ]] && ALL_CHECK_FILES+=("${TEST_FILES[@]}")
 
 if [[ ${#ALL_CHECK_FILES[@]} -gt 0 ]]; then
-    for f in "${ALL_CHECK_FILES[@]}"; do
-        result=$(check_over_implementation "$f" 2>&1)
-        if [[ -n "$result" ]]; then
-            echo "$result"
-            OVER_IMPL_FOUND=true
-        fi
+    # Called directly, not in $( ), so warn()/fail() counters survive.
+    for f in $(printf '%s\n' "${ALL_CHECK_FILES[@]}" | awk '!seen[$0]++'); do
+        check_over_implementation "$f"
     done
 fi
 
