@@ -21,6 +21,8 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+SCRIPT_VERSION="1.1.0"
+
 PASS=0
 WARN=0
 FAIL=0
@@ -75,7 +77,7 @@ fi
 
 GUIDE="$FEATURE_DIR/blueprint.md"
 
-echo -e "${CYAN}=== Blueprint Scaffold Validator ===${NC}"
+echo -e "${CYAN}=== Blueprint Scaffold Validator ${SCRIPT_VERSION} ===${NC}"
 echo "Feature: $FEATURE_DIR"
 echo "Blueprint: $GUIDE"
 
@@ -319,7 +321,7 @@ check_over_implementation() {
             if [[ "$MARKED_SCAFFOLDS" -gt 0 ]]; then
                 fail "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} sibling scaffold file(s) still have them. This file was written complete instead of stubbed."
             else
-                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers left. Expected once you have implemented it."
+                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers left. Expected once you have implemented it; look closer only if this file was just scaffolded."
             fi
             OVER_IMPL_FOUND=true
         fi

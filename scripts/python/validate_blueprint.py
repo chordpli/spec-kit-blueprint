@@ -21,6 +21,8 @@ GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
     GREEN = YELLOW = RED = CYAN = NC = ""
 
+SCRIPT_VERSION = "1.1.0"
+
 results: list[tuple[str, str, str]] = []  # (status, name, evidence)
 
 
@@ -101,7 +103,7 @@ def main() -> int:
     bp_path = os.path.join(feature_dir, "blueprint.md")
     tasks_path = os.path.join(feature_dir, "tasks.md")
 
-    print(f"{CYAN}=== Blueprint Document Validator ==={NC}")
+    print(f"{CYAN}=== Blueprint Document Validator {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
 
     if not os.path.isfile(bp_path):
@@ -256,7 +258,38 @@ def main() -> int:
         else:
             record("pass", f"{mode} blueprint has no stub markers")
 
-    # 6. Open questions — not pass/fail, but a blocked task is the thing a reader
+    # 6. Cited requirements are reproduced, not just named. A task header pointing at
+    #    "FR-002" is useless to a reader working from this document alone if FR-002's text
+    #    lives only in spec.md — the rule exists, but nothing enforced it until here.
+    print(f"\n{CYAN}[6] Cited requirements reproduced{NC}")
+    ID_RE = r"\b((?:FR|NFR|SC|AC|US)[- ]?\d+(?:\.\d+)*)\b"
+    cited: set[str] = set()
+    for sec in sections.values():
+        for line in sec.split("\n"):
+            if line.strip().startswith("**Requirements**"):
+                cited |= {m.group(1) for m in re.finditer(ID_RE, line)}
+    # Where else does the id appear? A citation line does not count as reproduction.
+    non_citation = "\n".join(
+        ln for ln in bp.split("\n") if not ln.strip().startswith("**Requirements**")
+    )
+    missing = sorted(
+        cid for cid in cited
+        # The id may be wrapped in markdown emphasis or backticks before its delimiter:
+        # "- **FR-001**: Transfers MUST ..." reproduces the requirement just as well.
+        if not re.search(re.escape(cid) + r"[*`_\s]*[|:\-–—)]", non_citation)
+    )
+    if not cited:
+        record("warn", "no **Requirements** citations found in task headers")
+    elif missing:
+        record(
+            "fail",
+            f"{len(missing)} cited requirement(s) never stated in the document",
+            ", ".join(missing[:12]) + " — a reader working from this file alone cannot look them up",
+        )
+    else:
+        record("pass", f"all {len(cited)} cited requirement ids are stated in the document")
+
+    # 7. Open questions — not pass/fail, but a blocked task is the thing a reader
     #    most needs to see before they start typing.
     oq = re.search(r"^##+\s*Open Questions\b(.*?)(?=^##\s|\Z)", bp, re.M | re.S)
     if oq:
@@ -271,7 +304,7 @@ def main() -> int:
             rows = re.findall(r"^#+\s*(OQ-\d+[^\n]*)", body, re.M)
             blocking = [r for r in rows if re.search(r"blocking|blocks|차단", r, re.I)
                         and not re.search(r"non-?blocking|미차단", r, re.I)]
-        print(f"\n{CYAN}[6] Open questions{NC}")
+        print(f"\n{CYAN}[7] Open questions{NC}")
         record(
             "warn" if blocking else "pass",
             f"{len(rows)} open question(s), {len(blocking)} blocking",

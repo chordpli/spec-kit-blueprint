@@ -42,7 +42,7 @@ Three modes:
 |------|--------|
 | `doc-only` (default) | Complete-code `blueprint.md` only — nothing written to disk |
 | `scaffold` | Complete-code `blueprint.md` + new files on disk (structural files complete, core logic as TODO stubs) |
-| `guide` | Design-guidance `blueprint.md` — signatures, Why, implementation notes, pitfalls, references, **no body code**. For learning-first workflows where the developer designs the logic. Add `scaffold` (`guide scaffold`) to also write compilable skeletons to disk |
+| `guide` | Design-guidance `blueprint.md` — signatures, Why, implementation notes, pitfalls, references, **no body code**. For learning-first workflows where the developer designs the logic. Add `scaffold` (`guide scaffold`) to also write compilable skeletons to disk — for **new files only**, so a feature that is mostly edits to existing files gets few files or none |
 
 ## Why
 
@@ -63,7 +63,7 @@ specify extension add blueprint
 From repository directly:
 
 ```bash
-specify extension add blueprint --from https://github.com/chordpli/spec-kit-blueprint/archive/refs/tags/v1.0.0.zip
+specify extension add blueprint --from https://github.com/chordpli/spec-kit-blueprint/archive/refs/tags/v1.1.0.zip
 ```
 
 ## Usage
@@ -131,7 +131,7 @@ The modes are not interchangeable, and a team evaluation of this extension found
 
 Two things worth deciding up front on a team:
 
-- **Feature size.** A ~20-task feature produces roughly 1,600–1,900 lines. A 57-task feature produced 5,517. Past about 30 tasks the document stops being something anyone reads end to end — split the feature instead.
+- **Feature size.** A ~20-task feature produces roughly 1,600–1,900 lines in the full-code modes, and about a third of that in `guide` — the same 20-task feature came out at 1,612 lines as `doc-only` and 670 as `guide`. A 57-task feature produced 5,517. Past about 30 tasks the document stops being something anyone reads end to end — split the feature instead.
 - **Lifetime.** `blueprint.md` describes an intention, and it goes stale the moment implementation diverges. Decide whether it is deleted at merge or kept as a record; an undeleted blueprint from six months ago is a confident, wrong document.
 
 ## Commands
