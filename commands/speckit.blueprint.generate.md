@@ -96,6 +96,8 @@ Create `specs/{feature}/blueprint.md` with the following structure:
 any explanation follows after an em-dash. `/speckit.blueprint.validate` parses this token to decide
 whether files are expected on disk.
 **Total Tasks**: {count} | **Files**: {new} new, {modified} modified, {deleted} deleted
+**Sources**: tasks.md@{sha12} spec.md@{sha12} plan.md@{sha12} | HEAD {short-sha}
+**Build**: {the command that compiles or tests this project, from plan.md or the build files — omit the line if there is none}
 
 ## Key Decisions
 
@@ -171,6 +173,24 @@ what should be independently functional/testable at this point}
 - [ ] T003: {description}
 ...
 ````
+
+### Step 3-Sources: Stamp what this blueprint was built from
+
+A blueprint describes an intention, and it starts lying the moment its inputs move. Record what it
+was generated from so that staleness is detectable instead of assumed:
+
+- `**Sources**`: the first 12 characters of `sha256` for each artifact you read as a source of truth
+  (`tasks.md`, `spec.md`, `plan.md`, plus any other you relied on), and the short commit the tree was
+  at. `shasum -a 256 <file> | cut -c1-12` is enough.
+- `**Build**`: the single command that compiles or tests this project, taken from `plan.md` or the
+  build files you read in Step 1 — the applier and `/speckit.blueprint.validate --build` use it to
+  check that this document's code actually works. Omit the line if the project genuinely has none.
+
+**Regenerating**: if `blueprint.md` already exists, read it first. Keep the text of every task whose
+inputs have not changed **verbatim**, rewrite only the tasks the changed artifacts touch, and end
+your Step 5 report with `{kept} tasks kept, {rewritten} rewritten`. A regeneration that rewrites the
+whole document produces a diff nobody can review, which in practice means the review is skipped —
+and a blueprint nobody re-reads is worse than no blueprint, because it still looks authoritative.
 
 ### Step 3a: Content Rules (CRITICAL)
 
@@ -281,38 +301,41 @@ Note: The scaffold files on disk are intentionally incomplete (TODO stubs). The 
 
 > **Need full file generation?** Skip this extension and run `/speckit.implement` directly — it generates complete files from your spec artifacts.
 
-### Step 4b: Self-Verification
+### Step 4b: Verification
 
-Before finalizing the blueprint, scan ALL content blocks for violations:
-- `TODO`, `FIXME`, `HACK`, `XXX`, or any placeholder markers in any syntax
-- Ellipsis placeholders (`// ...`, `# ...`, `/* ... */`)
-- Empty function/method bodies with no real logic
-- Comments describing unwritten content (e.g., "implement this", "add logic here")
-- Narration comments inside code blocks that merely restate what the adjacent code does (move them to prose or delete them)
+Run the bundled validators rather than only re-reading your own output. A model auditing itself finds
+what it was already looking for; these two find what it missed, and several rules below exist because
+a read-through passed a blueprint the scripts then failed.
 
-If ANY are found in the blueprint, replace them with actual implementation before proceeding. In `guide` mode, invert the body checks: skeleton bodies MUST be not-implemented markers with self-contained instructions — flag any task whose skeleton contains real body logic (branches, queries, assertions) as a violation, and flag any not-implemented message that is not self-sufficient (missing the what, the reference, or the pitfall when one is known).
+```bash
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
+python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build
+```
 
-Also scan for secrets:
-- API keys, passwords, tokens, or connection strings that look real (not obviously fake placeholders)
-- Environment/config file contents with actual credential values
+The first checks the document; the second applies it to a throwaway copy of the tree and runs the
+project's build, which is the only way to know that the code in here works. **Fix every failure and
+run them again** — do not report a blueprint that its own validators reject. If the applier reports a
+task it could not apply, that task's Before block does not match the file it claims to edit, which is
+a defect in this document and not in the applier.
 
-Also run the Step 3d closure checks as verification — these catch the defects that survive a read-through:
-- **Citation check**: no instruction points at a table, matrix, or catalog that is not reproduced in this document
-- **Classpath check**: every type the instructions name resolves on the target module's declared dependencies; if not, the blueprint contains the task that adds the dependency
-- **Call check**: for every port/caller pair, the caller can supply every parameter and the prescribed call sequence uses only declared methods
-- **Tree check**: every Before block matches the file verbatim at the stated line number, every After differs from its Before, and ripple claims (add vs. update, forced signature changes) match the tree
-- **Schema check**: every declared field maps to a column or is marked non-persistent; every NOT NULL column written by a task has a named supplier
-- **Invention check**: every task whose basis is missing from the artifacts is marked blocked and listed in Open Questions, not filled with a plausible design
-- **Requirement check**: every requirement/acceptance-criteria id cited by a task has its text reproduced in the blueprint
-- **Forward-reference check**: every "defined in T0NN" promise is delivered by T0NN
-- **Declaration check**: every required collaborator is in the constructor and has a task; every declared type is constructed somewhere or labeled with where it first will be
-- **Label check**: every task whose `**File**:` line names more than one path has each of its authored code blocks labeled with its own path (Before/After quotes of existing code are exempt) — count the labels against the blocks rather than trusting that you did it
+These are machine-checked, so they are not repeated as prose rules elsewhere: task coverage, a Why per
+task, Before line references and edge anchors, multi-file labels, placeholder content, source freshness,
+reproduced requirements, and open-question counts. The applier covers what the compiler knows: that
+named types resolve, that calls match declarations, and that the tree still builds.
 
-Also verify:
-- Every import/dependency reference either exists on disk or is created by an earlier task in the blueprint
-- Every task ID from `tasks.md` appears in the blueprint (either as a heading or in a Pre-completed table)
-- Every phase from `tasks.md` appears with the same title and order; `[P]` and `[US#]` labels are preserved on task headings
-- Every task heading has a **Why** entry, and every Key Decision row cites a source artifact
+What no script can check, and what you must therefore check yourself before finalizing:
+
+- **Secrets**: no API key, password, token, or connection string that looks real — placeholders only.
+- **Guide-mode bodies**: skeleton bodies are not-implemented markers carrying self-contained
+  instructions. Flag any skeleton with real body logic (branches, queries, assertions), and any marker
+  message missing the what, the reference, or the pitfall when one is known.
+- **Narration**: no comment inside a code block that merely restates the adjacent line (Step 3c).
+- **Invention**: every task whose basis is absent from the artifacts is marked blocked and listed in
+  Open Questions rather than filled with a plausible design (Step 3d).
+- **Schema and declaration loops**: declared fields map to columns or are marked non-persistent; every
+  NOT NULL column a task writes has a named supplier; every required collaborator appears in the
+  constructor and has its own task (Step 3d).
+- **Phase fidelity**: phases, order, `[P]` and `[US#]` labels, and Checkpoints match `tasks.md`.
 
 ### Step 5: Report
 

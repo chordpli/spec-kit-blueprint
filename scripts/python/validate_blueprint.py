@@ -263,10 +263,41 @@ def main() -> int:
         else:
             record("pass", f"{mode} blueprint has no stub markers")
 
-    # 6. Cited requirements are reproduced, not just named. A task header pointing at
+    # 6. Staleness — the header records what the blueprint was built from, so drift is a
+    #    fact to check rather than something everyone assumes away.
+    print(f"\n{CYAN}[6] Freshness{NC}")
+    src_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**sources**")), "")
+    if not src_line:
+        record("warn", "no **Sources** stamp — staleness cannot be checked (regenerate to add one)")
+    else:
+        import hashlib
+
+        stale, unknown = [], []
+        for name, want in re.findall(r"([\w.\-/]+\.\w+)@([0-9a-f]{6,64})", src_line):
+            path = os.path.join(feature_dir, os.path.basename(name))
+            if not os.path.isfile(path):
+                path = os.path.join(root, name)
+            if not os.path.isfile(path):
+                unknown.append(name)
+                continue
+            got = hashlib.sha256(open(path, "rb").read()).hexdigest()[: len(want)]
+            if got != want:
+                stale.append(f"{name}: stamped {want}, now {got}")
+        if stale:
+            record(
+                "fail",
+                f"{len(stale)} source artifact(s) changed since this blueprint was generated",
+                "\n".join(stale) + "\nregenerate, or say in the document why the difference is fine",
+            )
+        elif unknown:
+            record("warn", "stamped sources not found on disk", ", ".join(unknown))
+        else:
+            record("pass", "every stamped source artifact still matches")
+
+    # 7. Cited requirements are reproduced, not just named. A task header pointing at
     #    "FR-002" is useless to a reader working from this document alone if FR-002's text
     #    lives only in spec.md — the rule exists, but nothing enforced it until here.
-    print(f"\n{CYAN}[6] Cited requirements reproduced{NC}")
+    print(f"\n{CYAN}[7] Cited requirements reproduced{NC}")
     ID_RE = r"\b((?:FR|NFR|SC|AC|US)[- ]?\d+(?:\.\d+)*)\b"
     cited: set[str] = set()
     for sec in sections.values():
@@ -309,7 +340,7 @@ def main() -> int:
             rows = re.findall(r"^#+\s*(OQ-\d+[^\n]*)", body, re.M)
             blocking = [r for r in rows if re.search(r"blocking|blocks|차단", r, re.I)
                         and not re.search(r"non-?blocking|미차단", r, re.I)]
-        print(f"\n{CYAN}[7] Open questions{NC}")
+        print(f"\n{CYAN}[8] Open questions{NC}")
         record(
             "warn" if blocking else "pass",
             f"{len(rows)} open question(s), {len(blocking)} blocking",
