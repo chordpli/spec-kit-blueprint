@@ -32,6 +32,10 @@ header(){ echo -e "\n${CYAN}[$1]${NC}"; }
 
 # grep -c prints "0" and exits 1 when nothing matches, so `$(grep -c … || echo 0)`
 # yields "0\n0" and breaks every arithmetic test downstream. Always emit one integer.
+# Language-native "not implemented yet" forms. A guide-mode skeleton body is one of
+# these, so missing them makes an untouched skeleton look fully implemented.
+NOT_IMPL_RE='NotImplemented\|not_implemented\|NotImplementedError\|UnsupportedOperationException\|NotImplementedException\|fatalError(\|todo!(\|unimplemented!(\|panic(.TODO\|panic(.not implemented'
+
 count_matches() {
     local n
     n=$(grep "$@" 2>/dev/null) || n=0
@@ -123,16 +127,37 @@ fi
 header "2. File Existence (NEW files from blueprint)"
 
 NEW_FILES=()
+# A **File**: declaration may wrap onto following lines; join it back into one
+# logical line before parsing, or every path after the first is invisible here.
+JOINED=$(awk '
+    /^\*\*File\*\*:/ { buf = $0; joining = 1; next }
+    joining && NF > 0    { buf = buf " " $0; next }
+    joining && NF == 0   { print buf; joining = 0; print; next }
+    { print }
+    END { if (joining) print buf }
+' "$GUIDE")
+
 while IFS= read -r line; do
-    # Pattern 1: **File**: `path` (new...) — a task may list several paths on one line
-    if [[ "$line" =~ \*\*File\*\*: ]] && [[ "$line" == *"(new"* ]]; then
-        rest="$line"
-        while [[ "$rest" =~ \`([^\`]+)\`(.*) ]]; do
-            candidate="${BASH_REMATCH[1]}"
-            rest="${BASH_REMATCH[2]}"
-            # Only real paths: must contain a directory separator and an extension
-            if [[ "$candidate" == */* ]] && [[ "$candidate" == *.* ]]; then
-                NEW_FILES+=("$candidate")
+    # Pattern 1: **File**: `path` (kind), `path` (kind) — each path carries its own
+    # kind, and a shared kind at the end applies to the run of paths before it.
+    # Matching the whole line on "(new" would mark a `(modify)` sibling as new.
+    if [[ "$line" =~ \*\*File\*\*: ]]; then
+        rest="${line#*\*\*File\*\*:}"
+        pending=()
+        while [[ "$rest" =~ ^[^\`\(]*(\`([^\`]+)\`|\(([^\)]*)\))(.*)$ ]]; do
+            token_path="${BASH_REMATCH[2]}"
+            token_kind="${BASH_REMATCH[3]}"
+            rest="${BASH_REMATCH[4]}"
+            if [[ -n "$token_path" ]]; then
+                if [[ "$token_path" == */* ]] && [[ "$token_path" == *.* ]]; then
+                    pending+=("$token_path")
+                fi
+            else
+                # a (kind) closes the run of paths collected since the last one
+                if [[ "$token_kind" == new* ]] || [[ "$token_kind" == *"— 이동"* ]]; then
+                    for pp in "${pending[@]}"; do NEW_FILES+=("$pp"); done
+                fi
+                pending=()
             fi
         done
     # Pattern 2: table row with "New" — | `path` | ... | New |
@@ -142,7 +167,7 @@ while IFS= read -r line; do
     elif [[ "$line" =~ \|[[:space:]]*\`([a-zA-Z][^\`]*\/[^\`]*\.[a-zA-Z]+)\`[[:space:]]*\| ]]; then
         NEW_FILES+=("${BASH_REMATCH[1]}")
     fi
-done < "$GUIDE"
+done <<< "$JOINED"
 
 # The patterns above can match the same path twice (a File line and a table row),
 # which would report and count that file twice.
@@ -236,7 +261,7 @@ check_todo_in_file() {
     local has_todo has_bp_todo has_not_impl
     has_todo=$(count_matches -ci "TODO" "$file")
     has_bp_todo=$(count_matches -c "TODO(blueprint)" "$file")
-    has_not_impl=$(count_matches -ci "NotImplemented\|not_implemented\|raise NotImplementedError\|throw.*NotImplemented" "$file")
+    has_not_impl=$(count_matches -ci "$NOT_IMPL_RE" "$file")
 
     if [[ "$has_todo" -gt 0 ]] || [[ "$has_not_impl" -gt 0 ]]; then
         pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
@@ -278,7 +303,7 @@ check_over_implementation() {
 
     local has_todo has_not_impl
     has_todo=$(count_matches -ci "TODO" "$file")
-    has_not_impl=$(count_matches -ci "NotImplemented\|not_implemented\|raise NotImplementedError\|throw.*NotImplemented" "$file")
+    has_not_impl=$(count_matches -ci "$NOT_IMPL_RE" "$file")
 
     if [[ "$has_todo" -eq 0 ]] && [[ "$has_not_impl" -eq 0 ]]; then
         # Count function/method definitions (language-agnostic patterns)
@@ -287,13 +312,31 @@ check_over_implementation() {
         local line_count=$(wc -l < "$file" | tr -d ' ')
 
         if [[ "$method_count" -gt 1 ]] && [[ "$line_count" -gt 30 ]]; then
-            # Expected once you have implemented the file — this check cannot tell that
-            # apart from a scaffold that was written too complete, so it warns rather than fails.
-            warn "$rel_path — ${method_count} methods, ${line_count} lines, no TODO markers left. Expected if you have already implemented it; look closer only if this file was just scaffolded."
+            # A file with no marker is normal once you have implemented it — but if its
+            # SIBLING scaffold files still carry markers, nothing has been implemented yet
+            # and this one was written complete against the mode's rules. That case breaks
+            # the build (it can call APIs no other task has created), so it fails.
+            if [[ "$MARKED_SCAFFOLDS" -gt 0 ]]; then
+                fail "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} sibling scaffold file(s) still have them. This file was written complete instead of stubbed."
+            else
+                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers left. Expected once you have implemented it."
+            fi
             OVER_IMPL_FOUND=true
         fi
     fi
 }
+
+# How many scaffold files still carry a not-implemented marker. Zero means the
+# developer has implemented; non-zero means we are still looking at fresh scaffolds.
+MARKED_SCAFFOLDS=0
+for f in "${SCAFFOLD_FILES[@]}"; do
+    [[ -f "$f" ]] || continue
+    n_todo=$(count_matches -ci "TODO" "$f")
+    n_impl=$(count_matches -ci "$NOT_IMPL_RE" "$f")
+    if [[ "$n_todo" -gt 0 ]] || [[ "$n_impl" -gt 0 ]]; then
+        MARKED_SCAFFOLDS=$((MARKED_SCAFFOLDS + 1))
+    fi
+done
 
 OVER_IMPL_FOUND=false
 ALL_CHECK_FILES=()

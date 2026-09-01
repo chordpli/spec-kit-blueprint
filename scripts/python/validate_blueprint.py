@@ -73,6 +73,21 @@ def strip_quoted(section: str) -> str:
     return re.sub(r"\*\*(?:Before|After)\*\*[^\n]*\n+```\w*\n.*?```", "", section, flags=re.S)
 
 
+
+FILE_DECL = re.compile(r"\*\*File\*\*:(.*?)(?:\n\s*\n|\n(?=\*\*))", re.S)
+
+
+def file_paths(section: str) -> list[str]:
+    """Every path in a task's **File**: declaration, which may wrap onto later lines."""
+    m = FILE_DECL.search(section)
+    if not m:
+        return []
+    return [
+        p for p in re.findall(r"`([^`]+)`", m.group(1))
+        if re.search(r"\.[A-Za-z0-9]{1,6}$", p)
+    ]
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     root = repo_root()
@@ -129,14 +144,18 @@ def main() -> int:
     print(f"\n{CYAN}[3] Working-tree claims{NC}")
     out_of_range, identical = [], []
     for tid, sec in sections.items():
-        fm = re.search(r"\*\*File\*\*:\s*`([^`]+)`", sec)
-        if fm:
-            path = os.path.join(root, fm.group(1))
+        # Check against the longest file the task declares: a Before block belongs to one
+        # of them, and citing only the first path silently skipped multi-file tasks.
+        totals = []
+        for rel in file_paths(sec):
+            path = os.path.join(root, rel)
             if os.path.isfile(path):
-                total = len(open(path, encoding="utf-8", errors="replace").read().splitlines())
-                for bm in re.finditer(r"\*\*Before\*\*[^\n]*?\bline[^\d]{0,4}(\d+)", sec):
-                    if int(bm.group(1)) > total:
-                        out_of_range.append(f"{tid}: line {bm.group(1)} > {total} lines in file")
+                totals.append(len(open(path, encoding="utf-8", errors="replace").read().splitlines()))
+        if totals:
+            total = max(totals)
+            for bm in re.finditer(r"\*\*Before\*\*[^\n]*?\blines?[^\d]{0,4}(\d+)", sec):
+                if int(bm.group(1)) > total:
+                    out_of_range.append(f"{tid}: line {bm.group(1)} > {total} lines in file")
         for before, after in re.findall(
             r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```.*?\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```", sec, re.S
         ):
@@ -155,15 +174,45 @@ def main() -> int:
     else:
         record("pass", "every After differs from its Before")
 
+    # A Before block quotes real lines so the reader can find the spot. Applying the pair
+    # replaces all of them, so any quoted line the After does not carry is deleted from the
+    # file — usually an anchor the task never meant to touch, and the build breaks somewhere
+    # else entirely. Blank lines and comment-fence noise are not evidence, so ignore them.
+    lossy = []
+    for tid, sec in sections.items():
+        for before, after in re.findall(
+            r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```.*?\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```", sec, re.S
+        ):
+            after_lines = {ln.strip() for ln in after.split("\n") if ln.strip()}
+            # Reformatting is not loss: a one-line doc comment respread over three lines
+            # keeps its text. Compare on content alone before calling a line dropped.
+            after_sig = re.sub(r"[^0-9A-Za-z]", "", after)
+            for ln in before.split("\n"):
+                t = ln.strip()
+                if len(t) < 3 or t in after_lines:
+                    continue
+                sig = re.sub(r"[^0-9A-Za-z]", "", t)
+                if len(sig) >= 12 and sig in after_sig:
+                    continue
+                # A structural line that vanished: closing braces and doc openers are the
+                # ones that actually break compilation when swallowed.
+                if t in ("}", "};", "*/", "/**", ")", "],", "}," ) or t.startswith(("/**", "* ", "}")):
+                    lossy.append(f"{tid}: Before quotes {t!r}, After drops it")
+                    break
+    if lossy:
+        record(
+            "fail",
+            "Before quotes a structural line the After does not return — applying it deletes that line",
+            "\n".join(lossy[:6]),
+        )
+    else:
+        record("pass", "no Before/After pair silently drops a quoted structural line")
+
     # 4. Multi-file tasks map each block to a path
     print(f"\n{CYAN}[4] Multi-file task labels{NC}")
     unlabeled = []
     for tid, sec in sections.items():
-        head = sec.split("\n")[2] if len(sec.split("\n")) > 2 else ""
-        if not head.strip().startswith("**File**"):
-            head = next((ln for ln in sec.split("\n")[:8] if ln.strip().startswith("**File**")), "")
-        # A filename counts whether or not the task spelled out its directory.
-        paths = [p for p in re.findall(r"`([^`]+)`", head) if re.search(r"\.[A-Za-z0-9]{1,6}$", p)]
+        paths = file_paths(sec)
         authored = strip_quoted(sec)
         blocks = len(re.findall(r"^```[a-zA-Z]", authored, re.M))
         if len(paths) > 1 and blocks > 1:
