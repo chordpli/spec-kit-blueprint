@@ -92,6 +92,10 @@ class Defect(Exception):
     """The blueprint cannot be applied as written. Never repaired, only reported."""
 
 
+class AlreadyApplied(Exception):
+    """The edit is already in the file — the tree has moved past this blueprint."""
+
+
 def replace_once(path: str, before: str, after: str) -> None:
     if not os.path.isfile(path):
         raise Defect(f"{rel(path)}: Before block targets a file that does not exist")
@@ -106,6 +110,12 @@ def replace_once(path: str, before: str, after: str) -> None:
             return
         if n > 1:
             raise Defect(f"{rel(path)}: Before block matches {n} places — the anchor is ambiguous")
+    # Before the anchor is called a defect: has this edit already been made? Running the
+    # applier on a feature that is already implemented is a category error — the tool
+    # describes work that has not happened yet — and reporting "anchor not found" sends
+    # the reader hunting for a blueprint bug that is not there.
+    if after.strip() and after.strip() in text:
+        raise AlreadyApplied(f"{rel(path)}: the After content is already in the file")
     head = before.strip().split("\n")[0][:60]
     raise Defect(f"{rel(path)}: Before block not found verbatim (starts {head!r})")
 
@@ -306,11 +316,15 @@ def main() -> int:
     print(f"Tree: {tree}\n")
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
-    failed, applied_tasks, unanchored_tasks = [], 0, []
+    failed, applied_tasks, unanchored_tasks, already = [], 0, [], []
     try:
         for tid, section in tasks:
             try:
                 note, count = apply_task(tree, section)
+            except AlreadyApplied as exc:
+                already.append(tid)
+                record("warn", f"{tid}  already applied", str(exc))
+                continue
             except Defect as exc:
                 failed.append(tid)
                 record("fail", f"{tid}  FAILED", str(exc))
@@ -323,6 +337,13 @@ def main() -> int:
             else:
                 unanchored_tasks.append(tid)
                 record("warn", f"{tid}  skipped ({note})")
+
+        if already:
+            print(
+                f"\n  {YELLOW}{len(already)} task(s) are already in the tree{NC} — this blueprint describes"
+                "\n  work that is done, so applying it does not test anything. Run the applier before"
+                "\n  implementing, or against a tree that predates the work."
+            )
 
         print(f"\n{CYAN}=== Summary ==={NC}")
         print(f"  applied: {applied_tasks}  skipped: {len(tasks) - applied_tasks - len(failed)}"

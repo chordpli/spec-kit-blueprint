@@ -31,7 +31,7 @@ GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
     GREEN = YELLOW = RED = CYAN = NC = ""
 
-SCRIPT_VERSION = "1.1.0"
+SCRIPT_VERSION = "1.2.0"
 
 results: list[tuple[str, str, str]] = []  # (status, name, evidence)
 

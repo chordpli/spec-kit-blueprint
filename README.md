@@ -3,7 +3,7 @@
 Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` with complete, ready-to-use content for every task — so you can review, understand, and type through the implementation before `/speckit.implement` runs.
 
 ![Spec Kit >= 0.2.0](https://img.shields.io/badge/spec--kit-%3E%3D0.2.0-blue)
-![Version 1.1.0](https://img.shields.io/badge/version-1.1.0-green)
+![Version 1.1.0](https://img.shields.io/badge/version-1.2.0-green)
 ![License MIT](https://img.shields.io/badge/license-MIT-brightgreen)
 
 A [Spec Kit](https://github.com/github/spec-kit) community extension.
@@ -64,7 +64,7 @@ specify extension add blueprint
 From repository directly:
 
 ```bash
-specify extension add blueprint --from https://github.com/chordpli/spec-kit-blueprint/archive/refs/tags/v1.1.0.zip
+specify extension add blueprint --from https://github.com/chordpli/spec-kit-blueprint/archive/refs/tags/v1.2.0.zip
 ```
 
 ## Usage
@@ -241,4 +241,4 @@ MIT — see [LICENSE](LICENSE)
 
 ---
 
-*Extension Version: 1.1.0 | Spec Kit: >=0.2.0*
+*Extension Version: 1.2.0 | Spec Kit: >=0.2.0*

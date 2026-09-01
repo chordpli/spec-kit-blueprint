@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-02
+
+Everything here came out of two people using the extension on real projects and
+reporting what broke. The theme is the same in both directions: the tool stated
+obligations it never collected on — that its code compiles, that the developer can
+explain their choices — and now it checks them.
+
+### Added
+
+- Two closure rules found by auditing a generated blueprint as a developer who has not read the design docs: requirements and acceptance criteria cited by task headers must be reproduced in the document (they were referenced 102 times and stated nowhere), and every "defined in T0NN" forward reference must actually be delivered by that task
+- `apply_blueprint.py` — applies a blueprint to a throwaway copy of the tree and builds it, so the document's central claim is checked by a compiler rather than asserted by its author. Deterministic: an anchor that does not match verbatim is a reported defect, never a guess
+- `/speckit.blueprint.review` — after implementing, asks about the decisions the blueprint delegated, grades the answers against the code and the blueprint, and exports a decision list for the PR
+- `**Sources**` and `**Build**` header stamps, with the document validator failing a blueprint whose inputs have moved; regeneration keeps unchanged tasks verbatim so the diff stays reviewable
+- Rule and check for undetermined specs: what the artifacts do not decide, the blueprint does not decide either — it builds to the seam, marks the task blocked, and collects the gaps in an Open Questions section, which the document validator reports with its blocking count
+- `_blueprint_parse.py` — one reading of a blueprint shared by both Python tools, after a path fix landed in one and not the other and quietly disabled a check in the second
+
+### Fixed
+
+- The dropped-anchor check compares positions instead of set membership: the real defect it was written for — a doc-comment opener deleted from the end of a hunk — was exempted by an unrelated opener at the top, while a legitimately rewritten condition was reported instead
+- Over-implementation fails only when nearly every file that should carry a marker still does; mid-implementation, a finished file is normal and no longer fails
+- Multi-file labels are counted whatever follows them, not only a colon
+- Only a task's File declaration says what gets created; reference tables are no longer scraped for paths
+- Guide-mode blueprints stamp a compile or syntax check as their `**Build**`, never a test run — guide skeletons are not-implemented by design, so a test command is red before the developer starts, and in a compiled language that trap hides itself
+- The document validator warns when a modify task's code is not anchored to a position, so prose like "append this at the end" is caught before the applier fails on it
+- Cited requirements are now verified, not self-reported: the document validator fails when a task header names a requirement id whose text appears nowhere in the blueprint (markdown emphasis around the id still counts as a definition)
+- Both validators print their version, so a stale installed copy is visible
+- The applier reports an edit already present in the tree as `already applied` rather than as a missing anchor, so running it after implementing points at the real problem
+
 ## [1.1.0] - 2026-08-21
 
 ### Added
@@ -14,19 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/speckit.blueprint.cleanup` command — post-implementation sweep of scaffold residue: stale `TODO(blueprint):` markers, narration comments, commented-out code. Report-only by default, `apply` to edit; never deletes honest unfinished markers or constraint comments
 - `after_implement` hook (optional) prompting the cleanup sweep
-- Two closure rules found by auditing a generated blueprint as a developer who has not read the design docs: requirements and acceptance criteria cited by task headers must be reproduced in the document (they were referenced 102 times and stated nowhere), and every "defined in T0NN" forward reference must actually be delivered by that task
-- The dropped-anchor check compares positions instead of set membership: the real defect it was written for — a doc-comment opener deleted from the end of a hunk — was exempted by an unrelated opener at the top, while a legitimately rewritten condition was reported instead
-- Over-implementation fails only when nearly every file that should carry a marker still does; mid-implementation, a finished file is normal and no longer fails
-- Multi-file labels are counted whatever follows them, not only a colon
-- Only a task's File declaration says what gets created; reference tables are no longer scraped for paths
-- Guide-mode blueprints stamp a compile or syntax check as their `**Build**`, never a test run — guide skeletons are not-implemented by design, so a test command is red before the developer starts, and in a compiled language that trap hides itself
-- The document validator warns when a modify task's code is not anchored to a position, so prose like "append this at the end" is caught before the applier fails on it
-- `apply_blueprint.py` — applies a blueprint to a throwaway copy of the tree and builds it, so the document's central claim is checked by a compiler rather than asserted by its author. Deterministic: an anchor that does not match verbatim is a reported defect, never a guess
-- `/speckit.blueprint.review` — after implementing, asks about the decisions the blueprint delegated, grades the answers against the code and the blueprint, and exports a decision list for the PR
-- `**Sources**` and `**Build**` header stamps, with the document validator failing a blueprint whose inputs have moved; regeneration keeps unchanged tasks verbatim so the diff stays reviewable
-- Cited requirements are now verified, not self-reported: the document validator fails when a task header names a requirement id whose text appears nowhere in the blueprint (markdown emphasis around the id still counts as a definition)
-- Both validators print their version, so a stale installed copy is visible
-- Rule and check for undetermined specs: what the artifacts do not decide, the blueprint does not decide either — it builds to the seam, marks the task blocked, and collects the gaps in an Open Questions section, which the document validator reports with its blocking count
 - **Closure rules** (Step 3d) making the blueprint self-sufficient, enforced in self-verification: reproduce behavior-defining tables instead of citing them; every named type must resolve on its module's classpath (or the blueprint carries the task that adds the dependency); simulate every port/caller pair; verify every claim about the working tree (line numbers, Before≠After, add-vs-update ripples, contradicting comments in files the reader is sent to); close the type-to-schema loop (fields↔columns, NOT NULL suppliers) and the declaration loop (collaborators in constructors, no orphan types)
 - **Why layer** in generated blueprints: per-task rationale traced to spec/plan/decision records (decision, rejected alternative, invariant to protect), per-phase background, and a Key Decisions table with rationale, trade-off, rejected alternative, and source columns
 - Comment rules for generated code: constraint comments stay in code, narration stays in blueprint prose; scaffold markers use the greppable `TODO(blueprint): T{ID}` form
