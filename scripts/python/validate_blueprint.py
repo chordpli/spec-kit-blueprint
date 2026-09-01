@@ -17,6 +17,16 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _blueprint_parse import (  # noqa: E402  (path set above)
+    file_kinds,
+    file_paths,
+    repo_root,
+    resolve_feature_dir,
+    split_tasks,
+    strip_quoted,
+)
+
 GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0;36m", "\033[0m"
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
     GREEN = YELLOW = RED = CYAN = NC = ""
@@ -33,61 +43,6 @@ def record(status: str, name: str, evidence: str = "") -> None:
     if evidence:
         for line in evidence.split("\n"):
             print(f"      {line}")
-
-
-def repo_root() -> str:
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return os.getcwd()
-
-
-def resolve_feature_dir(root: str, arg: str | None) -> str:
-    if arg:
-        return arg if os.path.isabs(arg) else os.path.join(root, arg)
-    try:
-        branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, check=True
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        branch = ""
-    m = re.match(r"^(\d{3}|\d{8})-", branch)
-    specs = os.path.join(root, "specs")
-    if m and os.path.isdir(specs):
-        for name in sorted(os.listdir(specs)):
-            if name.startswith(m.group(1)):
-                return os.path.join(specs, name)
-    return ""
-
-
-def split_tasks(text: str) -> dict[str, str]:
-    """Task id -> its section, from `### T001 ...` up to the next task heading."""
-    return {
-        m.group(1): m.group(0)
-        for m in re.finditer(r"^### (T\d+)\b.*?(?=^### T\d+|\Z)", text, re.M | re.S)
-    }
-
-
-def strip_quoted(section: str) -> str:
-    """Drop Before/After blocks — they quote existing code, not authored content."""
-    return re.sub(r"\*\*(?:Before|After)\*\*[^\n]*\n+```\w*\n.*?```", "", section, flags=re.S)
-
-
-
-FILE_DECL = re.compile(r"\*\*File\*\*:(.*?)(?:\n\s*\n|\n(?=\*\*))", re.S)
-
-
-def file_paths(section: str) -> list[str]:
-    """Every path in a task's **File**: declaration, which may wrap onto later lines."""
-    m = FILE_DECL.search(section)
-    if not m:
-        return []
-    return [
-        p for p in re.findall(r"`([^`]+)`", m.group(1))
-        if re.search(r"\.[A-Za-z0-9]{1,6}$", p)
-    ]
 
 
 def main() -> int:
@@ -111,7 +66,7 @@ def main() -> int:
         return 1
 
     bp = open(bp_path, encoding="utf-8", errors="replace").read()
-    sections = split_tasks(bp)
+    sections = dict(split_tasks(bp))
     mode_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**mode**:")), "")
     mode = (mode_line.split(":", 1)[1].strip().split()[0].lower() if ":" in mode_line else "unknown")
     print(f"Mode: {mode} | {len(bp.splitlines())} lines | {len(sections)} task sections\n")
@@ -144,20 +99,30 @@ def main() -> int:
 
     # 3. Before blocks quote something that is actually there
     print(f"\n{CYAN}[3] Working-tree claims{NC}")
-    out_of_range, identical = [], []
+    out_of_range, identical, ambiguous = [], [], []
     for tid, sec in sections.items():
         # Check against the longest file the task declares: a Before block belongs to one
         # of them, and citing only the first path silently skipped multi-file tasks.
-        totals = []
+        # Per file, not per task. Taking the longest of a task's files as the bound lets a
+        # 60-line citation against a 37-line file hide behind a 74-line sibling.
+        lengths = {}
         for rel in file_paths(sec):
             path = os.path.join(root, rel)
             if os.path.isfile(path):
-                totals.append(len(open(path, encoding="utf-8", errors="replace").read().splitlines()))
-        if totals:
-            total = max(totals)
+                lengths[rel] = len(open(path, encoding="utf-8", errors="replace").read().splitlines())
+        if lengths:
+            shortest = min(lengths.values())
             for bm in re.finditer(r"\*\*Before\*\*[^\n]*?\blines?[^\d]{0,4}(\d+)", sec):
-                if int(bm.group(1)) > total:
-                    out_of_range.append(f"{tid}: line {bm.group(1)} > {total} lines in file")
+                n = int(bm.group(1))
+                # A Before block does not say which of the task's files it quotes, so a
+                # citation is out of range only when it exceeds every candidate.
+                if n > max(lengths.values()):
+                    out_of_range.append(
+                        f"{tid}: line {n} > {max(lengths.values())} lines, the longest file it declares"
+                    )
+                elif n > shortest and len(lengths) > 1:
+                    over = [f"{f} ({ln})" for f, ln in sorted(lengths.items()) if n > ln]
+                    ambiguous.append(f"{tid}: line {n} is past the end of {', '.join(over)}")
         for before, after in re.findall(
             r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```.*?\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```", sec, re.S
         ):
@@ -167,6 +132,12 @@ def main() -> int:
         record("fail", "Before block cites a line past the end of its file", "\n".join(out_of_range[:6]))
     else:
         record("pass", "Before line references are within their files")
+    if ambiguous:
+        record(
+            "warn",
+            "a Before citation is out of range for some of its task's files",
+            "\n".join(ambiguous[:6]) + "\nname the file the block quotes so the reference can be checked",
+        )
     if identical:
         record(
             "fail",
