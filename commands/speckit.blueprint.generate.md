@@ -156,6 +156,14 @@ the failure mode being prevented).}
 **Checkpoint**: {Carry over the Checkpoint line from tasks.md at the end of each phase —
 what should be independently functional/testable at this point}
 
+## Open Questions
+
+> Only include this section when the artifacts left something undetermined. Omit it entirely when they did not.
+
+| # | Undecided | Blocks | Blocking? | Who can answer |
+|---|-----------|--------|-----------|----------------|
+| OQ-1 | {what the artifacts do not say} | T{ID}, T{ID} | yes/no | {spec owner, ADR, upstream team} |
+
 ## Checklist
 
 - [X] T001: {description} ← already complete
@@ -246,6 +254,7 @@ A blueprint fails the moment the reader has to leave it to learn *what to build*
 - **Close the type-to-schema loop.** Every field of every declared type maps to a column or is explicitly marked non-persistent, and every NOT NULL column of every table a task writes has a named supplier — a parameter, or a documented derivation inside a specific task.
 - **Reproduce the requirements you cite, not just the design tables.** Every task header names requirement and acceptance-criteria ids (`FR-3.2`, `AC 4`). If their text lives only in `spec.md`, a reader working from the blueprint sees the label and never learns what it demands — the same failure as citing a design table, applied to the thing every task points at. Carry the requirement and acceptance-criteria statements the blueprint's tasks reference into a reference section of the document.
 - **A forward reference must resolve.** When a task says a name, type, or decision "is defined in T0NN", open T0NN and confirm it is. A promise pointing at a task that never delivers is worse than an open question, because the reader stops looking.
+- **What the artifacts do not decide, you do not decide either.** A blueprint's authority comes from the spec behind it, so a design you invented reads exactly like one that was agreed — and nothing downstream can tell them apart. When the artifacts leave a behavior, an integration, or a contract undetermined, build **to the seam and stop**: declare the port or interface the feature needs, write whatever local stand-in the spec does allow, say plainly in the task that it is a stand-in and not the real thing, and mark the task blocked. Collect every such gap in an **Open Questions** section — one row each for what is undecided, which tasks it blocks, whether it blocks the phase, and who can answer it. A named gap costs a conversation; an invented design costs the rebuild after someone ships it.
 - **Close the declaration loop.** Every collaborator the instructions require appears in the class's constructor parameter list and has its own task. Every type declared in one task is constructed by some task in the blueprint, or carries a label saying where it is first constructed (`declared here, first constructed in T0NN`) — an orphan type reads as an omission.
 
 ### Step 4: Optionally Create Files on Disk
@@ -293,6 +302,7 @@ Also run the Step 3d closure checks as verification — these catch the defects 
 - **Call check**: for every port/caller pair, the caller can supply every parameter and the prescribed call sequence uses only declared methods
 - **Tree check**: every Before block matches the file verbatim at the stated line number, every After differs from its Before, and ripple claims (add vs. update, forced signature changes) match the tree
 - **Schema check**: every declared field maps to a column or is marked non-persistent; every NOT NULL column written by a task has a named supplier
+- **Invention check**: every task whose basis is missing from the artifacts is marked blocked and listed in Open Questions, not filled with a plausible design
 - **Requirement check**: every requirement/acceptance-criteria id cited by a task has its text reproduced in the blueprint
 - **Forward-reference check**: every "defined in T0NN" promise is delivered by T0NN
 - **Declaration check**: every required collaborator is in the constructor and has a task; every declared type is constructed somewhere or labeled with where it first will be

@@ -256,6 +256,28 @@ def main() -> int:
         else:
             record("pass", f"{mode} blueprint has no stub markers")
 
+    # 6. Open questions — not pass/fail, but a blocked task is the thing a reader
+    #    most needs to see before they start typing.
+    oq = re.search(r"^##+\s*Open Questions\b(.*?)(?=^##\s|\Z)", bp, re.M | re.S)
+    if oq:
+        body = oq.group(1)
+        # Two shapes in the wild: a table of rows, or a heading per question.
+        rows = [ln for ln in body.split("\n") if ln.strip().startswith("|")]
+        rows = [r for r in rows if not re.match(r"^\s*\|[\s|:-]+\|\s*$", r)]
+        if rows:
+            rows = rows[1:]  # drop the header row
+            blocking = [r for r in rows if re.search(r"\|\s*(yes|y|예|blocking)\s*\|", r, re.I)]
+        else:
+            rows = re.findall(r"^#+\s*(OQ-\d+[^\n]*)", body, re.M)
+            blocking = [r for r in rows if re.search(r"blocking|blocks|차단", r, re.I)
+                        and not re.search(r"non-?blocking|미차단", r, re.I)]
+        print(f"\n{CYAN}[6] Open questions{NC}")
+        record(
+            "warn" if blocking else "pass",
+            f"{len(rows)} open question(s), {len(blocking)} blocking",
+            "blocking items must be answered before the tasks they block can be typed" if blocking else "",
+        )
+
     print(f"\n{CYAN}=== Summary ==={NC}")
     counts = {k: sum(1 for r in results if r[0] == k) for k in ("pass", "warn", "fail")}
     print(f"  {GREEN}PASS{NC}: {counts['pass']}  {YELLOW}WARN{NC}: {counts['warn']}  {RED}FAIL{NC}: {counts['fail']}")

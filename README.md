@@ -123,6 +123,17 @@ Exit code `0` = pass. Exit code `1` = failure.
 
 After `/speckit.implement` (or manual typing), sweeps residue from the files the blueprint touches: stale `TODO(blueprint):` markers whose code is already implemented, narration comments that restate the code, and dead commented-out code. Report-only by default; `apply` removes what the report classifies as safe. Genuinely unfinished markers are never deleted — they are surfaced as the remaining work list.
 
+## Choosing a mode
+
+The modes are not interchangeable, and a team evaluation of this extension found the difference is mostly in review cost rather than output quality.
+
+`guide` is the one that pays for itself. The blueprint carries contracts, rationale and pitfalls, so the review is about the design; the code review still happens where it always did, in the PR. `doc-only` and `scaffold` put the finished implementation in the document, which means the same code gets reviewed twice — once in the blueprint and again in the PR — and typing it through is transcription rather than design. Reach for those when you want a complete implementation to read before `/speckit.implement` runs, and for `guide` when you want the developer to design the bodies.
+
+Two things worth deciding up front on a team:
+
+- **Feature size.** A ~20-task feature produces roughly 1,600–1,900 lines. A 57-task feature produced 5,517. Past about 30 tasks the document stops being something anyone reads end to end — split the feature instead.
+- **Lifetime.** `blueprint.md` describes an intention, and it goes stale the moment implementation diverges. Decide whether it is deleted at merge or kept as a record; an undeleted blueprint from six months ago is a confident, wrong document.
+
 ## Commands
 
 ### `/speckit.blueprint.generate [mode]`
