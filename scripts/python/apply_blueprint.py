@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     LABEL,
     file_kinds,
+    looks_like_path,
     parse_mode,
     repo_root,
     resolve_feature_dir,
@@ -82,7 +83,10 @@ def section_events(section: str):
         if in_fence:
             continue
         m = LABEL.match(line)
-        if m and ("/" in m.group(1) or "." in m.group(1)):
+        # The same shape test every other reader applies. A looser one here wrote blocks
+        # to a file literally named `Svc.transfer()` and still reported the declared path
+        # as edited — the drift the shared parser exists to end.
+        if m and looks_like_path(m.group(1)):
             yield "label", m.group(1)
         if line.startswith("**Before**"):
             yield "directive", "before"
@@ -152,6 +156,14 @@ def inside(tree: str, path: str) -> str:
     return full
 
 
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def write_file(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     open(path, "w", encoding="utf-8").write(text)
@@ -207,6 +219,7 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
     before: str | None = None
     before_at: str | None = None
     applied, unanchored, seen, inferred = 0, 0, 0, 0
+    overwritten: list[str] = []
 
     for kind, payload in section_events(section):
         if kind == "label":
@@ -241,7 +254,25 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
                 pending, applied = None, applied + 1
             elif pending == "content":
                 pending = None
-                if os.path.exists(target) and kinds.get(current) != "new":
+                declared = kinds.get(current)
+                exists = os.path.exists(target)
+                if declared == "new" and exists:
+                    # Overwriting is right: in guide-scaffold mode the skeletons are on
+                    # disk before implementation, and typing the blueprint's version over
+                    # them in the COPY is exactly what the compile gate is for. What was
+                    # missing is that it happened silently — after the work is done, the
+                    # same overwrite discards the implementation and the build then
+                    # describes the blueprint rather than the tree.
+                    overwritten.append(rel(target))
+                if declared not in ("new", None) and not exists:
+                    # A `(modify)` path that is not in the tree is a wrong path in the
+                    # blueprint. Creating it from the fragment made a phantom file that
+                    # no source set compiles, so --build passed and nothing was changed.
+                    raise Defect(
+                        f"{rel(target)}: declared ({declared}) but not in the tree —"
+                        " the path is wrong, or the file is new and mislabelled"
+                    )
+                if exists and declared != "new":
                     # No **Before**, no **Replace entire file** — whether this block is the
                     # file or a piece of it is not written down anywhere, so it is not applied.
                     unanchored += 1
@@ -257,6 +288,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
             note += f"; {inferred} hunk(s) had no path label, resolved to the sole modified file"
         if unanchored:
             note += f"; {unanchored} unanchored block(s) left alone"
+        if overwritten:
+            note += f"; overwrote {len(overwritten)} file(s) already on disk"
         return note, applied
     if unanchored:
         return f"{unanchored} code block(s) with no Before/After or Replace marker", 0
@@ -289,7 +322,12 @@ def copy_tree(root: str) -> str:
         # Directories only. A source file named `dist` or `out` is authored content.
         return [n for n in names if n in drop and os.path.isdir(os.path.join(directory, n))]
 
-    shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=False, ignore=ignore)
+    try:
+        shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=False,
+                        ignore_dangling_symlinks=True, ignore=ignore)
+    except Exception:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
     return dest
 
 

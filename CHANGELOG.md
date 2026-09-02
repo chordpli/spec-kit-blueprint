@@ -54,6 +54,10 @@ explain their choices — and now it checks them.
 - Applier failure messages name the file again instead of a six-level `../` chain, from comparing against an unresolved temporary path
 - `--fresh` reports each violating file once, and spares a file too small to tell a written-complete body from a type the basename classifier mislabelled
 - A blueprint whose declared paths are all placeholders says so, instead of printing nothing at all for the file-existence check
+- A `(modify)` path that is not in the tree is a defect, not a file to create. The applier wrote the fragment to that path instead, producing a phantom file no source set compiles — so `--build` passed while the real file was never touched
+- A block label has to look like a path. `**`Svc.transfer()`**` names a method, and a dot was enough to make the applier write that block to a file called `Svc.transfer()` at the tree root while reporting the declared path as edited
+- Overwriting a declared-new file that is already on disk is now reported. It is the right thing to do while the tree holds scaffolds — guide-scaffold puts them there before implementation, and the compile gate depends on it — and the wrong thing once the tree holds the implementation, because the same overwrite discards the work and the build then describes the blueprint rather than your tree. The command spec claimed those files were left alone, which was never true
+- A dangling symlink no longer aborts the copy, and a copy that fails part-way is cleaned up instead of leaking a temporary tree through an uncaught traceback
 - Version banners agree: the applier printed 1.0.0 inside a 1.2.0 release, and the README's badge alt text still read 1.1.0
 - The scaffold validator's line-joining pass no longer deletes its own input: a table or a paragraph written directly under a `**File**:` line, with no blank line between, was folded into that line and never re-emitted, so the declarations it carried were invisible. Only continuations are folded now
 - A table row whose status cell reads `New` declares a file again, not only one reading `new file`
