@@ -46,7 +46,7 @@ Three modes:
 | `doc-only` (default) | Complete-code `blueprint.md` only — nothing written to disk |
 | `scaffold` | Complete-code `blueprint.md` + new files on disk (structural files complete, core logic as TODO stubs) |
 | `guide` | Design-guidance `blueprint.md` — signatures, Why, implementation notes, pitfalls, references, **no body code**. For learning-first workflows where the developer designs the logic |
-| `guide scaffold` | `guide`, plus the compilable skeletons written to disk — **new files only**, so a feature that is mostly edits to existing files gets few files or none. Prefer this over plain `guide` when you will type the bodies: the skeletons' not-implemented markers carry the work instructions, and in plain `guide` you would be typing those markers out only to delete them |
+| `guide scaffold` | `guide`, plus the skeletons written to disk — **new files only**, so a feature that is mostly edits to existing files gets few files or none. Prefer this over plain `guide` when you will type the bodies: the skeletons' not-implemented markers carry the work instructions, and in plain `guide` you would be typing those markers out only to delete them. Each skeleton compiles against the tree as the blueprint's `(modify)` hunks leave it — so the tree as a whole builds once you have typed those hunks, not the moment the files land; type the hunks first, they are the mechanical part |
 
 ## Why
 

@@ -80,6 +80,15 @@ explain their choices — and now it checks them.
 - One marker form: `TODO(blueprint): T{ID}: {instruction}` with the colon, the same shape as the executable markers' messages; the generate spec had said it two ways
 - The generate spec says who it is for: the generator. A developer typing from the result reads 3a-G, 3b and 3c, as the README says, and none of the closure rules; the two lists differ because the two readers do
 - Cleanup's remaining-work list also reads the unchecked Checklist rows, since a `(modify)` task leaves no marker on disk and a feature half done had an empty list
+- The applier reads the commit the blueprint stamps and asks git whether a file has changed since. A Before that is not in a file that has moved is reported as implemented since, not as a failure — the guide-mode body-change hunk adds only a marker line, so no text heuristic could ever tell the two apart, and the command spec's "a failure means the blueprint is wrong" was sending developers after a bug that was not there. A mixed task, some hunks applied and some already there, is a warning rather than a tick
+- The document validator fails a `(modify)` path that is not in the tree (unless an earlier task creates it) and a declared path that escapes the repository; a wrong path passed sixteen checks green because every check that read the file skipped it quietly
+- The applier removes from its copy any file carrying a blueprint marker that no task declares — a deleted section left its skeleton on disk to fill the hole, and the build passed over it — and warns when a task id has more than one section
+- A skeleton on disk that still carries its marker but is not the blueprint's block is a warning; nothing compared the two, so a method added to the file on disk passed all three tools
+- One control-flow line beside a marker is enough to report a guide block, since a method written complete beside five that kept their markers is one `if`
+- A missing `**Mode**:` line is a warning from all three tools instead of a silent unknown that skipped the guide checks; a guide-mode `**Build**:` that runs tests is a warning, since the skeletons throw by design
+- The applier's per-task note lists the files it wrote, not every file the task declared, and a task that left a block unplaced is a warning rather than a tick
+- The hunk-in-a-new-only-task message says what is wrong — the file should be declared `(modify)` — instead of asking for a label that fixes nothing
+- Neither Python tool writes `__pycache__` into the user's `.specify/` any more
 - The scaffold validator colours its output only on a terminal, like the Python tools
 - `validate-scaffold.sh --markers` lists every marker left in the declared files, so cleanup's enumeration is mechanical and only its judgment is the model's
 - Guide-mode body detection reads a block with no marker as suspect at one control-flow line, not three — a complete `claim()` with a single `if` passed — and reports a new service, handler, controller, scheduler or test whose block carries no marker at all

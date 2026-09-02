@@ -142,6 +142,9 @@ if [[ "$STRICT" == true ]]; then
 else
     echo "Mode: $MODE"
 fi
+if [[ "$MODE" == "unknown" ]] && [[ "$MARKERS" != true ]]; then
+    echo -e "  ${YELLOW}⚠${NC} the header's **Mode**: line is missing or unreadable — validating as a scaffold run"
+fi
 
 # =============================================
 # CHECK 1: blueprint.md existence

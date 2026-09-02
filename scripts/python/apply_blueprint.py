@@ -33,6 +33,8 @@ import shutil
 import subprocess
 import sys
 
+sys.dont_write_bytecode = True  # the copy lives in the user's .specify/, and a __pycache__ there lands in git status
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     file_kinds,
@@ -127,6 +129,11 @@ def replace_once(path: str, before: str, after: str) -> int:
         raise AlreadyApplied(
             f"{rel(path)}: the lines the After adds are in the file and its markers are not — implemented since"
         )
+    if changed_since_stamp(rel(path)):
+        raise AlreadyApplied(
+            f"{rel(path)}: the Before is not in the file, and the file has changed since the commit"
+            f" this blueprint was generated at (HEAD {_stamped_head}) — implemented since"
+        )
     head = before.strip().split("\n")[0][:60]
     raise Defect(f"{rel(path)}: Before block not found verbatim (starts {head!r})")
 
@@ -161,6 +168,27 @@ def write_file(path: str, text: str) -> None:
 
 
 _tree = ""
+_root = ""
+_stamped_head = ""
+
+
+def changed_since_stamp(rel_path: str):
+    """Has `rel_path` changed in the user's tree since the commit the blueprint stamps?
+
+    None when there is no stamp or git cannot answer. The blueprint's `**Sources**`
+    line records `HEAD <sha>`; a Before that is not in a file that has moved since that
+    commit is the implementation having happened, not a blueprint bug.
+    """
+    if not (_stamped_head and _root):
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", _root, "diff", "--quiet", _stamped_head, "--", rel_path],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {0: False, 1: True}.get(proc.returncode)
 # Declared-new files that were already on disk and were removed from the copy before applying.
 _overwritten: list[str] = []
 
@@ -169,7 +197,7 @@ def rel(path: str) -> str:
     return os.path.relpath(path, _tree) if _tree else path
 
 
-def apply_task(tree: str, section: str) -> tuple[str, int]:
+def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
     """Apply one task section to the copied tree. Returns (note, blocks consumed)."""
     # A path declared twice keeps its FIRST kind: `(new)` then `(modify)` is a
     # create-then-edit narrative, and taking the last left the file unwritten.
@@ -178,9 +206,9 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
         kinds.setdefault(_p, _k)
     paths = list(kinds)
     if not paths:
-        return "no file declared", 0
+        return "no file declared", 0, set()
     if all(k == "delete" for k in kinds.values()):
-        return "delete task", 0
+        return "delete task", 0, set()
     # A (modify) path has to be in the tree before anything else is decided. Checked at
     # the write site, a task whose only block had no marker was reported "unanchored" and
     # never reached the check — a wrong path with an unlabelled block passed all three
@@ -204,11 +232,15 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
         mods = [p for p, k in kinds.items() if k == "modify"]
         if len(mods) == 1:
             return mods[0]
+        if not mods:
+            raise Defect(
+                "a Before/After hunk edits an existing file, and this task declares no (modify)"
+                " file — if the file it edits already exists, declare it (modify), not (new)"
+            )
         raise Defect(
             "a Before/After hunk follows a **`"
             + (current or "?")
-            + "`** block, and the task declares "
-            + (f"{len(mods)} modified files" if mods else "no modified file")
+            + f"`** block, and the task declares {len(mods)} modified files"
             + " — label the hunk with its path"
         )
 
@@ -224,6 +256,7 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
     # one already present and report "the After content is already in the file" for
     # the whole task — true of that hunk, not of the two that no longer matched at all.
     hunks_already, hunks_missing, misnumbered = 0, [], []
+    written: list[str] = []
     hunk_defects: list[Defect] = []
 
     for kind, payload in section_events(section):
@@ -269,6 +302,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
                     hunk_defects.append(exc)
                 else:
                     applied += 1
+                    if rel(target) not in written:
+                        written.append(rel(target))
                     # The number the Before cites against the line the text was found on,
                     # in the copy as the earlier tasks left it. The document validator
                     # cannot check a file an earlier task changes; this is the one place
@@ -279,6 +314,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
             elif pending == "replace":
                 write_file(target, payload)
                 pending, applied = None, applied + 1
+                if rel(target) not in written:
+                    written.append(rel(target))
             elif pending == "content":
                 pending = None
                 declared = kinds.get(current)
@@ -300,6 +337,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
                     continue
                 write_file(target, payload)
                 applied += 1
+                if rel(target) not in written:
+                    written.append(rel(target))
 
     if before is not None:
         raise Defect(f"{before_at}: a **Before** block with no **After** after it")
@@ -314,21 +353,28 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
             summary += f", {len(hunk_defects)} Before not found — implemented since, differently"
         raise AlreadyApplied(summary + "".join(f"\n  {m}" for m in hunks_missing[:3]))
     if applied:
-        note = f"{applied} edit(s) -> {', '.join(sorted(set(paths)))}"
+        # Only the files this task actually wrote. Listing every declared path said a
+        # file was edited when the block meant for it had been left alone.
+        note = f"{applied} edit(s) -> {', '.join(written)}"
         if inferred:
             note += f"; {inferred} hunk(s) had no path label, resolved to the sole modified file"
         if unanchored:
             note += f"; {unanchored} unanchored block(s) left alone"
         if hunks_already:
-            note += f"; {hunks_already} hunk(s) were already in the file"
+            note += f"; {hunks_already} hunk(s) were already in the file or implemented since"
         if hunk_defects:
             note += f"; {len(hunk_defects)} hunk(s) matched nothing"
         if misnumbered:
             note += "".join(f"\n  line number: {m}" for m in misnumbered[:4])
-        return note, applied
+        flags = set()
+        if unanchored:
+            flags.add("unanchored")
+        if hunks_already:
+            flags.add("moved")
+        return note, applied, flags
     if unanchored:
-        return f"{unanchored} code block(s) with no Before/After or Replace marker", 0
-    return "no code block", 0
+        return f"{unanchored} code block(s) with no Before/After or Replace marker", 0, {"unanchored"}
+    return "no code block", 0, set()
 
 
 # --- Copying and building ---------------------------------------------------------
@@ -417,7 +463,7 @@ def run_build(tree: str, cmd: str) -> int:
 
 
 def main() -> int:
-    global _tree
+    global _tree, _root, _stamped_head
     argv = sys.argv[1:]
     do_build, keep = "--build" in argv, "--keep" in argv
     strict_anchors = "--require-anchors" in argv
@@ -436,10 +482,23 @@ def main() -> int:
         return 1
     bp = open(bp_path, encoding="utf-8", errors="replace").read()
     tasks = split_tasks(bp)
+    src_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**sources**")), "")
+    sm = re.search(r"\bHEAD\s+([0-9a-f]{6,40})", src_line)
+    _stamped_head = sm.group(1) if sm else ""
+    _root = root
 
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
-    print(f"Mode: {parse_mode(bp)} | {len(tasks)} task sections")
+    mode = parse_mode(bp)
+    print(f"Mode: {mode} | {len(tasks)} task sections")
+    if mode == "unknown":
+        print(f"  {YELLOW}Mode is unknown — the header's **Mode**: line is missing or unreadable, so"
+              f" mode-specific behaviour is off.{NC}")
+    ids = [tid for tid, _ in tasks]
+    dupes = sorted({t for t in ids if ids.count(t) > 1})
+    if dupes:
+        print(f"  {YELLOW}{len(dupes)} task id(s) have more than one section — each section is applied:"
+              f" {', '.join(dupes)}{NC}")
 
     # realpath: on macOS mkdtemp returns /var/... and inside() resolves to /private/var/...,
     # so an unresolved _tree made every Defect message a six-level ../ chain.
@@ -465,6 +524,38 @@ def main() -> int:
     if _overwritten:
         print(f"  {YELLOW}{len(_overwritten)} declared-new file(s) were already on disk and were removed from"
               f" the copy first{NC} — the build tests what the blueprint supplies, not what the tree holds")
+    # A file on disk that carries a blueprint marker but that no task declares is residue
+    # of a task the document no longer has — a deleted section, a renamed path. Left in
+    # the copy it fills the hole the missing task left, and the build passes over it.
+    declared_all = {p for _t, sec in tasks for p, _k in file_kinds(sec)}
+    orphans = []
+    # The executable marker forms and the scaffold comment — not a bare `T014:`, which
+    # the extension's own command specs use in their examples under .specify/.
+    marker = re.compile(
+        r"TODO\(blueprint\)"
+        r"|(?:NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)\s*\(\s*\"?T\d{3,}:"
+    )
+    for dirpath, dirnames, filenames in os.walk(tree):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_ANYWHERE | SKIP_AT_ROOT and not d.startswith(".")]
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            relp = os.path.relpath(full, tree)
+            if relp in declared_all or relp.startswith("specs" + os.sep):
+                continue
+            try:
+                if os.path.getsize(full) > 512_000:
+                    continue
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    if marker.search(f.read()):
+                        orphans.append(relp)
+            except OSError:
+                continue
+    for relp in orphans:
+        os.remove(os.path.join(tree, relp))
+    if orphans:
+        print(f"  {YELLOW}{len(orphans)} file(s) on disk carry blueprint markers but no task declares them;"
+              f" removed from the copy so they cannot stand in for a missing task:{NC} "
+              + ", ".join(orphans[:6]))
     print(f"Tree: {tree}\n")
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
@@ -472,7 +563,7 @@ def main() -> int:
     try:
         for tid, section in tasks:
             try:
-                note, count = apply_task(tree, section)
+                note, count, flags = apply_task(tree, section)
             except AlreadyApplied as exc:
                 already.append(tid)
                 record("warn", f"{tid}  already applied", str(exc))
@@ -481,7 +572,19 @@ def main() -> int:
                 failed.append(tid)
                 record("fail", f"{tid}  FAILED", str(exc))
                 continue
-            if count:
+            if count and "moved" in flags:
+                # Some hunks applied and some were already there: the tree is part-way
+                # through this task, and a tick would say the blueprint was tested on it.
+                applied_tasks += 1
+                already.append(tid)
+                record("warn", f"{tid}  applied over a tree that has moved on", note)
+            elif count and "unanchored" in flags:
+                # Applied, but a block was left unplaced: a tick here is what a reader
+                # running without --build sees, and it is not the whole story.
+                applied_tasks += 1
+                unanchored_tasks.append(tid)
+                record("warn", f"{tid}  applied, with a block left unplaced", note)
+            elif count:
                 applied_tasks += 1
                 record("pass", f"{tid}  applied", note)
             elif "no file" in note or "delete" in note or note == "no code block":

@@ -17,6 +17,8 @@ import re
 import subprocess
 import sys
 
+sys.dont_write_bytecode = True
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     code_blocks,
@@ -130,6 +132,12 @@ def main() -> int:
             sections[_tid] = _sec
     mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(bp.splitlines())} lines | {len(sections)} task sections\n")
+    if mode == "unknown":
+        record(
+            "warn",
+            "the header's **Mode**: line is missing or unreadable",
+            "the guide-mode checks and the placeholder rules depend on it, and a run with no mode skips them without saying so",
+        )
 
     # 1. Coverage — every task id in tasks.md reaches the blueprint
     print(f"{CYAN}[1] Task coverage{NC}")
@@ -172,6 +180,43 @@ def main() -> int:
         record("fail", f"{len(no_why)} task(s) without a Why", ", ".join(no_why[:12]))
     else:
         record("pass", f"all {len(sections)} task sections carry a Why")
+
+    if mode.startswith("guide"):
+        build_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**build**")), "")
+        if re.search(r"\btests?\b|pytest|unittest|gradlew test|mvn test|npm test", build_line, re.I):
+            record(
+                "warn",
+                "the **Build** command looks like it runs tests, in a guide-mode blueprint",
+                build_line.strip()[:90] + "\nguide skeletons throw by design; stamp a compile or syntax check, or the applier's build fails on the mode itself",
+            )
+
+    # 3-pre. The files a task declares exist where it says, and where it says is in the tree.
+    #        A (modify) path that is not on disk passed sixteen checks green, because every
+    #        check that reads the file skipped it quietly; the applier was the first to say so.
+    missing_modify, escapes = [], []
+    created_earlier: set[str] = set()
+    for tid, sec in sections.items():
+        for relp, kind in file_kinds(sec):
+            norm = os.path.normpath(relp)
+            if os.path.isabs(relp) or norm.startswith("..") or norm.split(os.sep)[0] == "..":
+                escapes.append(f"{tid}: {relp}")
+                continue
+            # A file an earlier task creates is (modify) to every task after it, and is not
+            # on disk until the first is typed — the "one new file, several tasks" form.
+            if kind == "modify" and relp not in created_earlier and not os.path.isfile(os.path.join(root, relp)):
+                missing_modify.append(f"{tid}: {relp}")
+            if kind == "new":
+                created_earlier.add(relp)
+    if escapes:
+        record("fail", "a declared path resolves outside the repository", "\n".join(escapes[:6]))
+    if missing_modify:
+        record(
+            "fail",
+            "a task declares a (modify) file that is not in the tree",
+            "\n".join(missing_modify[:6]) + "\nthe path is wrong, or the file is new and mislabelled",
+        )
+    else:
+        record("pass", "every declared (modify) file is in the tree")
 
     # 3. Before blocks quote something that is actually there
     print(f"\n{CYAN}[3] Working-tree claims{NC}")
@@ -388,6 +433,40 @@ def main() -> int:
     else:
         record("pass", "every modify task anchors its code")
 
+    # 3-post. A skeleton on disk that still carries its marker is, by the mode's promise,
+    #         the blueprint's block verbatim. Nothing checked that: a method added to the
+    #         file on disk, or a skeleton written differently from the block, passed all
+    #         three tools, since the applier tests the block and the scaffold validator
+    #         only counts markers.
+    drifted = []
+    for tid, sec in sections.items():
+        blocks = code_blocks(strip_quoted(sec), content_only=True)
+        for relp, kind in file_kinds(sec):
+            if kind != "new":
+                continue
+            path = os.path.join(root, relp)
+            if not os.path.isfile(path):
+                continue
+            block = next((c for _i, c in blocks if len(blocks) == 1), None)
+            if block is None:
+                # multi-file task: the block under this path's label
+                lab = re.search(r"^\*\*`" + re.escape(relp) + r"`\*\*[^\n]*\n+```[^\n]*\n(.*?)```", sec, re.S | re.M)
+                block = lab.group(1) if lab else None
+            if block is None:
+                continue
+            try:
+                disk = open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if re.search(r"\bT\d{3,}:", disk) and disk.strip() != block.strip():
+                drifted.append(f"{tid}: {relp} still carries its marker but is not the blueprint's block")
+    if drifted:
+        record(
+            "warn",
+            "a skeleton on disk differs from the block the blueprint declares for it",
+            "\n".join(drifted[:6]) + "\nedited since scaffolding, or scaffolded from a different version — the applier tests the block, not the file",
+        )
+
     # 4. Multi-file tasks map each block to a path
     print(f"\n{CYAN}[4] Multi-file task labels{NC}")
     unlabeled = []
@@ -512,9 +591,10 @@ def main() -> int:
                 hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln)]
                 if MARKER.search(blk):
                     # A block that still carries its marker is a skeleton; a branch beside
-                    # the marker is a hint the author started writing the body.
-                    if len(hits) >= 2:
-                        smuggled.append(f"{tid}: {len(hits)} control-flow lines beside a not-implemented marker")
+                    # the marker is the author starting a body. One is enough — a method
+                    # written complete beside five that kept their markers is one `if`.
+                    if hits:
+                        smuggled.append(f"{tid}: {len(hits)} control-flow line(s) beside a not-implemented marker — {hits[0][:50]!r}")
                 elif hits:
                     smuggled.append(f"{tid}: {len(hits)} control-flow line(s) in a block with no marker — {hits[0][:50]!r}")
         if unmarked:
