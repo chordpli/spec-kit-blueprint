@@ -75,6 +75,10 @@ explain their choices — and now it checks them.
 - An abbreviated Before (`// ... rest of file`) is a document failure by name; the placeholder check strips Before/After first, rightly, so the abbreviation reached the applier as an anonymous "not found"
 - A Before whose text sits at a different line than the number it cites is a warning — in range is not the same as right, and the reader follows the number
 - The scaffold validator colours its output only on a terminal, like the Python tools
+- `validate-scaffold.sh --markers` lists every marker left in the declared files, so cleanup's enumeration is mechanical and only its judgment is the model's
+- Guide-mode body detection reads a block with no marker as suspect at one control-flow line, not three — a complete `claim()` with a single `if` passed — and reports a new service, handler, controller, scheduler or test whose block carries no marker at all
+- An authored comment that narrates the blueprint's history ("moved verbatim", "pre-existing") is a warning: cleanup never touches a doc comment, so a sentence written for this document's reader would stay in the code for ever
+- The generate command opens with a reading guide by mode and lists the shapes the validators read, so a first blueprint passes on format without reading the validators' source; its Rules section no longer restates six rules the Steps already state
 - The command specs' Step 1 says what to do when `check-prerequisites.sh` cannot find the feature (newer spec-kit reads `.specify/feature.json`), the validate spec lists the ten sections the script actually prints, and the README's guide-mode size estimate matches what the closure rules produce
 - Version banners agree: the applier printed 1.0.0 inside a 1.2.0 release, and the README's badge alt text still read 1.1.0
 - The scaffold validator's line-joining pass no longer deletes its own input: a table or a paragraph written directly under a `**File**:` line, with no blank line between, was folded into that line and never re-emitted, so the declarations it carried were invisible. Only continuations are folded now

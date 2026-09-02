@@ -12,6 +12,9 @@
 #   feature-dir: specs/{feature}/ path (default: auto-detect from current branch)
 #   --strict:    validate files on disk even when blueprint.md records a doc-only/guide
 #                mode — for scaffolding done after the blueprint was generated
+#   --markers:   list every blueprint marker and not-implemented call left in the files the
+#                blueprint declares, as path:line: text, and exit — the mechanical half of
+#                /speckit.blueprint.cleanup, so two runs of it start from the same list
 #   --fresh:     the scaffold was just written and nothing is implemented yet, so a
 #                file with no not-implemented marker is the mode being broken, not
 #                work in progress. Without it the script cannot tell the two apart
@@ -51,6 +54,10 @@ NOT_IMPL_RE='NotImplemented\|not_implemented\|NotImplementedError\|UnsupportedOp
 # Kept in step with DOTLESS_FILES in scripts/python/_blueprint_parse.py.
 DOTLESS_FILES="Dockerfile Makefile Procfile Jenkinsfile Gemfile Rakefile Brewfile Vagrantfile CODEOWNERS LICENSE NOTICE"
 
+# Bracketed parens, not escaped: awk -v strips a backslash, and `fatalError\(` reached the
+# regex as `fatalError(` — an unbalanced group that aborted the scan.
+MARKER_ERE='TODO|NotImplemented|not_implemented|UnsupportedOperationException|NotImplementedException|fatalError[(]|todo![(]|unimplemented![(]|panic[(].TODO|panic[(].not implemented'
+
 count_matches() {
     local n
     n=$(grep "$@" 2>/dev/null) || n=0
@@ -62,14 +69,22 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 STRICT=false
 FRESH=false
+MARKERS=false
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --strict) STRICT=true ;;
         --fresh)  FRESH=true ;;
+        --markers) MARKERS=true ;;
         *)        ARGS+=("$arg") ;;
     esac
 done
+
+# --markers is a listing, so stdout carries only the list; the banner and the check
+# headers go nowhere, and the count goes to stderr.
+if [[ "$MARKERS" == true ]]; then
+    exec 3>&1 1>/dev/null
+fi
 
 if [[ -n "${ARGS[0]:-}" ]]; then
     FEATURE_DIR="${ARGS[0]}"
@@ -242,6 +257,30 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
     NEW_FILES=("${DEDUPED[@]}")
 fi
 
+if [[ "$MARKERS" == true ]]; then
+    # Every declared path, not only the new ones: a marker inserted into an existing
+    # file by a (modify) task is residue too. Comment-syntax markers and executable
+    # not-implemented calls both count; the judgment about each is cleanup's.
+    DECLARED=()
+    while IFS= read -r line; do
+        [[ "$line" =~ \*\*File\*\*: ]] || continue
+        rest="${line#*\*\*File\*\*:}"
+        while [[ "$rest" =~ ^[^\`]*\`([^\`]+)\`(.*)$ ]]; do
+            DECLARED+=("${BASH_REMATCH[1]}"); rest="${BASH_REMATCH[2]}"
+        done
+    done <<< "$JOINED"
+    found=0
+    for f in "${DECLARED[@]}"; do
+        [[ -f "$REPO_ROOT/$f" ]] || continue
+        while IFS= read -r hit; do
+            [[ -n "$hit" ]] || continue
+            echo "$f:$hit" >&3; found=$((found + 1))
+        done < <(grep -nE "TODO\(blueprint\)|$MARKER_ERE" "$REPO_ROOT/$f" 2>/dev/null | sed 's/^\([0-9]*\):[[:space:]]*/\1: /')
+    done
+    echo "  ($found marker line(s) in ${#DECLARED[@]} declared file(s))" >&2
+    exit 0
+fi
+
 if [[ ${#NEW_FILES[@]} -eq 0 ]]; then
     warn "No NEW file paths detected in blueprint (check blueprint format)"
 elif [[ "$SCAFFOLD_EXPECTED" == false ]]; then
@@ -305,9 +344,6 @@ fi
 # the skeletons, whatever they are called. The basename guess below (`*service*`,
 # `*test*`) was the only test before, and a controller or a scheduler written complete
 # at scaffold time was never looked at because its name matched nothing.
-# Bracketed parens, not escaped: awk -v strips a backslash, and `fatalError\(` reached the
-# regex as `fatalError(` — an unbalanced group that aborted the scan.
-MARKER_ERE='TODO|NotImplemented|not_implemented|UnsupportedOperationException|NotImplementedException|fatalError[(]|todo![(]|unimplemented![(]|panic[(].TODO|panic[(].not implemented'
 BLUEPRINT_MARKER_FILES=()
 if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
     while IFS= read -r p; do

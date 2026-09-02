@@ -173,6 +173,8 @@ Two things worth deciding up front on a team:
 
 **Never removed**: honest unfinished markers, constraint/why comments, doc comments, license headers, pragmas.
 
+The scan starts from `validate-scaffold.sh --markers`, which lists every marker left in the declared files; the classification is the command's judgment, the enumeration is not.
+
 ### `/speckit.blueprint.review [ask|export|upstream] [scope]`
 
 | Argument | Description |

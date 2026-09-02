@@ -43,6 +43,16 @@ Implementation always drifts from the plan, so extend the scope by one rule: als
 
 ### Step 2: Scan
 
+Start from the mechanical list, so two runs of this command find the same markers:
+
+```bash
+bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --markers
+```
+
+It prints every blueprint marker and not-implemented call left in the files the blueprint declares, as
+`path:line: text`. The judgment below — which of them is honest debt and which is residue — is yours;
+the enumeration is not.
+
 For each in-scope file that exists on disk, collect every finding in these categories:
 
 | Category | Pattern | Examples |

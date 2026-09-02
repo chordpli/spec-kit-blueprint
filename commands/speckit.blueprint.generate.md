@@ -4,6 +4,17 @@ description: "Generate a pre-implementation blueprint from spec artifacts with o
 
 # Blueprint Generator
 
+## How to read this document
+
+Steps 1, 2, 4b and 5 apply in every mode. The content rules are split by mode; read yours and skip the other:
+
+| Mode | Read | Skip |
+|------|------|------|
+| `doc-only`, `scaffold` | Step 3, 3a, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`scaffold` only) | 3a-G |
+| `guide`, `guide scaffold` | Step 3, the Before/After form in 3a (for files that change), 3a-G, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`guide scaffold` only) | 3a's completeness rules for full code |
+
+The validators in Step 4b check the format this document asks for; the list there says what they expect, so a first blueprint can pass them without reading their source.
+
 ## Why This Exists
 
 In AI-driven development, `/speckit.implement` can execute tasks directly — but the developer loses the chance to understand what's being built. This extension generates `blueprint.md` as a **pre-implementation blueprint** that sits between `/speckit.tasks` and `/speckit.implement`.
@@ -342,6 +353,17 @@ task, Before line references and edge anchors, multi-file labels, placeholder co
 reproduced requirements, and open-question counts. The applier covers what the compiler knows: that
 named types resolve, that calls match declarations, and that the tree still builds.
 
+**The shapes the validators read.** Write these the way they are listed and the first run passes on
+format; what remains is content.
+
+- `**File**: `path` (new)` — one path per backticked span, its kind in parentheses right after it; a shared kind at the end of a list (`(all modify)`) covers the run before it
+- `**Before** (lines N-M):` for a hunk, with the file in the label when the task declares more than one — `**Before** (`path`, lines N-M):` — or a `**`path`**:` label on the line above
+- `**`path`**:` above every code block in a task that declares more than one file
+- every id on a `**Requirements**:` line stated somewhere in the document, usually a Requirements Reference section
+- `**Verification**:` before a block of commands, so the block is not read as file content
+- `**Sources**:` and `**Build**:` in the header (Step 3-Sources)
+- in guide modes: every skeleton for a file with behavior carries a marker whose message begins with the task id, and no control flow beside it
+
 What no script can check, and what you must therefore check yourself before finalizing:
 
 - **Secrets**: no API key, password, token, or connection string that looks real — placeholders only.
@@ -367,13 +389,9 @@ Output a summary:
 
 ## Rules
 
-- **ZERO TODO in full-code blueprints**: in `doc-only`/`scaffold` modes, `blueprint.md` must NEVER contain `TODO`, `FIXME`, `// ...`, or any stub/placeholder content in any syntax. Every content block must be complete and working. TODO markers are ONLY allowed in scaffold files written to disk (Step 4), in the `TODO(blueprint): T{ID} ...` form. In `guide` mode, skeleton bodies use the language's canonical not-implemented form with self-contained instructions (Step 3a-G) — everything else about the rule (no ellipsis, no vague placeholders) still holds.
-- **Guide mode never smuggles bodies**: in `guide` mode, no body logic appears anywhere — not in code blocks, not dictated line-by-line in prose. The developer designs the implementation from contracts, notes, and references.
-- **ONE task = ONE ID**: Never merge multiple task IDs into one heading (e.g., `T041–T044` is forbidden). Each task from `tasks.md` must have its own entry — either a full heading with content, or a row in the Pre-completed Tasks table. This preserves 1:1 traceability between `tasks.md` and the blueprint.
+The rules that live in a Step are stated there once and not again here: no placeholders in full-code modes and no body logic in guide modes (3a, 3a-G), one task per id and lean pre-completed tasks (Step 3), a traced Why on every task (3b), verbatim Before blocks (3a). What follows is only what no Step says.
+
 - **Mirror tasks.md structure**: Phases, ordering, `[P]` markers, `[US#]` story labels, and Checkpoint lines come from `tasks.md` verbatim. The blueprint adds content and rationale — it never reorganizes the plan.
-- **Why is mandatory, and traced**: every task has a Why; every Key Decision cites its source artifact; no fabricated rationale (see Step 3b).
-- **No abbreviation in Before blocks**: Before blocks must show actual existing content, not `// ... stub` or `// ... rest of file`. The developer must be able to locate the exact content to replace by searching the Before block.
-- **Already-complete tasks stay lean**: Tasks whose files already satisfy requirements go in the Pre-completed Tasks table per phase, not as full headings with empty content blocks. This keeps the blueprint focused on real work.
 - **Read before generating**: Before generating content that calls or references existing modules/files, read their actual signatures and APIs from disk. Never assume interface shapes — verify against actual implementation to prevent mismatched names, parameters, or contracts.
 - **Final version for multi-modified files**: If a file is modified 3 or more times across different phases, include a final consolidated version of the complete file as an appendix at the end of its last phase.
 - **Dependency completeness**: When a task introduces new dependencies between modules, packages, or external libraries, include all necessary build/dependency configuration changes (build manifests, dependency declarations, module registrations) as explicit content blocks in the relevant task.

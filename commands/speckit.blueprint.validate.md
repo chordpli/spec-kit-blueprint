@@ -49,6 +49,8 @@ task failed to apply, and killed after 15 minutes.
 
 The document validator's line-reference check reads the files as they are on disk. A task that cites a line an earlier task adds — the wiring T006 inserts is what T008 edits — is past the end of the file on disk, and so is every citation once you have started implementing and your files no longer match the skeleton lengths. Both are reported as a warning that names the earlier task, not as a failure; the applier is the check that settles them, because it applies the tasks in order and matches the Before text itself.
 
+`--markers` turns the scaffold validator into a listing: every blueprint marker and not-implemented call left in the files the blueprint declares, as `path:line: text`, and nothing else on stdout. It is the mechanical half of `/speckit.blueprint.cleanup`, so two runs of that command start from the same list.
+
 Two flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when
 the blueprint records a file-less mode — for scaffolding done after generation. `--fresh` says the
 scaffold has only just been written, so a file with no not-implemented marker is the mode being
@@ -77,12 +79,13 @@ Format-level, so they hold for any language. Ten numbered sections, in the order
    - every `**Before**` is followed by its `**After**`; a dangling Before is a failure, not a pair with the next task's After
    - every `**After**` differs from its `**Before**` — an identical pair is not a diff
    - no `**Before**` is abbreviated (`// ... rest of file`); it has to quote the file verbatim or the applier never matches it
+   - no authored comment narrates the blueprint's history ("moved verbatim", "pre-existing", "unchanged from") — that sentence is for this document's reader, and cleanup never touches a doc comment, so it would stay in the code for ever. A warning
    - no `**Before**` quotes a structural line (a closing brace, `/**`, `*/`, `end`, a closing tag) more times than its `**After**` returns it — a warning, since a task that removes a block legitimately drops one
    - every task that declares a `(new)` file gives it a code block
    - every `modify` task anchors its code to a position — a content block with no `**Before**`/`**After**` pair, no path label, and no `**Replace entire file**` marker is a warning, because the applier cannot place it. A block under `**Verification**` is a command, not content, and is not counted
 4. **Multi-file task labels**: a task naming more than one file labels each authored code block with its path
 5. **Placeholder content**: no ellipsis stubs (`// ...`, `# ...`) in any mode; in `doc-only`/`scaffold` modes, additionally no `TODO`/`FIXME`/`HACK`/`XXX` markers in code blocks
-6. **Guide-mode bodies** (guide modes only): a skeleton block that carries three or more control-flow lines beside its marker — comments and docstrings excluded — is reported as body logic the developer was meant to write. A warning: the boundary between a skeleton and an implementation is a judgment, and a body that is one `if` slips past it
+6. **Guide-mode bodies** (guide modes only): a skeleton block with two or more control-flow lines beside its marker, or any control flow in a block with no marker — comments and docstrings excluded — is reported as body logic the developer was meant to write; and a new file whose name says it holds behavior (service, handler, controller, scheduler, test) whose block carries no marker at all is reported too, since the marker is what makes a skeleton a skeleton. Warnings: the boundary between a skeleton and an implementation is a judgment
 7. **Regeneration**: when the committed `blueprint.md` carries the same `**Sources**` hashes, a task whose section changed anyway is a failure — regeneration keeps unchanged tasks verbatim so the diff stays reviewable
 8. **Freshness**: the header's `**Sources**` stamp records each source artifact as `name@hash`; the script re-hashes those files and fails when one has changed since the blueprint was generated. No stamp at all is a warning
 9. **Cited requirements reproduced**: every requirement id cited in a `**Requirements**` line (`FR-`, `NFR-`, `SC-`, `AC-`, `US-`) is also stated somewhere else in the document — a citation alone leaves a reader working from this file unable to look it up

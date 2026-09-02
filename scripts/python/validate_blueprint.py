@@ -423,6 +423,32 @@ def main() -> int:
     else:
         record("pass", "no ellipsis placeholders")
 
+    # A doc comment that narrates the blueprint — "moved verbatim", "pre-existing" — is
+    # written for this document's reader, not the code's, and cleanup never touches doc
+    # comments. A warning: the phrases are a heuristic, the judgment is the author's.
+    HISTORY = re.compile(
+        r"\b(moved verbatim|pre-existing|previously|as before|unchanged from|from the original|"
+        r"was (?:moved|copied|extracted)|the old |formerly|used to)\b", re.I
+    )
+    history = []
+    for tid, sec in sections.items():
+        # After blocks are authored content too — only the Before is a quotation — and the
+        # javadoc that prompted this check sat in one.
+        authored_blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
+        authored_blocks += [after for _b, after in BEFORE_AFTER_RE.findall(sec)]
+        for blk in authored_blocks:
+            for ln in blk.split("\n"):
+                t = ln.strip()
+                if t.startswith(("/**", "*", "///", "#", "//", chr(34) * 3, chr(39) * 3)) and HISTORY.search(t):
+                    history.append(f"{tid}: {t[:70]}")
+                    break
+    if history:
+        record(
+            "warn",
+            "a comment narrates the blueprint's history rather than the code",
+            "\n".join(history[:6]) + "\nsay it in the task's prose; cleanup leaves doc comments alone, so this one stays for ever",
+        )
+
     # A Before is a quotation, and `// ... rest of file` inside one is the abbreviation the
     # generate rules forbid by name. The check above strips Before/After first — rightly,
     # they quote existing code — so the abbreviation reached the applier before anyone
@@ -468,19 +494,35 @@ def main() -> int:
         CONTROL = re.compile(
             r"^\s*(if|for|while|switch|when|elif|else\s+if|do|try|catch|except|match)\b[\s({:]"
         )
-        smuggled = []
+        MARKER = re.compile(r"TODO\(|NotImplementedError|UnsupportedOperationException|fatalError\(|todo!\(|unimplemented!\(|panic\(")
+        # The same basename reading the scaffold validator uses: a file with one of these
+        # in its name holds behavior, and a guide skeleton for it has to carry a marker.
+        BEHAVIORAL = re.compile(r"(service|handler|usecase|use_case|interactor|controller|scheduler|test|spec\.)", re.I)
+        smuggled, unmarked = [], []
         for tid, sec in sections.items():
-            for blk in [c for _i, c in code_blocks(strip_quoted(sec))]:
-                if re.search(r"TODO\(|NotImplementedError|UnsupportedOperationException|fatalError\(|todo!\(|unimplemented!\(", blk):
+            kinds = dict(file_kinds(sec))
+            new_behavioral = [f for f, k in kinds.items() if k == "new" and BEHAVIORAL.search(os.path.basename(f))]
+            blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
+            if new_behavioral and blocks and not any(MARKER.search(b) for b in blocks):
+                # A complete implementation with one `if` in it carried no control flow
+                # worth counting, and passed. The marker is the skeleton's signature; a
+                # behavioral file's block without one is a body, however short.
+                unmarked.append(f"{tid}: {', '.join(new_behavioral)} — no not-implemented marker in its block")
+            for blk in blocks:
+                hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln)]
+                if MARKER.search(blk):
                     # A block that still carries its marker is a skeleton; a branch beside
                     # the marker is a hint the author started writing the body.
-                    hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln)]
                     if len(hits) >= 2:
                         smuggled.append(f"{tid}: {len(hits)} control-flow lines beside a not-implemented marker")
-                    continue
-                hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln)]
-                if len(hits) >= 3:
-                    smuggled.append(f"{tid}: {len(hits)} control-flow lines in a block with no marker — {hits[0][:50]!r}")
+                elif hits:
+                    smuggled.append(f"{tid}: {len(hits)} control-flow line(s) in a block with no marker — {hits[0][:50]!r}")
+        if unmarked:
+            record(
+                "warn",
+                "a guide-mode skeleton for a file with behavior carries no marker",
+                "\n".join(unmarked[:6]) + "\na structural file (types, config, wiring) is complete on purpose; a service or a test is not",
+            )
         if smuggled:
             record(
                 "warn",
