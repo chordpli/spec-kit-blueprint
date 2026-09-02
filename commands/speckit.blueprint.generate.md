@@ -13,6 +13,8 @@ Steps 1, 2, 4b and 5 apply in every mode. The content rules are split by mode; r
 | `doc-only`, `scaffold` | Step 3, 3a, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`scaffold` only) | 3a-G |
 | `guide`, `guide scaffold` | Step 3, the Before/After form in 3a (for files that change), 3a-G, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`guide scaffold` only) | 3a's completeness rules for full code |
 
+This document is for whoever *generates* the blueprint. A developer who will only type from the result needs 3a-G, 3b and 3c to know what they are looking at — the README's short version — and none of the closure rules in 3d, which are the generator's checklist; the two lists differ because the two readers do.
+
 The validators in Step 4b check the format this document asks for; the list there says what they expect, so a first blueprint can pass them without reading their source.
 
 ## Why This Exists
@@ -269,7 +271,7 @@ In `guide` mode, Step 3a's completeness rule applies to **guidance, not code**: 
 
 **Guide mode and files that change.** Step 3a's Before/After form still says *where* an edit goes; in guide mode the After never carries a body. Two cases come up in every feature and both use the ordinary markers, so the applier and the validators read them without special handling:
 
-- **One new file, several tasks.** The task that creates the file is `(new)` and carries the complete skeleton *as of that task*. Each later task that adds to it is `(modify)`: its Before quotes the tail of the skeleton as the previous task left it (the last signature and its marker are enough to be unique), and its After repeats those lines and adds the new signature with its marker. The developer sees the file grow the way the tasks are ordered, and the applier can type it in that order.
+- **One new file, several tasks.** The task that creates the file is `(new)` and carries the complete skeleton *as of that task*. Each later task that adds to it is `(modify)`: its Before quotes the smallest run of the previous skeleton that is unique in the file — usually the previous signature line alone; quoting its marker text too makes the Before long and breaks it the moment that message is edited — and its After repeats that run and adds the new signature with its marker. The developer sees the file grow the way the tasks are ordered, and the applier can type it in that order.
 - **A change inside an existing body.** The body is the developer's work, so the After cannot contain it. Before quotes the lines around the spot; After is the same lines with one marker comment inserted where the change goes — `// TODO(blueprint): T0NN: <what to change and why>` in the file's comment syntax — and the implementation notes say what the change must achieve. Cleanup recognises that marker and sweeps it once the change is made.
 
 A task that only *adds a signature* to an existing file is the first case with an existing file as the base: Before quotes the neighbouring declaration, After adds the new one with its marker.
@@ -289,7 +291,7 @@ Every comment in a generated code block will be *typed into the codebase* by the
 
 - **Keep in code**: constraint comments the code itself cannot express — why a lock ordering exists, why a magic value was chosen, which invariant a guard protects, links to external specs. These survive cleanup because the next reader needs them.
 - **Keep in the blueprint prose (NOT in code)**: narration ("now we save the order"), tutorial commentary, requirement restatements, anything explaining what the adjacent line visibly does. Put teaching text in the **Why** block or around the code block instead.
-- **Scaffold-only markers**: TODO markers written to disk in scaffold mode (Step 4) MUST use the greppable form `TODO(blueprint): T{ID} {requirement}` — one marker per unimplemented step. This lets `/speckit.blueprint.validate` verify scaffolds and `/speckit.blueprint.cleanup` find every leftover marker deterministically after implementation.
+- **Scaffold-only markers**: TODO markers written to disk in scaffold mode (Step 4) MUST use the greppable form `TODO(blueprint): T{ID}: {requirement}` — the task id, a colon, then the instruction, the same shape as the executable markers' messages — one marker per unimplemented step. This lets `/speckit.blueprint.validate` verify scaffolds and `/speckit.blueprint.cleanup` find every leftover marker deterministically after implementation.
 
 ### Step 3d: Closure Rules — the blueprint must stand on its own
 
@@ -320,8 +322,8 @@ Based on the mode determined in User Input. **This step is the ONLY place where 
 
 **`scaffold`**: For each NEW file, write to disk:
 - **Structural files** (type definitions, interfaces/contracts, schemas, enums, configuration, routing/wiring): Write complete content (same as blueprint) — these are needed for other files to work
-- **Core implementation files** (the files containing primary logic): Write the structure with `TODO(blueprint): T{ID} {step-by-step requirement}` comments derived from the spec
-- **Verification/test files**: Write the structure with `TODO(blueprint): T{ID} {test scenario}` comments
+- **Core implementation files** (the files containing primary logic): Write the structure with `TODO(blueprint): T{ID}: {step-by-step requirement}` comments derived from the spec
+- **Verification/test files**: Write the structure with `TODO(blueprint): T{ID}: {test scenario}` comments
 
 **`guide-scaffold`**: For each NEW file, write the guide-mode skeleton from the blueprint to disk verbatim (structural files complete; behavioral files as compilable signature skeletons with self-contained not-implemented bodies).
 
@@ -340,6 +342,8 @@ a read-through passed a blueprint the scripts then failed.
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build
+# scaffold modes only, right after Step 4 has written the files:
+bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --fresh
 ```
 
 The first checks the document; the second applies it to a throwaway copy of the tree and runs the

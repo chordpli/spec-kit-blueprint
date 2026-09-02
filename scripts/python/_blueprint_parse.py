@@ -145,6 +145,11 @@ def section_events(section: str):
         if line.startswith("**Before**"):
             illustrative = False
             yield "directive", "before"
+            # The line the Before claims to start at, when it says. The applier learns
+            # where the text really is when it matches, and can compare.
+            cm = re.search(r"\blines?[^\d\n]{0,4}(\d+)", line)
+            if cm:
+                yield "cite", int(cm.group(1))
         elif line.startswith("**After**"):
             illustrative = False
             yield "directive", "after"

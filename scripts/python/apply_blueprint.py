@@ -84,7 +84,8 @@ class AlreadyApplied(Exception):
     """The edit is already in the file — the tree has moved past this blueprint."""
 
 
-def replace_once(path: str, before: str, after: str) -> None:
+def replace_once(path: str, before: str, after: str) -> int:
+    """Replace the one occurrence of `before` with `after`; return its 1-based line."""
     if not os.path.isfile(path):
         raise Defect(f"{rel(path)}: Before block targets a file that does not exist")
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -104,7 +105,7 @@ def replace_once(path: str, before: str, after: str) -> None:
         if n == 1:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text.replace(b, a, 1))
-            return
+            return text[: text.index(b)].count("\n") + 1
         if n > 1:
             raise Defect(f"{rel(path)}: Before block matches {n} places — the anchor is ambiguous")
     # Before the anchor is called a defect: has this edit already been made? Running the
@@ -217,16 +218,26 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
     pending = "content" if current and kinds[current] == "new" else None
     before: str | None = None
     before_at: str | None = None
+    cite: int | None = None
     applied, unanchored, seen, inferred = 0, 0, 0, 0
+    # A task with several hunks against an implemented file used to stop at the first
+    # one already present and report "the After content is already in the file" for
+    # the whole task — true of that hunk, not of the two that no longer matched at all.
+    hunks_already, hunks_missing, misnumbered = 0, [], []
+    hunk_defects: list[Defect] = []
 
     for kind, payload in section_events(section):
         if kind == "label":
             current, pending = payload, "content"
+        elif kind == "cite":
+            cite = payload
+            continue
         elif kind == "directive":
             if payload == "before":
                 resolved = hunk_target(current)
                 inferred += resolved != current
                 before_at = resolved
+                cite = None
             pending = payload
         else:
             _info, payload = payload
@@ -246,8 +257,25 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
             elif pending == "after":
                 if before is None:
                     raise Defect("an **After** block with no **Before** before it")
-                replace_once(target, before, payload)
-                before, pending, applied = None, None, applied + 1
+                try:
+                    at = replace_once(target, before, payload)
+                except AlreadyApplied as exc:
+                    hunks_already += 1
+                    hunks_missing.append(str(exc))
+                except Defect as exc:
+                    # Held, not raised: whether this is a defect depends on the other
+                    # hunks. Beside one already in the file it is "implemented since,
+                    # differently"; on its own it is the wrong Before it looks like.
+                    hunk_defects.append(exc)
+                else:
+                    applied += 1
+                    # The number the Before cites against the line the text was found on,
+                    # in the copy as the earlier tasks left it. The document validator
+                    # cannot check a file an earlier task changes; this is the one place
+                    # that can, and a reader following the number deserves to know.
+                    if cite is not None and at != cite:
+                        misnumbered.append(f"{rel(target)}: Before says line {cite}, matched at line {at}")
+                before, pending = None, None
             elif pending == "replace":
                 write_file(target, payload)
                 pending, applied = None, applied + 1
@@ -275,12 +303,28 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
 
     if before is not None:
         raise Defect(f"{before_at}: a **Before** block with no **After** after it")
+    if hunk_defects and not hunks_already:
+        raise hunk_defects[0]
+    if hunks_already and not applied:
+        # Nothing of this task's hunks applied fresh: the tree already holds the work,
+        # and a hunk that matched neither Before nor After beside one that did is the
+        # implementation having moved on, not a blueprint bug.
+        summary = f"{hunks_already} hunk(s) already in the file"
+        if hunk_defects:
+            summary += f", {len(hunk_defects)} Before not found — implemented since, differently"
+        raise AlreadyApplied(summary + "".join(f"\n  {m}" for m in hunks_missing[:3]))
     if applied:
         note = f"{applied} edit(s) -> {', '.join(sorted(set(paths)))}"
         if inferred:
             note += f"; {inferred} hunk(s) had no path label, resolved to the sole modified file"
         if unanchored:
             note += f"; {unanchored} unanchored block(s) left alone"
+        if hunks_already:
+            note += f"; {hunks_already} hunk(s) were already in the file"
+        if hunk_defects:
+            note += f"; {len(hunk_defects)} hunk(s) matched nothing"
+        if misnumbered:
+            note += "".join(f"\n  line number: {m}" for m in misnumbered[:4])
         return note, applied
     if unanchored:
         return f"{unanchored} code block(s) with no Before/After or Replace marker", 0

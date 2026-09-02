@@ -6,7 +6,7 @@ description: "Sweep leftover scaffold markers and stale comments after implement
 
 ## Why This Exists
 
-Scaffold mode plants `TODO(blueprint): T{ID} ...` markers as typing guides, and implementation work often leaves other residue behind: stale TODO/FIXME notes for work that is actually done, narration comments that restate the code, and commented-out experiments. Left in place, they rot — the next reader can't tell a real debt marker from a forgotten one.
+Scaffold mode plants `TODO(blueprint): T{ID}: ...` markers as typing guides, and implementation work often leaves other residue behind: stale TODO/FIXME notes for work that is actually done, narration comments that restate the code, and commented-out experiments. Left in place, they rot — the next reader can't tell a real debt marker from a forgotten one.
 
 This command runs **after implementation** (`/speckit.implement` or manual typing) and sweeps that residue safely: it distinguishes markers that are *stale* (the code beneath them is implemented) from markers that are *honest* (the work is genuinely unfinished) — and it never deletes the honest ones.
 
@@ -122,7 +122,7 @@ In `report` mode, stop here and suggest: "Run `/speckit.blueprint.cleanup apply`
 ### Step 6: Close the Loop
 
 - If every blueprint marker for a task is gone (comment and executable alike) and its Verification criterion is met, ensure that task is checked `[X]` in the `blueprint.md` Checklist. Update it if not. If the checklist does not use `- [ ] T{ID}` rows, or `blueprint.md` is not writable, skip the update and say so in the report rather than reformatting someone else's document.
-- Report UNFINISHED findings as the remaining work list — these are the honest debt the developer still owes, each with its task ID where known.
+- Report the remaining work list from two sources: UNFINISHED findings — the honest debt the developer still owes, each with its task ID where known — and every `- [ ] T{ID}` row still unchecked in the `blueprint.md` Checklist. The second matters because a `(modify)` task leaves no marker on disk, so a feature half done can have an empty marker list and six tasks to go.
 
 ## Rules
 

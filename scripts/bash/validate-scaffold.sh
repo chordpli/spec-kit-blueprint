@@ -261,21 +261,42 @@ if [[ "$MARKERS" == true ]]; then
     # Every declared path, not only the new ones: a marker inserted into an existing
     # file by a (modify) task is residue too. Comment-syntax markers and executable
     # not-implemented calls both count; the judgment about each is cleanup's.
+    # Deduplicated: a file that several tasks build up is declared once per task, and
+    # the first version of this listing printed each of its markers that many times —
+    # "19 marker line(s) in 13 declared file(s)" for four markers in four files.
     DECLARED=()
     while IFS= read -r line; do
         [[ "$line" =~ \*\*File\*\*: ]] || continue
         rest="${line#*\*\*File\*\*:}"
         while [[ "$rest" =~ ^[^\`]*\`([^\`]+)\`(.*)$ ]]; do
-            DECLARED+=("${BASH_REMATCH[1]}"); rest="${BASH_REMATCH[2]}"
+            cand="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+            dup=false
+            for q in "${DECLARED[@]}"; do [[ "$q" == "$cand" ]] && dup=true && break; done
+            [[ "$dup" == true ]] || DECLARED+=("$cand")
         done
     done <<< "$JOINED"
     found=0
     for f in "${DECLARED[@]}"; do
         [[ -f "$REPO_ROOT/$f" ]] || continue
+        # A marker whose message wraps to the next line — Python's `raise
+        # NotImplementedError(` with the "T001: …" string below it — is printed with
+        # that line joined on, or the listing shows the call and never the task id.
         while IFS= read -r hit; do
             [[ -n "$hit" ]] || continue
             echo "$f:$hit" >&3; found=$((found + 1))
-        done < <(grep -nE "TODO\(blueprint\)|$MARKER_ERE" "$REPO_ROOT/$f" 2>/dev/null | sed 's/^\([0-9]*\):[[:space:]]*/\1: /')
+        done < <(awk -v re="TODO[(]blueprint[)]|$MARKER_ERE" '
+            { lines[NR] = $0 }
+            END {
+                for (i = 1; i <= NR; i++) {
+                    if (lines[i] !~ re) continue
+                    out = lines[i]; sub(/^[ \t]+/, "", out)
+                    if (out !~ /T[0-9]+:/ && i < NR) {
+                        nxt = lines[i + 1]; sub(/^[ \t]+/, "", nxt)
+                        if (nxt ~ /T[0-9]+:/) out = out " " nxt
+                    }
+                    print i ": " out
+                }
+            }' "$REPO_ROOT/$f")
     done
     echo "  ($found marker line(s) in ${#DECLARED[@]} declared file(s))" >&2
     exit 0
@@ -425,7 +446,7 @@ check_todo_in_file() {
         else
             # Too small to tell a written-complete body from a type or a config file the
             # basename classifier happened to catch.
-            warn "$rel_path — no markers, but only ${m_count} method(s)/${l_count} lines; check it is not a stub the classifier mislabelled [$label]"
+            warn "$rel_path — no markers, but only ${m_count} method(s)/${l_count} lines, too small to call. If implementation has started, run without --fresh; if this is a type or config file whose name matched by accident, ignore it [$label]"
         fi
     else
         warn "$rel_path — NO TODO markers found (fully implemented or boilerplate?) [$label]"
