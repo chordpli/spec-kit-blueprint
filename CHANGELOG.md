@@ -22,6 +22,7 @@ explain their choices — and now it checks them.
 - Rule and check for undetermined specs: what the artifacts do not decide, the blueprint does not decide either — it builds to the seam, marks the task blocked, and collects the gaps in an Open Questions section, which the document validator reports with its blocking count
 - Two rules that lived only in the prompt are now checked: a regeneration that rewrites tasks whose sources never moved fails against the committed blueprint, and a guide-mode block carrying control flow beside its marker is flagged as body logic the developer was supposed to write
 - `_blueprint_parse.py` — one reading of a blueprint shared by both Python tools, after a path fix landed in one and not the other and quietly disabled a check in the second
+- `validate-scaffold.sh --fresh` — states that the scaffold has only just been written, which is the one thing the script cannot see for itself. Its over-implementation check reads the sibling files to guess whether implementation has started, and when every file was written complete there are no marked siblings left to read
 
 ### Fixed
 
@@ -34,6 +35,9 @@ explain their choices — and now it checks them.
 - The Open Questions section ends at a heading of its own depth instead of swallowing the rest of the document
 - Kind and label parsing in the validator go through the shared module, so `(modified)`, `(all modify)`, labels without a trailing colon, and ten-character extensions all agree with the applier
 - The scaffold validator recognises `(all new)` and repository-root files, and reads paths without word-splitting or glob-expanding them
+- The scaffold validator's line-joining pass no longer deletes its own input: a table or a paragraph written directly under a `**File**:` line, with no blank line between, was folded into that line and never re-emitted, so the declarations it carried were invisible. Only continuations are folded now
+- A table row whose status cell reads `New` declares a file again, not only one reading `new file`
+- A file-less mode reports which checks were skipped instead of "All checks passed"
 - The guide-mode body check ignores comments and doc comments, which describe control flow constantly
 - An empty `**Mode**:` value no longer crashes both Python tools with an IndexError
 - `--require-anchors` makes the applier fail when a task's code is not anchored, or when nothing anchored at all — off by default, because a guide blueprint of pure instructions legitimately applies nothing, and on in CI, where "verified nothing" and "verified everything" must not share an exit code
