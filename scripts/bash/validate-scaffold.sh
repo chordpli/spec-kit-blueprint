@@ -12,6 +12,10 @@
 #   feature-dir: specs/{feature}/ path (default: auto-detect from current branch)
 #   --strict:    validate files on disk even when blueprint.md records a doc-only/guide
 #                mode — for scaffolding done after the blueprint was generated
+#   --fresh:     the scaffold was just written and nothing is implemented yet, so a
+#                file with no not-implemented marker is the mode being broken, not
+#                work in progress. Without it the script cannot tell the two apart
+#                and only warns.
 
 set -eo pipefail
 
@@ -48,10 +52,12 @@ count_matches() {
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 STRICT=false
+FRESH=false
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --strict) STRICT=true ;;
+        --fresh)  FRESH=true ;;
         *)        ARGS+=("$arg") ;;
     esac
 done
@@ -132,9 +138,14 @@ NEW_FILES=()
 # A **File**: declaration may wrap onto following lines; join it back into one
 # logical line before parsing, or every path after the first is invisible here.
 JOINED=$(awk '
-    /^\*\*File\*\*:/ { buf = $0; joining = 1; next }
-    joining && NF > 0    { buf = buf " " $0; next }
-    joining && NF == 0   { print buf; joining = 0; print; next }
+    /^\*\*File\*\*:/ { if (joining) print buf; buf = $0; joining = 1; next }
+    # Only a genuine continuation is folded back in. A wrapped **File**: line resumes
+    # with another `path`, a comma, or a (kind) — the same shapes the Python parser
+    # accepts. Anything else is a line of its own and must survive, or a table or a
+    # paragraph written directly under a File line is deleted from the input and the
+    # declarations it carries are never seen.
+    joining && /^[[:space:]]*[`,(]/ { buf = buf " " $0; next }
+    joining              { print buf; joining = 0; print; next }
     { print }
     END { if (joining) print buf }
 ' "$GUIDE")
@@ -167,8 +178,14 @@ while IFS= read -r line; do
     # Only a task's **File**: declaration says what gets created. Scraping table rows
     # also swept the reference sections the generator is required to write (existing-type
     # API tables, requirement tables), reporting their paths as files that never appeared.
-    elif [[ "$line" =~ \|[[:space:]]*\`?([a-zA-Z][^\`\|]+\.[a-zA-Z]+)\`?[[:space:]]*\|.*[Nn]ew[[:space:]]*file ]]; then
-        NEW_FILES+=("${BASH_REMATCH[1]}")
+    elif [[ "$line" =~ \|[[:space:]]*\`?([a-zA-Z][^\`\|]+\.[a-zA-Z]+)\`?[[:space:]]*\| ]]; then
+        row_path="${BASH_REMATCH[1]}"
+        # A file row declares a creation only when a cell says so. "New" or "New file"
+        # standing alone as a status cell counts; the word "new" inside a sentence does
+        # not, or every pre-completed row that mentions a new field is reported missing.
+        if [[ "$line" =~ \|[[:space:]]*[Nn]ew([[:space:]]+file)?[[:space:]]*(\||$) ]]; then
+            NEW_FILES+=("$row_path")
+        fi
     fi
 done <<< "$JOINED"
 
@@ -222,7 +239,9 @@ if [[ "$SCAFFOLD_EXPECTED" == false ]]; then
         echo -e "\n${RED}Validation FAILED — $FAIL issue(s) found${NC}"
         exit 1
     fi
-    echo -e "\n${GREEN}All checks passed${NC} (doc-only/guide blueprint — pass --strict to validate files scaffolded after generation)"
+    # Not "all checks passed" — checks 2-4 were skipped, not satisfied. Saying so here
+    # keeps a mode line from reading as a clean scaffold run.
+    echo -e "\n${GREEN}Blueprint checks passed${NC} — $MODE mode writes nothing to disk, so the file, marker and over-implementation checks were skipped. Pass --strict to run them against files scaffolded after generation."
     exit 0
 fi
 
@@ -268,6 +287,8 @@ check_todo_in_file() {
 
     if [[ "$has_todo" -gt 0 ]] || [[ "$has_not_impl" -gt 0 ]]; then
         pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
+    elif [[ "$FRESH" == true ]]; then
+        fail "$rel_path — NO not-implemented markers, in a scaffold just written [$label]"
     else
         warn "$rel_path — NO TODO markers found (fully implemented or boilerplate?) [$label]"
     fi
@@ -323,7 +344,14 @@ check_over_implementation() {
             # done and some are not, and a finished file is not a violation. Only when
             # nearly every sibling still carries a marker is nothing implemented yet —
             # and then a complete file is the mode being broken, which breaks the build.
-            if [[ "$TOTAL_SCAFFOLDS" -gt 0 ]] && \
+            # The ratio below reads the siblings to guess whether implementation has
+            # started. When every file was written complete there are no marked
+            # siblings left to read, and the guess lands on "already implemented" —
+            # exactly the total violation this check exists for. Only the caller knows
+            # which it is, so --fresh says it outright.
+            if [[ "$FRESH" == true ]]; then
+                fail "$rel_path — ${method_count} methods, ${line_count} lines, no not-implemented marker, in a scaffold just written. Bodies are the developer's work."
+            elif [[ "$TOTAL_SCAFFOLDS" -gt 0 ]] && \
                [[ $((MARKED_SCAFFOLDS * 3)) -ge $((TOTAL_SCAFFOLDS * 2)) ]]; then
                 fail "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} sibling scaffold file(s) still have them. This file was written complete instead of stubbed."
             else

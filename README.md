@@ -225,6 +225,11 @@ compiles" stops being a claim the generator makes about itself. Applying is dete
 rather than repaired by guesswork. `--keep` leaves the copy behind to inspect; nothing ever
 touches your own tree.
 
+The scaffold validator cannot tell a file written complete against the mode's rules from one a
+developer has since implemented — both look the same on disk. Pass `--fresh` right after
+scaffolding to say nothing is implemented yet, and a missing not-implemented marker becomes a
+failure instead of a warning.
+
 Color-coded output: green (pass), yellow (warning), red (failure). Both exit non-zero on failure, so they work in CI or a pre-commit hook.
 
 Why a document validator: rules that live only in prose get followed inconsistently. Running this against two independently generated blueprints for the same feature caught the same defect in both — multi-file tasks that never said which code block belonged to which file — which no amount of reading had surfaced.

@@ -40,6 +40,12 @@ Each answers a different question:
 
 The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The applier also runs in every mode, and is the only one of the three that hands the blueprint to a compiler. The scaffold validator short-circuits for the file-less modes unless you pass `--strict`.
 
+Two flags say what the script cannot see for itself. `--strict` validates files on disk even when
+the blueprint records a file-less mode — for scaffolding done after generation. `--fresh` says the
+scaffold has only just been written, so a file with no not-implemented marker is the mode being
+broken rather than a task someone has since finished; run the validator with it immediately after
+scaffolding, and without it once implementation is under way.
+
 Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided by the user, resolve it automatically:
 
 1. Get the current git branch name
