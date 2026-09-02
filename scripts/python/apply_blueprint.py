@@ -35,10 +35,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
-    LABEL,
     file_kinds,
-    looks_like_path,
     parse_mode,
+    section_events,
     repo_root,
     resolve_feature_dir,
     scan,
@@ -72,28 +71,6 @@ def record(status: str, name: str, evidence: str = "") -> None:
             print(f"      {line}")
 
 
-
-
-def section_events(section: str):
-    """('label', path) / ('directive', before|after|replace) / ('block', text), in order."""
-    for _, line, in_fence, block in scan(section):
-        if block is not None:
-            yield "block", block
-            continue
-        if in_fence:
-            continue
-        m = LABEL.match(line)
-        # The same shape test every other reader applies. A looser one here wrote blocks
-        # to a file literally named `Svc.transfer()` and still reported the declared path
-        # as edited — the drift the shared parser exists to end.
-        if m and looks_like_path(m.group(1)):
-            yield "label", m.group(1)
-        if line.startswith("**Before**"):
-            yield "directive", "before"
-        elif line.startswith("**After**"):
-            yield "directive", "after"
-        elif line.startswith("**") and "**Replace entire file**" in line:
-            yield "directive", "replace"
 
 
 # --- Application ------------------------------------------------------------------
@@ -170,6 +147,8 @@ def write_file(path: str, text: str) -> None:
 
 
 _tree = ""
+# Declared-new files that were already on disk and got overwritten in the copy.
+_overwritten: list[str] = []
 
 
 def rel(path: str) -> str:
@@ -231,6 +210,7 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
                 before_at = resolved
             pending = payload
         else:
+            _info, payload = payload
             seen += 1
             if pending is None:
                 unanchored += 1
@@ -264,6 +244,7 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
                     # same overwrite discards the implementation and the build then
                     # describes the blueprint rather than the tree.
                     overwritten.append(rel(target))
+                    _overwritten.append(rel(target))
                 if declared not in ("new", None) and not exists:
                     # A `(modify)` path that is not in the tree is a wrong path in the
                     # blueprint. Creating it from the fragment made a phantom file that
@@ -444,7 +425,8 @@ def main() -> int:
 
         print(f"\n{CYAN}=== Summary ==={NC}")
         print(f"  applied: {applied_tasks}  skipped: {len(tasks) - applied_tasks - len(failed)}"
-              f"  {RED}FAILED{NC}: {len(failed)}")
+              f"  {RED}FAILED{NC}: {len(failed)}"
+              + (f"  {YELLOW}overwrote{NC}: {len(_overwritten)} file(s) already on disk" if _overwritten else ""))
         if unanchored_tasks:
             print(f"  {YELLOW}{len(unanchored_tasks)} task(s) carry code no marker anchors to a"
                   f" position: {', '.join(unanchored_tasks[:10])}{NC}")
@@ -476,6 +458,14 @@ def main() -> int:
         print(f"\n{YELLOW}Nothing was applied — no task anchored its code to a position in a file.{NC}")
         print("      The build result above describes the working tree, not this blueprint.")
         print("      Pass --require-anchors to make this a failure.")
+    elif _overwritten:
+        # Still exit 0 — the apply and the build did succeed — but not in green. After
+        # the work is done the same overwrite discards it, and a green last line then
+        # says the tree is fine when it is the blueprint that was just tested.
+        print(f"\n{YELLOW}Blueprint applied{' and built' if do_build else ''} — over {len(_overwritten)}"
+              f" file(s) that were already on disk.{NC}")
+        print("      If those hold your implementation, this run describes the blueprint, not your tree;")
+        print("      if they are scaffolds, this is the run you wanted.")
     else:
         print(f"\n{GREEN}Blueprint applied{' and built' if do_build else ''} cleanly{NC}")
     return rc

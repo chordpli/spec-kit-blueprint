@@ -175,37 +175,60 @@ def main() -> int:
 
     # 3. Before blocks quote something that is actually there
     print(f"\n{CYAN}[3] Working-tree claims{NC}")
-    out_of_range, identical, ambiguous = [], [], []
+    out_of_range, moved_first, identical, ambiguous = [], [], [], []
+    # Which task first declares each file. A later task that cites a line past the end of
+    # the file on disk may be citing the file as an EARLIER task leaves it — the wiring
+    # T006 adds is what T008 edits — and disk cannot confirm or deny that. The applier
+    # can: it applies in order and matches the Before text itself. So that case is a
+    # warning that says who moved the file, not a failure that a correct blueprint can
+    # only pass by citing a number it knows is wrong.
+    first_touch: dict[str, str] = {}
     for tid, sec in sections.items():
-        # Check against the longest file the task declares: a Before block belongs to one
-        # of them, and citing only the first path silently skipped multi-file tasks.
-        # Per file, not per task. Taking the longest of a task's files as the bound lets a
-        # 60-line citation against a 37-line file hide behind a 74-line sibling.
-        lengths = {}
         for rel in file_paths(sec):
+            first_touch.setdefault(rel, tid)
+    for tid, sec in sections.items():
+        declared = file_paths(sec)
+        lengths = {}
+        for rel in declared:
             path = os.path.join(root, rel)
             if os.path.isfile(path):
                 lengths[rel] = len(open(path, encoding="utf-8", errors="replace").read().splitlines())
-        if lengths:
-            shortest = min(lengths.values())
-            # Both ends of a range. Capturing only the first number meant
-            # `(lines 40-500)` against a 50-line file passed on the 40.
-            cites = []
-            for bm in re.finditer(
-                r"\*\*Before\*\*[^\n]*?\blines?[^\d]{0,4}(\d+)(?:\s*[-\u2013]\s*(\d+))?", sec
-            ):
-                cites.append(int(bm.group(1)))
-                if bm.group(2):
-                    cites.append(int(bm.group(2)))
+        if not lengths:
+            continue
+        # Each citation is attributed to a file when the document says which: a path
+        # named on the Before line itself, else the nearest `**`path`**` label above it.
+        # Without that, every declared file was a candidate, and the check told an author
+        # who had labelled the block to "name the file" they had already named.
+        labels_at = [
+            (m.start(), m.group(1))
+            for m in re.finditer(r"^\*\*`([^`]+)`\*\*", sec, re.M)
+            if m.group(1) in lengths
+        ]
+        for bm in re.finditer(
+            r"\*\*Before\*\*([^\n]*?)\blines?[^\d]{0,4}(\d+)(?:\s*[-\u2013]\s*(\d+))?", sec
+        ):
+            cites = [int(bm.group(2))] + ([int(bm.group(3))] if bm.group(3) else [])
+            named = next((f for f in lengths if f"`{f}`" in bm.group(1)), None)
+            if named is None:
+                named = next((f for at, f in reversed(labels_at) if at < bm.start()), None)
+            candidates = {named: lengths[named]} if named else lengths
             for n in cites:
-                # A Before block does not say which of the task's files it quotes, so a
-                # citation is out of range only when it exceeds every candidate.
-                if n > max(lengths.values()):
-                    out_of_range.append(
-                        f"{tid}: line {n} > {max(lengths.values())} lines, the longest file it declares"
-                    )
-                elif n > shortest and len(lengths) > 1:
-                    over = [f"{f} ({ln})" for f, ln in sorted(lengths.items()) if n > ln]
+                bound = max(candidates.values())
+                if n > bound:
+                    over = [f for f, ln in candidates.items() if n > ln]
+                    earlier = [
+                        first_touch[f] for f in over if first_touch.get(f) not in (None, tid)
+                    ]
+                    if earlier:
+                        moved_first.append(
+                            f"{tid}: line {n} > {bound} lines on disk, but {sorted(set(earlier))[0]}"
+                            f" changes {', '.join(over)} first"
+                        )
+                    else:
+                        which = named or f"{bound}-line longest file it declares"
+                        out_of_range.append(f"{tid}: line {n} > {bound} lines ({which})")
+                elif n > min(candidates.values()) and len(candidates) > 1:
+                    over = [f"{f} ({ln})" for f, ln in sorted(candidates.items()) if n > ln]
                     ambiguous.append(f"{tid}: line {n} is past the end of {', '.join(over)}")
         for before, after in BEFORE_AFTER_RE.findall(sec):
             if before.strip() == after.strip():
@@ -214,6 +237,13 @@ def main() -> int:
         record("fail", "Before block cites a line past the end of its file", "\n".join(out_of_range[:6]))
     else:
         record("pass", "Before line references are within their files")
+    if moved_first:
+        record(
+            "warn",
+            "a Before cites a line past the end of the file on disk, in a file an earlier task changes",
+            "\n".join(moved_first[:6])
+            + "\ndisk cannot check this one; apply_blueprint.py can, since it applies in order and matches the text",
+        )
     if ambiguous:
         record(
             "warn",
@@ -297,7 +327,7 @@ def main() -> int:
             continue
         if re.search(r"\*\*Replace entire file\*\*", sec):
             continue
-        blocks = len([b for b in code_blocks(sec) if b[0]])
+        blocks = len([b for b in code_blocks(sec, content_only=True) if b[0]])
         anchored = len(re.findall(r"\*\*Before\*\*[^\n]*\n+```", sec)) * 2
         # A task may create new files and edit an existing one in the same breath. A block
         # introduced by its own path label is that whole new file, and has nothing to anchor to.
@@ -319,7 +349,7 @@ def main() -> int:
     for tid, sec in sections.items():
         paths = file_paths(sec)
         authored = strip_quoted(sec)
-        blocks = len([b for b in code_blocks(authored) if b[0]])
+        blocks = len([b for b in code_blocks(authored, content_only=True) if b[0]])
         if len(paths) > 1 and blocks > 1:
             # A label may be followed by anything — ":", " (new):", " — **Replace entire
             # file**". Requiring a colon counted four labelled blocks as one.

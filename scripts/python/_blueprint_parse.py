@@ -105,24 +105,75 @@ def writes_to_disk(mode: str) -> bool:
     return mode not in ("doc-only", "guide")
 
 
-def code_blocks(text: str) -> list[tuple[str, str]]:
+BOLD_LABEL = re.compile(r"^\*\*([^*`\n][^*\n]*?)\*\*")
+
+# A block under this label is a command to run, not file content. Counting the ```bash
+# under **Verification** reported every task that has one as carrying code the applier
+# could not place, and the applier "left it alone" out loud.
+#
+# Only this one. The template puts a task's skeleton directly under its **Why** prose,
+# so treating any other label as illustrative silently skips real content — a first
+# version listed **Why** here and the applier reported T001 as "no code block".
+ILLUSTRATIVE_LABELS = {"verification"}
+
+
+def section_events(section: str):
+    """The parts of a task section a tool acts on, in document order.
+
+    Yields ``("label", path)`` for a `**`path`**` block label, ``("directive", d)`` for
+    **Before** / **After** / **Replace entire file**, and ``("block", (info, text))`` for
+    a fenced block that is file content. A block under an illustrative label (see
+    ILLUSTRATIVE_LABELS) is not yielded at all.
+    """
+    info, illustrative = "", False
+    for _, line, in_fence, block in scan(section):
+        if block is not None:
+            if not illustrative:
+                yield "block", (info, block)
+            info = ""
+            continue
+        if in_fence:
+            m = FENCE_OPEN.match(line)
+            if m and info == "":
+                info = m.group(2)
+            continue
+        m = LABEL.match(line)
+        if m and looks_like_path(m.group(1)):
+            illustrative = False
+            yield "label", m.group(1)
+            continue
+        if line.startswith("**Before**"):
+            illustrative = False
+            yield "directive", "before"
+        elif line.startswith("**After**"):
+            illustrative = False
+            yield "directive", "after"
+        elif line.startswith("**") and "**Replace entire file**" in line:
+            illustrative = False
+            yield "directive", "replace"
+        else:
+            m = BOLD_LABEL.match(line)
+            if m:
+                illustrative = m.group(1).strip().rstrip(":").lower() in ILLUSTRATIVE_LABELS
+
+
+def code_blocks(text: str, *, content_only: bool = False) -> list[tuple[str, str]]:
     """(info string, content) for every fenced block, in order.
 
     The regex the callers used, ```` ```\\w*\\n(.*?)``` ````, mispairs fences whenever an
     info string is not a bare word — ```` ```c++ ```` is skipped and its CLOSING fence
     becomes an opener, so prose is scanned as code and the block after it is invisible.
     A nested fence breaks it the same way. This uses the same scanner as everything else.
+
+    With ``content_only`` the blocks under an illustrative label are left out.
     """
+    if content_only:
+        return [payload for kind, payload in section_events(text) if kind == "block"]
     out, info = [], ""
     for _, line, in_fence, block in scan(text):
         if block is not None:
             out.append((info, block))
             info = ""
-            continue
-        if in_fence and not out and info == "":
-            m = FENCE_OPEN.match(line)
-            if m:
-                info = m.group(2)
         elif in_fence:
             m = FENCE_OPEN.match(line)
             if m and info == "":

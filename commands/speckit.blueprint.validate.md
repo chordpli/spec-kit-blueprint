@@ -47,6 +47,8 @@ instructions legitimately applies nothing — and turn it on in CI, where "verif
 the blueprint's own `**Build**:` line when it has one; it is printed before it runs, skipped when a
 task failed to apply, and killed after 15 minutes.
 
+The document validator's line-reference check reads the files as they are on disk. A task that cites a line an earlier task adds — the wiring T006 inserts is what T008 edits — is past the end of the file on disk, and so is every citation once you have started implementing and your files no longer match the skeleton lengths. Both are reported as a warning that names the earlier task, not as a failure; the applier is the check that settles them, because it applies the tasks in order and matches the Before text itself.
+
 Two flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when
 the blueprint records a file-less mode — for scaffolding done after generation. `--fresh` says the
 scaffold has only just been written, so a file with no not-implemented marker is the mode being

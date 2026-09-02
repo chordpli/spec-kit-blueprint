@@ -170,6 +170,8 @@ No prior agreement exists for these. This is where review attention pays off.
 
 In `export` mode, produce this section only: the first table from the blueprint, the second from delegated decisions and divergences with the reason column left as `not stated — {file}:{line}` where no answer was collected. An unfilled reason is honest; an invented one is not.
 
+**Where it goes.** `ask` prints its report to the conversation. `export` writes the section above to `specs/{feature}/review-decisions.md` and prints the path — it is the artifact the PR links, so it has to be a file. `upstream` writes its change requests to `specs/{feature}/review-upstream.md`, one file per run (append a dated heading when the file exists, never overwrite an earlier run's requests), and prints the path. These are the only files any mode writes.
+
 ### Step 7: Close the Loop
 
 - If every task in scope is implemented, its blueprint markers are gone, and its Verification criterion is met, ensure the task is checked `[X]` in the `blueprint.md` Checklist — the same condition and the same limits as `/speckit.blueprint.cleanup` Step 6. If the checklist does not use `- [ ] T{ID}` rows, or `blueprint.md` is not writable, skip the update and say so in the report.
@@ -278,7 +280,7 @@ An `ARTIFACT DOES NOT HOLD` doubt and an unanswered Open Questions row are the s
 - **Check the Open Questions table before writing a change request.** If a row already names this gap, do not open a CR — attach the case typing produced to that row and address it to that row's owner. A second ticket for a known gap is noise; a known gap with a concrete case attached is an escalation.
 - **Reuse the "Who can answer" column** as the addressee whenever a row names the same artifact. It is the only place the blueprint records who owns what.
 - **`ask` hands doubts to this mode.** Two of its outcomes are doubts in disguise: a silently resolved Open Question (Step 3) and an answer that surfaces a genuine defect in the blueprint (Step 5). Run both through Step U3 rather than writing them into the export as prose. Where both modes ran in one session, the export's "Open for the reviewer" list cites the CR id and lets the change request carry the detail.
-- **Neither mode edits an artifact.** `upstream` writes requests and nothing else: it never touches `spec.md`, `plan.md`, a decision record, or `blueprint.md` — not even the Checklist that Step 7 may write, since nothing here established that a task is done.
+- **Neither mode edits an artifact.** `upstream` writes its requests to `specs/{feature}/review-upstream.md` and nothing else: it never touches `spec.md`, `plan.md`, a decision record, or `blueprint.md` — not even the Checklist that Step 7 may write, since nothing here established that a task is done.
 
 ## Rules
 

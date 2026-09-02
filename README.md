@@ -1,6 +1,8 @@
 # Blueprint
 
-Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` with complete, ready-to-use content for every task — so you can review, understand, and type through the implementation before `/speckit.implement` runs.
+Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` covering every task before `/speckit.implement` runs — either the complete code (`doc-only`, `scaffold`), or the signatures, the reasons and the pitfalls with the bodies left for you to write (`guide`).
+
+**If you are here to type the code yourself and learn from it**, the short version: run `/speckit.blueprint.generate guide scaffold`, read Steps 3a-G, 3b and 3c of the generate command, run `/speckit.blueprint.validate` once, then implement from `blueprint.md` without reopening `spec.md`. When a design decision looks wrong while you type, `/speckit.blueprint.review upstream` is where that doubt goes. The rest of this README is the full picture.
 
 ![Spec Kit >= 0.2.0](https://img.shields.io/badge/spec--kit-%3E%3D0.2.0-blue)
 ![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-green)
@@ -43,7 +45,8 @@ Three modes:
 |------|--------|
 | `doc-only` (default) | Complete-code `blueprint.md` only — nothing written to disk |
 | `scaffold` | Complete-code `blueprint.md` + new files on disk (structural files complete, core logic as TODO stubs) |
-| `guide` | Design-guidance `blueprint.md` — signatures, Why, implementation notes, pitfalls, references, **no body code**. For learning-first workflows where the developer designs the logic. Add `scaffold` (`guide scaffold`) to also write compilable skeletons to disk — for **new files only**, so a feature that is mostly edits to existing files gets few files or none |
+| `guide` | Design-guidance `blueprint.md` — signatures, Why, implementation notes, pitfalls, references, **no body code**. For learning-first workflows where the developer designs the logic |
+| `guide scaffold` | `guide`, plus the compilable skeletons written to disk — **new files only**, so a feature that is mostly edits to existing files gets few files or none. Prefer this over plain `guide` when you will type the bodies: the skeletons' not-implemented markers carry the work instructions, and in plain `guide` you would be typing those markers out only to delete them |
 
 ## Why
 
@@ -109,7 +112,7 @@ Produces a blueprint that hands over everything *except* the implementation: agr
 /speckit.blueprint.validate specs/003-user-auth
 ```
 
-Runs two validators: one over `blueprint.md` itself (task coverage, a Why per task, Before/After claims that hold against the working tree, multi-file label discipline, no placeholders) and one over what scaffold mode wrote to disk (files exist, TODO markers present in core files, nothing over-implemented).
+Runs three scripts: a validator over `blueprint.md` itself (task coverage, a Why per task, Before/After claims that hold against the working tree, multi-file label discipline, no placeholders, cited requirements reproduced), an applier that types the blueprint into a throwaway copy of the tree and builds it, and a validator over what scaffold mode wrote to disk (files exist, markers present in core files, nothing over-implemented).
 
 The document validator runs in every mode — a doc-only or guide blueprint has nothing on disk, but its own contents still have to hold up.
 
@@ -157,7 +160,7 @@ Two things worth deciding up front on a team:
 | _(none)_ | Auto-detect feature directory from current branch |
 | `specs/NNN-name` | Use specified directory |
 
-**Checks**: blueprint exists, new files exist, TODO markers in core files, no over-implementation.
+**Checks**: the document (coverage, Why, working-tree claims, labels, placeholders, guide-mode bodies, regeneration, freshness, cited requirements, open questions), the build of the applied copy, and the scaffold on disk (blueprint exists, new files exist, markers in core files, no over-implementation).
 
 ### `/speckit.blueprint.cleanup [mode]`
 
@@ -170,7 +173,7 @@ Two things worth deciding up front on a team:
 
 **Never removed**: honest unfinished markers, constraint/why comments, doc comments, license headers, pragmas.
 
-### `/speckit.blueprint.review [ask|export] [scope]`
+### `/speckit.blueprint.review [ask|export|upstream] [scope]`
 
 | Argument | Description |
 |----------|-------------|
@@ -232,9 +235,10 @@ it runs, it is skipped when any task failed to apply, and it is killed after 15 
 line before passing `--build` to a blueprint you did not generate.
 
 `--require-anchors` makes the applier fail when a task's code is not anchored to a position, or when
-nothing anchored at all. It is off by default, because a guide blueprint of pure instructions
-legitimately applies nothing — turn it on in CI, where "verified nothing" and "verified everything"
-must not share an exit code.
+nothing anchored at all. It is off by default: a guide blueprint applies its skeletons like any
+other, but one whose tasks are all edits described in prose has nothing to apply, and that is not
+a defect locally. Turn it on in CI, where "verified nothing" and "verified everything" must not
+share an exit code.
 
 The scaffold validator cannot tell a file written complete against the mode's rules from one a
 developer has since implemented — both look the same on disk. Pass `--fresh` right after
@@ -251,6 +255,8 @@ Why a document validator: rules that live only in prose get followed inconsisten
 |-------|----------|
 | "Run `/speckit.tasks` first" | Generate tasks before running blueprint |
 | "blueprint.md not found" | Run `/speckit.blueprint.generate` first |
+| "Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY…" from `check-prerequisites.sh` | Newer spec-kit resolves the feature from `.specify/feature.json`; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file |
+| "Before cites a line past the end of the file on disk, in a file an earlier task changes" | Not a defect the document can settle: an earlier task changes that file first. The applier checks the Before text itself. The same warning appears once you start implementing, because your files no longer match the skeleton lengths — that is expected |
 | "File MISSING" | Re-run scaffold mode or create the file manually |
 | "No TODO markers found" | Core file may have been generated outside scaffold mode |
 | Command not available | Check `specify extension list`, restart agent session, reinstall |
