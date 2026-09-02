@@ -94,12 +94,17 @@ In `report` mode, stop here and suggest: "Run `/speckit.blueprint.cleanup apply`
 
 ### Step 5: Apply (apply mode only)
 
+- **Take the rollback point first.** Before the first edit, copy every file you are about to touch
+  to a scratch directory, keeping its relative path. `git stash` and `git checkout --` are not
+  available here — the tree is usually dirty with the implementation work this command runs after,
+  and reverting a file to HEAD would throw that away. The copies are what "restore the file" below
+  means; delete them once the check passes.
 - Remove only findings classified STALE or NARRATION. Delete the whole comment, and mind the comment's shape:
   - **Own-line comment**: delete the line, then collapse a resulting double blank line into one.
   - **Trailing comment** on a line of code: strip the comment, keep the code, drop the now-trailing whitespace.
   - **Block comment** (`/* … */`, multi-line `//` run): delete the whole block only if every line in it is part of the same finding; if a constraint line is mixed in, keep the block and remove nothing — a partially gutted block reads worse than the original.
   - Never leave dangling delimiters or an empty comment marker.
-- After editing, re-run the project's quickest correctness signal (compile/build, or the test suite for the touched modules). If it fails, restore the file(s) that broke it and report which removal caused the failure. If the project has **no** runnable check — or it cannot run in this environment (missing containers, no toolchain) — say so explicitly in the report instead of claiming verification; removals stay, but the report must not imply they were verified.
+- After editing, re-run the project's quickest correctness signal (compile/build, or the test suite for the touched modules). If it fails, restore the file(s) that broke it from the copies taken above and report which removal caused the failure. If the project has **no** runnable check — or it cannot run in this environment (missing containers, no toolchain) — say so explicitly in the report instead of claiming verification; removals stay, but the report must not imply they were verified.
 - Re-scan the edited files to confirm zero STALE/NARRATION findings remain.
 
 ### Step 6: Close the Loop

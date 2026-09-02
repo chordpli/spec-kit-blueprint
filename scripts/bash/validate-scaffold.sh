@@ -31,9 +31,13 @@ PASS=0
 WARN=0
 FAIL=0
 
-pass()  { ((PASS++)); echo -e "  ${GREEN}✓${NC} $1"; }
-warn()  { ((WARN++)); echo -e "  ${YELLOW}⚠${NC} $1"; }
-fail()  { ((FAIL++)); echo -e "  ${RED}✗${NC} $1"; }
+# Counters are assignments, not (( )). `((PASS++))` evaluates to the OLD value, so the
+# very first call returns status 1, and under `set -e` that killed the script before
+# check 2 on every bash >= 4 — the whole validator silently did nothing on Linux CI
+# while still exiting red.
+pass()  { PASS=$((PASS + 1)); echo -e "  ${GREEN}✓${NC} $1"; }
+warn()  { WARN=$((WARN + 1)); echo -e "  ${YELLOW}⚠${NC} $1"; }
+fail()  { FAIL=$((FAIL + 1)); echo -e "  ${RED}✗${NC} $1"; }
 header(){ echo -e "\n${CYAN}[$1]${NC}"; }
 
 # grep -c prints "0" and exits 1 when nothing matches, so `$(grep -c … || echo 0)`
@@ -41,6 +45,9 @@ header(){ echo -e "\n${CYAN}[$1]${NC}"; }
 # Language-native "not implemented yet" forms. A guide-mode skeleton body is one of
 # these, so missing them makes an untouched skeleton look fully implemented.
 NOT_IMPL_RE='NotImplemented\|not_implemented\|NotImplementedError\|UnsupportedOperationException\|NotImplementedException\|fatalError(\|todo!(\|unimplemented!(\|panic(.TODO\|panic(.not implemented'
+
+# Kept in step with DOTLESS_FILES in scripts/python/_blueprint_parse.py.
+DOTLESS_FILES="Dockerfile Makefile Procfile Jenkinsfile Gemfile Rakefile Brewfile Vagrantfile CODEOWNERS LICENSE NOTICE"
 
 count_matches() {
     local n
@@ -95,7 +102,10 @@ if [[ -f "$GUIDE" ]]; then
     # Only the mode token itself is parsed — the rest of the line is prose that may
     # mention other mode names (e.g. a link to a scaffolding decision doc).
     MODE_LINE="$(grep -m1 -i '^\*\*Mode\*\*:' "$GUIDE" || true)"
-    MODE_TOKENS="$(echo "${MODE_LINE#*:}" | tr '[:upper:]' '[:lower:]' | awk '{print $1, $2}')"
+    # Backticks and emphasis stripped: README.md and the generator's own tables spell
+    # every mode name as `guide`, and a header copied from them read as "unknown" here
+    # while the Python tools accepted it.
+    MODE_TOKENS="$(echo "${MODE_LINE#*:}" | tr -d '`*_' | tr '[:upper:]' '[:lower:]' | awk '{print $1, $2}')"
     case "$MODE_TOKENS" in
         "guide scaffold"*) MODE="guide-scaffold" ;;
         guide-scaffold*)   MODE="guide-scaffold" ;;
@@ -135,6 +145,25 @@ fi
 header "2. File Existence (NEW files from blueprint)"
 
 NEW_FILES=()
+# A blueprint quotes markdown templates, ADRs and properties files inside its code
+# blocks, so `**File**:` lines and file tables appear *inside* fences as often as
+# outside them. Blank the fenced lines first, the way the Python parser does, or a task
+# that merely documents the blueprint format has its example path demanded on disk.
+UNFENCED=$(awk '
+    {
+        t = $0; sub(/^[ \t]+/, "", t)
+        ch = substr(t, 1, 1); n = 0
+        if (ch == "`" || ch == "~") { while (substr(t, n + 1, 1) == ch) n++ }
+        rest = substr(t, n + 1); sub(/[ \t]+$/, "", rest)
+        if (fence_ch == "") {
+            if (n >= 3) { fence_ch = ch; fence_n = n; print ""; next }
+            print; next
+        }
+        if (n >= 3 && ch == fence_ch && n >= fence_n && rest == "") fence_ch = ""
+        print ""; next
+    }
+' "$GUIDE")
+
 # A **File**: declaration may wrap onto following lines; join it back into one
 # logical line before parsing, or every path after the first is invisible here.
 JOINED=$(awk '
@@ -148,7 +177,7 @@ JOINED=$(awk '
     joining              { print buf; joining = 0; print; next }
     { print }
     END { if (joining) print buf }
-' "$GUIDE")
+' <<< "$UNFENCED")
 
 while IFS= read -r line; do
     # Pattern 1: **File**: `path` (kind), `path` (kind) — each path carries its own
@@ -162,13 +191,20 @@ while IFS= read -r line; do
             token_kind="${BASH_REMATCH[3]}"
             rest="${BASH_REMATCH[4]}"
             if [[ -n "$token_path" ]]; then
-                # A file at the repository root has no slash and is still a file.
-                if [[ "$token_path" == *.* ]]; then
+                # Same shape rule the Python parser applies: a path sits in a directory,
+                # carries a short extension, or is one of the extensionless build files.
+                # A dot alone rejected `Dockerfile` and accepted nothing the others did
+                # not. Spaces are legal in a path, so they do not disqualify a token.
+                if [[ "$token_path" == */* ]] || \
+                   [[ "$token_path" =~ \.[A-Za-z0-9]{1,10}$ ]] || \
+                   [[ " $DOTLESS_FILES " == *" $(basename "$token_path") "* ]]; then
                     pending+=("$token_path")
                 fi
             else
                 # a (kind) closes the run of paths collected since the last one.
-                # "new", "all new", "new — moved from …" all create files here.
+                # "new", "all new", "new — moved from …" all create files here. Compared
+                # lowercased, or a declaration written `(New)` is silently never checked.
+                token_kind="$(echo "$token_kind" | tr '"'"'[:upper:]'"'"' '"'"'[:lower:]'"'"')"
                 if [[ "$token_kind" == new* ]] || [[ "$token_kind" == "all new"* ]]; then
                     for pp in "${pending[@]}"; do NEW_FILES+=("$pp"); done
                 fi
@@ -192,7 +228,16 @@ done <<< "$JOINED"
 # The patterns above can match the same path twice (a File line and a table row),
 # which would report and count that file twice.
 if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
-    NEW_FILES=($(printf '%s\n' "${NEW_FILES[@]}" | awk '!seen[$0]++'))
+    # Deduped in the shell, not through a command substitution. `NEW_FILES=($(...))`
+    # word-split `docs/my file.md` into two fabricated paths and glob-expanded anything
+    # carrying a `*`.
+    DEDUPED=()
+    for p in "${NEW_FILES[@]}"; do
+        dup=false
+        for q in "${DEDUPED[@]}"; do [[ "$q" == "$p" ]] && dup=true && break; done
+        [[ "$dup" == true ]] || DEDUPED+=("$p")
+    done
+    NEW_FILES=("${DEDUPED[@]}")
 fi
 
 if [[ ${#NEW_FILES[@]} -eq 0 ]]; then
@@ -209,11 +254,15 @@ elif [[ "$SCAFFOLD_EXPECTED" == false ]]; then
     done
     pass "$MODE mode writes nothing to disk — file existence not required (${PRESENT_COUNT} present, ${MISSING_COUNT} not yet created)"
 else
+    CHECKED_ANY=false
+    SKIPPED_PLACEHOLDERS=()
     for f in "${NEW_FILES[@]}"; do
         # Skip placeholder/glob paths (e.g. docs/2026-MM-DD-*.md) — not real targets
         if [[ "$f" == *"*"* ]] || [[ "$f" == *"MM-DD"* ]] || [[ "$f" == *"{"* ]]; then
+            SKIPPED_PLACEHOLDERS+=("$f")
             continue
         fi
+        CHECKED_ANY=true
         FULL_PATH="$REPO_ROOT/$f"
         if [[ -f "$FULL_PATH" ]]; then
             pass "$f exists"
@@ -221,6 +270,11 @@ else
             fail "$f MISSING"
         fi
     done
+    # A blueprint whose only declarations are placeholders printed nothing here at all —
+    # no pass, no warn, no fail — which reads as a clean check.
+    if [[ "$CHECKED_ANY" == false ]] && [[ ${#SKIPPED_PLACEHOLDERS[@]} -gt 0 ]]; then
+        warn "every declared path is a placeholder or glob (${SKIPPED_PLACEHOLDERS[*]}) — nothing to check"
+    fi
 fi
 
 # =============================================
@@ -288,7 +342,16 @@ check_todo_in_file() {
     if [[ "$has_todo" -gt 0 ]] || [[ "$has_not_impl" -gt 0 ]]; then
         pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
     elif [[ "$FRESH" == true ]]; then
-        fail "$rel_path — NO not-implemented markers, in a scaffold just written [$label]"
+        local m_count l_count
+        m_count=$(count_matches -cE "^[[:space:]]*(def |fun |func |function |public |private |protected |async )" "$file")
+        l_count=$(wc -l < "$file" | tr -d ' ')
+        if [[ "$m_count" -gt 1 ]] && [[ "$l_count" -gt 30 ]]; then
+            fail "$rel_path — ${m_count} methods, ${l_count} lines, NO not-implemented marker, in a scaffold just written [$label]"
+        else
+            # Too small to tell a written-complete body from a type or a config file the
+            # basename classifier happened to catch.
+            warn "$rel_path — no markers, but only ${m_count} method(s)/${l_count} lines; check it is not a stub the classifier mislabelled [$label]"
+        fi
     else
         warn "$rel_path — NO TODO markers found (fully implemented or boilerplate?) [$label]"
     fi
@@ -350,7 +413,9 @@ check_over_implementation() {
             # exactly the total violation this check exists for. Only the caller knows
             # which it is, so --fresh says it outright.
             if [[ "$FRESH" == true ]]; then
-                fail "$rel_path — ${method_count} methods, ${line_count} lines, no not-implemented marker, in a scaffold just written. Bodies are the developer's work."
+                # Already reported by check 3, which applies the same size test under
+                # --fresh. Counting it here made every violating file two failures.
+                return
             elif [[ "$TOTAL_SCAFFOLDS" -gt 0 ]] && \
                [[ $((MARKED_SCAFFOLDS * 3)) -ge $((TOTAL_SCAFFOLDS * 2)) ]]; then
                 fail "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} sibling scaffold file(s) still have them. This file was written complete instead of stubbed."
@@ -389,7 +454,13 @@ ALL_CHECK_FILES=()
 
 if [[ ${#ALL_CHECK_FILES[@]} -gt 0 ]]; then
     # Called directly, not in $( ), so warn()/fail() counters survive.
-    for f in $(printf '%s\n' "${ALL_CHECK_FILES[@]}" | awk '!seen[$0]++'); do
+    SEEN_CHECK=()
+    for f in "${ALL_CHECK_FILES[@]}"; do
+        # Quoted, so a scaffold path containing a space stays one path.
+        dup=false
+        for g in "${SEEN_CHECK[@]}"; do [[ "$g" == "$f" ]] && dup=true && break; done
+        [[ "$dup" == true ]] && continue
+        SEEN_CHECK+=("$f")
         check_over_implementation "$f"
     done
 fi

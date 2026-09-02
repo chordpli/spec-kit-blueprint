@@ -3,7 +3,7 @@
 Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` with complete, ready-to-use content for every task — so you can review, understand, and type through the implementation before `/speckit.implement` runs.
 
 ![Spec Kit >= 0.2.0](https://img.shields.io/badge/spec--kit-%3E%3D0.2.0-blue)
-![Version 1.1.0](https://img.shields.io/badge/version-1.2.0-green)
+![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-green)
 ![License MIT](https://img.shields.io/badge/license-MIT-brightgreen)
 
 A [Spec Kit](https://github.com/github/spec-kit) community extension.
@@ -210,7 +210,7 @@ Disable hook: `specify extension disable blueprint`
 
 ## Validation Scripts
 
-The validate command runs two bundled scripts:
+The validate command runs three bundled scripts:
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature}
@@ -222,15 +222,26 @@ The middle one is the important one. It copies the working tree aside, types eve
 into that copy the way a developer would, and runs the project's build — so "this blueprint
 compiles" stops being a claim the generator makes about itself. Applying is deterministic: a
 `**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect
-rather than repaired by guesswork. `--keep` leaves the copy behind to inspect; nothing ever
-touches your own tree.
+rather than repaired by guesswork. `--keep` leaves the copy behind to inspect.
+
+Every edit lands in the copy, never in your tree: a declared path that resolves outside it is a
+reported defect, and symlinks are not followed into it. The one thing that is not sandboxed is the
+build itself — `--build` runs a shell command, taken from the blueprint's `**Build**:` line when it
+has one, and a build can write wherever the developer running it can. The command is printed before
+it runs, it is skipped when any task failed to apply, and it is killed after 15 minutes. Read that
+line before passing `--build` to a blueprint you did not generate.
+
+`--require-anchors` makes the applier fail when a task's code is not anchored to a position, or when
+nothing anchored at all. It is off by default, because a guide blueprint of pure instructions
+legitimately applies nothing — turn it on in CI, where "verified nothing" and "verified everything"
+must not share an exit code.
 
 The scaffold validator cannot tell a file written complete against the mode's rules from one a
 developer has since implemented — both look the same on disk. Pass `--fresh` right after
 scaffolding to say nothing is implemented yet, and a missing not-implemented marker becomes a
 failure instead of a warning.
 
-Color-coded output: green (pass), yellow (warning), red (failure). Both exit non-zero on failure, so they work in CI or a pre-commit hook.
+Color-coded output: green (pass), yellow (warning), red (failure). All three exit non-zero on failure, so they work in CI or a pre-commit hook.
 
 Why a document validator: rules that live only in prose get followed inconsistently. Running this against two independently generated blueprints for the same feature caught the same defect in both — multi-file tasks that never said which code block belonged to which file — which no amount of reading had surfaced.
 

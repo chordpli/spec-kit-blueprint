@@ -74,6 +74,62 @@ def scan(text: str):
             yield i, line, False, None
 
 
+MODES = ("guide scaffold", "guide-scaffold", "doc-only", "scaffold", "guide")
+
+
+def parse_mode(text: str) -> str:
+    """The mode a blueprint header declares, canonicalised.
+
+    Read three separate ways before this existed — once per script, each with its own
+    tolerances — so a header written ``**Mode**: `guide` `` (backticked, the way the
+    README and the generator's own tables spell every mode name) meant `guide` to one
+    tool and `unknown` to the next, and only one of the three resolved the two-token
+    `guide scaffold`.
+    """
+    line = next((ln for ln in text.split(chr(10)) if ln.lower().startswith("**mode**:")), "")
+    if ":" not in line:
+        return "unknown"
+    value = line.split(":", 1)[1].strip().lower()
+    # The rest of the line is prose that may name other modes (a link to a scaffolding
+    # decision doc), so only the leading token or two are read.
+    value = re.sub(r"[`*_]", "", value)
+    head = " ".join(value.split()[:2])
+    for name in MODES:
+        if head.startswith(name):
+            return "guide-scaffold" if name.startswith("guide s") or name == "guide-scaffold" else name
+    return "unknown"
+
+
+def writes_to_disk(mode: str) -> bool:
+    """Does this mode put scaffold files on disk at generation time?"""
+    return mode not in ("doc-only", "guide")
+
+
+def code_blocks(text: str) -> list[tuple[str, str]]:
+    """(info string, content) for every fenced block, in order.
+
+    The regex the callers used, ```` ```\\w*\\n(.*?)``` ````, mispairs fences whenever an
+    info string is not a bare word — ```` ```c++ ```` is skipped and its CLOSING fence
+    becomes an opener, so prose is scanned as code and the block after it is invisible.
+    A nested fence breaks it the same way. This uses the same scanner as everything else.
+    """
+    out, info = [], ""
+    for _, line, in_fence, block in scan(text):
+        if block is not None:
+            out.append((info, block))
+            info = ""
+            continue
+        if in_fence and not out and info == "":
+            m = FENCE_OPEN.match(line)
+            if m:
+                info = m.group(2)
+        elif in_fence:
+            m = FENCE_OPEN.match(line)
+            if m and info == "":
+                info = m.group(2)
+    return out
+
+
 def split_tasks(text: str) -> list[tuple[str, str]]:
     """(task id, section text) in document order.
 
@@ -109,7 +165,43 @@ def split_tasks(text: str) -> list[tuple[str, str]]:
 FILE_DECL = re.compile(
     r"\*\*File\*\*:(?P<decl>[^\n]*(?:\n[^\n\S]*(?:[`,]|\()[^\n]*)*)",
 )
-KIND = re.compile(r"\((?:all\s+)?(new|modify|modified|delete|deleted)\)", re.I)
+# The kind may carry a note — `(new — moved from legacy/D.java)` is a form the scaffold
+# validator has always accepted. Requiring the paren to close right after the word made
+# those declarations kind-less, so the applier never wrote the file while the scaffold
+# validator demanded it on disk.
+KIND = re.compile(r"\((?:all\s+)?(new|modify|modified|delete|deleted)\b[^)]*\)", re.I)
+
+# Build files carry no extension, and a path whose last dot-segment is long
+# (`services/com.example.SpiProvider`) is still a path. A capped extension was the only
+# test, so both were invisible to the Python tools and required by the Bash one.
+DOTLESS_FILES = {
+    "Dockerfile", "Makefile", "Procfile", "Jenkinsfile", "Gemfile", "Rakefile",
+    "Brewfile", "Vagrantfile", "CODEOWNERS", "LICENSE", "NOTICE",
+}
+
+
+def looks_like_path(token: str) -> bool:
+    """Is this backticked token a file path rather than prose or an identifier?"""
+    # A space is legal in a path (`docs/my file.md`), so it cannot be disqualifying on
+    # its own — only the shape below decides. A newline never appears in one.
+    if not token or token != token.strip() or "\n" in token:
+        return False
+    if "/" in token:
+        return True
+    if re.search(r"\.[A-Za-z0-9]{1,10}$", token):
+        return True
+    return os.path.basename(token) in DOTLESS_FILES
+
+
+def outside_fences(section: str) -> str:
+    """The section with fenced content blanked out, line count preserved.
+
+    A blueprint quotes markdown templates, ADRs and properties files, so `**File**:`
+    appears inside code blocks as often as outside them. Searching the raw text reads a
+    quoted declaration as a real one, and a task that only *documents* the format then
+    has its example path written to disk by the applier.
+    """
+    return "\n".join("" if in_fence else line for _, line, in_fence, _ in scan(section))
 
 
 def file_kinds(section: str) -> list[tuple[str, str]]:
@@ -119,16 +211,14 @@ def file_kinds(section: str) -> list[tuple[str, str]]:
     when one trailing `(all modify)` covers the whole list — so an unannotated path
     inherits from the next annotated one, and failing that from the previous.
     """
-    m = FILE_DECL.search(section)
+    m = FILE_DECL.search(outside_fences(section))
     if not m:
         return []
     decl = m.group("decl")
     found: list[tuple[str, str | None]] = []
     for pm in re.finditer(r"`([^`]+)`", decl):
         path = pm.group(1)
-        # Ten, not six: `config/app.properties` is a real target and a six-character
-        # cap silently drops it, leaving the task looking like a process step.
-        if not re.search(r"\.[A-Za-z0-9]{1,10}$", path):
+        if not looks_like_path(path):
             continue
         tail = decl[pm.end():decl.find("`", pm.end()) if "`" in decl[pm.end():] else len(decl)]
         km = KIND.search(tail)
@@ -147,6 +237,14 @@ def file_kinds(section: str) -> list[tuple[str, str]]:
 
 
 LABEL = re.compile(r"^\*\*`([^`]+)`\*\*")
+
+# A `**`path`**` label above a code block, wherever it appears in a section.
+LABEL_ANY = re.compile(r"\*\*`([^`]+)`\*\*")
+
+
+def count_path_labels(text: str) -> int:
+    """How many `**`path`**` block labels a section carries."""
+    return sum(1 for m in LABEL_ANY.finditer(text) if looks_like_path(m.group(1)))
 
 
 def file_paths(section: str) -> list[str]:

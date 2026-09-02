@@ -35,11 +35,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
-    FILE_DECL,
-    KIND,
     LABEL,
     file_kinds,
-    file_paths,
+    parse_mode,
     repo_root,
     resolve_feature_dir,
     scan,
@@ -51,11 +49,15 @@ GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
     GREEN = YELLOW = RED = CYAN = NC = ""
 
-SCRIPT_VERSION = "1.0.0"
+SCRIPT_VERSION = "1.2.0"
 
-# Build output and vendored dependencies are regenerated, never authored, so copying
-# them only slows the run down; .git would make the copy look like a second checkout.
-SKIP_DIRS = {".git", "build", "target", "node_modules", "__pycache__", "out", "dist", ".venv", ".gradle"}
+# Regenerated, never authored, so copying them only slows the run down; .git would make
+# the copy look like a second checkout. These names mean the same thing at any depth.
+SKIP_ANYWHERE = {".git", "node_modules", "__pycache__", ".venv", ".gradle"}
+# These are build output at the root of a project and ordinary package names below it.
+# Matching them at any depth dropped `src/com/example/build/` from the copy, and --build
+# then failed with "cannot find symbol" while the report blamed the blueprint.
+SKIP_AT_ROOT = {"build", "target", "out", "dist"}
 
 results: list[tuple[str, str, str]] = []  # (status, name, evidence)
 
@@ -104,14 +106,23 @@ class AlreadyApplied(Exception):
 def replace_once(path: str, before: str, after: str) -> None:
     if not os.path.isfile(path):
         raise Defect(f"{rel(path)}: Before block targets a file that does not exist")
-    text = open(path, encoding="utf-8", errors="replace").read()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+
+    candidates = [(before, after)]
     # The fence contributes the block's final newline; the quoted region may sit at the
-    # end of a file that has none. Dropping that one newline is fence bookkeeping, not
-    # a loosened match — every other character still has to be there verbatim.
-    for b, a in ((before, after), (before[:-1], after[:-1])):
+    # end of a file that has none. That end-of-file case is the whole justification, so
+    # it is the whole allowance: dropping the newline anywhere else un-anchors the block
+    # from a line boundary, and `    val fee = 0` then matches inside `    val fee = 0L`
+    # and writes `    val fee = feeOf(x)L` while reporting the task applied.
+    if before.endswith("\n") and text.endswith(before[:-1]):
+        candidates.append((before[:-1], after[:-1] if after.endswith("\n") else after))
+
+    for b, a in candidates:
         n = text.count(b)
         if n == 1:
-            open(path, "w", encoding="utf-8").write(text.replace(b, a, 1))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text.replace(b, a, 1))
             return
         if n > 1:
             raise Defect(f"{rel(path)}: Before block matches {n} places — the anchor is ambiguous")
@@ -155,7 +166,11 @@ def rel(path: str) -> str:
 
 def apply_task(tree: str, section: str) -> tuple[str, int]:
     """Apply one task section to the copied tree. Returns (note, blocks consumed)."""
-    kinds = dict(file_kinds(section))
+    # A path declared twice keeps its FIRST kind: `(new)` then `(modify)` is a
+    # create-then-edit narrative, and taking the last left the file unwritten.
+    kinds: dict[str, str] = {}
+    for _p, _k in file_kinds(section):
+        kinds.setdefault(_p, _k)
     paths = list(kinds)
     if not paths:
         return "no file declared", 0
@@ -264,10 +279,17 @@ def gitignored_dirs(root: str) -> set[str]:
 
 
 def copy_tree(root: str) -> str:
-    skip = SKIP_DIRS | gitignored_dirs(root)
+    # A bare name in .gitignore matches at any depth, which is how git reads it too.
+    anywhere = SKIP_ANYWHERE | gitignored_dirs(root)
+    real_root = os.path.realpath(root)
     dest = tempfile.mkdtemp(prefix="blueprint-apply-")
-    shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=False,
-                    ignore=lambda _d, names: [n for n in names if n in skip])
+
+    def ignore(directory: str, names: list[str]) -> list[str]:
+        drop = anywhere | SKIP_AT_ROOT if os.path.realpath(directory) == real_root else anywhere
+        # Directories only. A source file named `dist` or `out` is authored content.
+        return [n for n in names if n in drop and os.path.isdir(os.path.join(directory, n))]
+
+    shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=False, ignore=ignore)
     return dest
 
 
@@ -294,10 +316,24 @@ def build_command(tree: str, blueprint: str) -> str | None:
     return None
 
 
+BUILD_TIMEOUT = 900
+
+
 def run_build(tree: str, cmd: str) -> int:
     print(f"\n{CYAN}=== Build ==={NC}")
+    # The command can come from the blueprint's own **Build**: line, so it is shown
+    # before it runs — this is a shell command out of a generated document.
     print(f"  $ {cmd}")
-    proc = subprocess.run(cmd, shell=True, cwd=tree, capture_output=True, text=True)
+    print(f"  (in {tree}, limit {BUILD_TIMEOUT}s)")
+    try:
+        proc = subprocess.run(
+            cmd, shell=True, cwd=tree, capture_output=True, text=True, timeout=BUILD_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        # A build that hangs is a failed build. Without a limit the applier waits for
+        # ever on exactly the code it exists to be suspicious of.
+        record("fail", f"build did not finish within {BUILD_TIMEOUT}s", cmd)
+        return 1
     tail = (proc.stdout + proc.stderr).rstrip().split("\n")[-20:]
     record(
         "pass" if proc.returncode == 0 else "fail",
@@ -330,11 +366,12 @@ def main() -> int:
 
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
-    mode_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**mode**:")), "")
-    mode = (mode_line.split(":", 1)[1].strip().split()[0].lower() if ":" in mode_line else "unknown")
-    print(f"Mode: {mode} | {len(tasks)} task sections")
+    print(f"Mode: {parse_mode(bp)} | {len(tasks)} task sections")
 
-    _tree = tree = copy_tree(root)
+    # realpath: on macOS mkdtemp returns /var/... and inside() resolves to /private/var/...,
+    # so an unresolved _tree made every Defect message a six-level ../ chain.
+    tree = copy_tree(root)
+    _tree = os.path.realpath(tree)
     print(f"Tree: {tree}\n")
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
@@ -377,7 +414,10 @@ def main() -> int:
         rc = 1 if failed else 0
         if strict_anchors and (unanchored_tasks or applied_tasks == 0):
             rc = 1
-        if do_build:
+        if do_build and failed:
+            print(f"\n{YELLOW}Build skipped — {len(failed)} task(s) did not apply, so a build here"
+                  f" would report the applier's damage, not the blueprint's.{NC}")
+        elif do_build:
             cmd = build_command(tree, bp)
             if cmd is None:
                 print(f"\n{YELLOW}WARN: no build command declared and none recognised — build skipped.{NC}")

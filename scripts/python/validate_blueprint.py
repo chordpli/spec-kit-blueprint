@@ -19,12 +19,26 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
+    code_blocks,
+    count_path_labels,
     file_kinds,
     file_paths,
+    parse_mode,
     repo_root,
     resolve_feature_dir,
     split_tasks,
     strip_quoted,
+)
+
+# Both the identical-pair check and the dropped-line check read the same pairs. The gap
+# between the two blocks may not contain another **Before**: with a plain `.*?` a
+# generator that emitted Before(A), Before(B), After(C) paired A with C — a diff that is
+# not in the document — and never reported the dangling Before at all.
+BEFORE_AFTER_RE = re.compile(
+    r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```"
+    r"(?:(?!\*\*Before\*\*)[\s\S])*?"
+    r"\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```",
+    re.S,
 )
 
 GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0;36m", "\033[0m"
@@ -56,10 +70,26 @@ def code_lines(block: str) -> list[str]:
     out, in_doc = [], False
     for ln in block.split(chr(10)):
         t = ln.strip()
-        if t.startswith(('"""', "'''")) or t.endswith(('"""', "'''")):
-            in_doc = not in_doc
+        if in_doc:
+            if '"""' in t or "'''" in t or t.endswith("*/"):
+                in_doc = False
             continue
-        if in_doc or t.startswith(("#", "//", "*", "/*")):
+        if t.startswith(("#", "//")):
+            continue
+        if t.startswith(("/*", "*")):
+            # A `/* ... */` that does not close on its own line runs on; a `*`
+            # continuation line is already inside one.
+            if t.startswith("/*") and not t.endswith("*/"):
+                in_doc = True
+            continue
+        if t.startswith(('"""', "'''")):
+            quote = t[:3]
+            # A one-line docstring opens and closes on the same line. Toggling on it
+            # left the flag stuck for the rest of the block, so every line after the
+            # commonest Python docstring form went unread and guide mode's one
+            # mechanically enforced promise never fired.
+            if not (len(t) > 3 and t.endswith(quote)):
+                in_doc = True
             continue
         out.append(ln)
     return out
@@ -86,10 +116,19 @@ def main() -> int:
         return 1
 
     bp = open(bp_path, encoding="utf-8", errors="replace").read()
-    sections = dict(split_tasks(bp))
-    mode_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**mode**:")), "")
-    mode_tokens = mode_line.split(":", 1)[1].split() if ":" in mode_line else []
-    mode = mode_tokens[0].lower() if mode_tokens else "unknown"
+    ordered_sections = split_tasks(bp)
+    # A blueprint that emits `### T001` twice is exactly what check [1] exists to
+    # catch, and dict() kept only the last — so the first went unchecked by every
+    # check below and the section count printed one too few. Merge instead.
+    sections: dict[str, str] = {}
+    duplicate_ids: list[str] = []
+    for _tid, _sec in ordered_sections:
+        if _tid in sections:
+            duplicate_ids.append(_tid)
+            sections[_tid] += chr(10) + _sec
+        else:
+            sections[_tid] = _sec
+    mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(bp.splitlines())} lines | {len(sections)} task sections\n")
 
     # 1. Coverage — every task id in tasks.md reaches the blueprint
@@ -116,6 +155,14 @@ def main() -> int:
     else:
         record("warn", "tasks.md not found — coverage not checked")
 
+    if duplicate_ids:
+        record(
+            "fail",
+            "the same task id has more than one section",
+            ", ".join(sorted(set(duplicate_ids)))
+            + "\none task = one id: give each its own heading, or merge them into one",
+        )
+
     # 2. Rationale — every task states why it looks the way it does
     print(f"\n{CYAN}[2] Rationale (Why){NC}")
     no_why = sorted(tid for tid, sec in sections.items() if "**Why**" not in sec)
@@ -141,8 +188,16 @@ def main() -> int:
                 lengths[rel] = len(open(path, encoding="utf-8", errors="replace").read().splitlines())
         if lengths:
             shortest = min(lengths.values())
-            for bm in re.finditer(r"\*\*Before\*\*[^\n]*?\blines?[^\d]{0,4}(\d+)", sec):
-                n = int(bm.group(1))
+            # Both ends of a range. Capturing only the first number meant
+            # `(lines 40-500)` against a 50-line file passed on the 40.
+            cites = []
+            for bm in re.finditer(
+                r"\*\*Before\*\*[^\n]*?\blines?[^\d]{0,4}(\d+)(?:\s*[-\u2013]\s*(\d+))?", sec
+            ):
+                cites.append(int(bm.group(1)))
+                if bm.group(2):
+                    cites.append(int(bm.group(2)))
+            for n in cites:
                 # A Before block does not say which of the task's files it quotes, so a
                 # citation is out of range only when it exceeds every candidate.
                 if n > max(lengths.values()):
@@ -152,9 +207,7 @@ def main() -> int:
                 elif n > shortest and len(lengths) > 1:
                     over = [f"{f} ({ln})" for f, ln in sorted(lengths.items()) if n > ln]
                     ambiguous.append(f"{tid}: line {n} is past the end of {', '.join(over)}")
-        for before, after in re.findall(
-            r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```.*?\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```", sec, re.S
-        ):
+        for before, after in BEFORE_AFTER_RE.findall(sec):
             if before.strip() == after.strip():
                 identical.append(tid)
     if out_of_range:
@@ -167,6 +220,20 @@ def main() -> int:
             "a Before citation is out of range for some of its task's files",
             "\n".join(ambiguous[:6]) + "\nname the file the block quotes so the reference can be checked",
         )
+    dangling = [
+        tid
+        for tid, sec in sections.items()
+        if len(re.findall(r"^\*\*Before\*\*", sec, re.M)) > len(BEFORE_AFTER_RE.findall(sec))
+    ]
+    if dangling:
+        record(
+            "fail",
+            "a **Before** block has no **After** after it",
+            ", ".join(sorted(dangling)) + "\nthe applier refuses these; give every Before its After",
+        )
+    else:
+        record("pass", "every Before block is followed by its After")
+
     if identical:
         record(
             "fail",
@@ -177,44 +244,48 @@ def main() -> int:
         record("pass", "every After differs from its Before")
 
     # A Before block quotes real lines so the reader can find the spot, and applying the
-    # pair replaces that whole region — so an anchor at its edges that the After does not
-    # reproduce is deleted from the file, usually a brace or a doc-comment opener the task
-    # never meant to touch, and the build breaks somewhere else entirely.
+    # pair replaces that whole region — so a structural line the Before quotes and the
+    # After does not return is deleted from the file, usually a brace or a doc-comment
+    # delimiter the task never meant to touch, and the build breaks somewhere else.
     #
-    # Only the edges are checked. Interior lines are what the task is there to change, and
-    # comparing those reports every legitimate edit. Position matters too: an identical
-    # token elsewhere in the After is not the one that was dropped.
-    STRUCTURAL = re.compile(r"^(?:[)}\]]+[;,]?|/\*\*|\*/|\{|\)\s*[;{]?)$")
-
-    def edge_anchors(block: str) -> tuple[list[str], list[str]]:
-        lines = [ln.strip() for ln in block.split("\n") if ln.strip()]
-        return lines[:2], lines[-3:]
+    # Counted, not positioned. Two earlier versions compared head and tail windows and
+    # both were wrong in both directions at once: a two-line Before put its closing brace
+    # in the opening window and failed a correct diff, while a dropped `/**` four lines
+    # in fell between the windows and passed. Where a line sits does not matter; whether
+    # it survives does.
+    #
+    # Closers only — an opener is followed by the body that identifies it, but a bare
+    # closer carries no context and is what a lossy transcription drops.
+    STRUCTURAL = re.compile(
+        r"^(?:[)}\]]+[;,]?"          # C family: } ) ] and runs of them
+        r"|/\*\*|\*/"                # block-comment delimiters
+        r"|\)\s*[;{]?"               # ); ) {
+        r"|end|fi|esac|done"         # Ruby, shell
+        r"|</[A-Za-z][-A-Za-z0-9]*>"  # closing tag
+        r")$"
+    )
 
     lossy = []
     for tid, sec in sections.items():
-        for before, after in re.findall(
-            r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```.*?\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```", sec, re.S
-        ):
-            b_head, b_tail = edge_anchors(before)
+        for before, after in BEFORE_AFTER_RE.findall(sec):
+            b_lines = [ln.strip() for ln in before.split("\n") if ln.strip()]
             a_lines = [ln.strip() for ln in after.split("\n") if ln.strip()]
-            # Windows must not overlap, or a `}` at the top of a short After satisfies
-            # the closing check and the deletion it was written to catch passes.
-            edge = max(1, min(5, len(a_lines) // 2))
-            a_head, a_tail = a_lines[:edge], a_lines[-edge:]
-            for anchors, region, where in ((b_head, a_head, "opening"), (b_tail, a_tail, "closing")):
-                for t in anchors:
-                    if not STRUCTURAL.match(t) or t in region:
-                        continue
-                    lossy.append(f"{tid}: Before's {where} anchor {t!r} is not in the After's {where} lines")
-                    break
+            for tok in sorted({ln for ln in b_lines if STRUCTURAL.match(ln)}):
+                dropped = b_lines.count(tok) - a_lines.count(tok)
+                if dropped > 0:
+                    lossy.append(
+                        f"{tid}: Before quotes {tok!r} {b_lines.count(tok)}x, "
+                        f"After returns it {a_lines.count(tok)}x"
+                    )
     if lossy:
         record(
-            "fail",
-            "Before quotes an edge anchor the After does not return — applying it deletes that line",
-            "\n".join(lossy[:6]),
+            "warn",
+            "a Before quotes a structural line the After does not return — applying it deletes that line",
+            "\n".join(lossy[:6])
+            + "\nintended if the task removes that block; otherwise the hunk is lossy and the build breaks elsewhere",
         )
     else:
-        record("pass", "no Before/After pair silently drops an edge anchor")
+        record("pass", "no Before/After pair drops a structural line")
 
     # A modify task's code has to say where it goes. Prose like "append this at the end of
     # the file" reads fine and is not a position, so the applier cannot place it — better to
@@ -226,11 +297,11 @@ def main() -> int:
             continue
         if re.search(r"\*\*Replace entire file\*\*", sec):
             continue
-        blocks = len(re.findall(r"^```[a-zA-Z]", sec, re.M))
+        blocks = len([b for b in code_blocks(sec) if b[0]])
         anchored = len(re.findall(r"\*\*Before\*\*[^\n]*\n+```", sec)) * 2
         # A task may create new files and edit an existing one in the same breath. A block
         # introduced by its own path label is that whole new file, and has nothing to anchor to.
-        labelled_new = len(re.findall(r"\*\*`[^`]+\.[A-Za-z0-9]{1,10}`\*\*", sec))
+        labelled_new = count_path_labels(sec)
         if blocks - labelled_new > anchored:
             unanchored.append(f"{tid}: {blocks - labelled_new - anchored} block(s) with no Before/After or Replace marker")
     if unanchored:
@@ -248,11 +319,11 @@ def main() -> int:
     for tid, sec in sections.items():
         paths = file_paths(sec)
         authored = strip_quoted(sec)
-        blocks = len(re.findall(r"^```[a-zA-Z]", authored, re.M))
+        blocks = len([b for b in code_blocks(authored) if b[0]])
         if len(paths) > 1 and blocks > 1:
             # A label may be followed by anything — ":", " (new):", " — **Replace entire
             # file**". Requiring a colon counted four labelled blocks as one.
-            labels = len(re.findall(r"\*\*`[^`]+\.[A-Za-z0-9]{1,10}`\*\*", authored))
+            labels = count_path_labels(authored)
             if labels < blocks:
                 unlabeled.append(f"{tid}: {len(paths)} files, {blocks} blocks, {labels} labeled")
     if unlabeled:
@@ -268,7 +339,7 @@ def main() -> int:
     print(f"\n{CYAN}[5] Placeholder content{NC}")
     ellipsis = []
     for tid, sec in sections.items():
-        for blk in re.findall(r"```\w*\n(.*?)```", strip_quoted(sec), re.S):
+        for blk in [c for _i, c in code_blocks(strip_quoted(sec))]:
             for ln in blk.split("\n"):
                 if re.search(r"(//|#|/\*)\s*\.\.\.", ln):
                     ellipsis.append(f"{tid}: {ln.strip()[:60]}")
@@ -280,7 +351,7 @@ def main() -> int:
     if mode in ("doc-only", "scaffold"):
         stubs = []
         for tid, sec in sections.items():
-            for blk in re.findall(r"```\w*\n(.*?)```", strip_quoted(sec), re.S):
+            for blk in [c for _i, c in code_blocks(strip_quoted(sec))]:
                 if re.search(r"\b(TODO|FIXME|HACK|XXX)\b", blk):
                     stubs.append(tid)
         if stubs:
@@ -297,13 +368,14 @@ def main() -> int:
     #     read as compliant. Control flow inside an authored block is the tell — a
     #     signature and a not-implemented marker need none of it.
     if mode.startswith("guide"):
+        # Guide modes only — in a full-code mode the numbering skips from [5] to [7].
         print(f"\n{CYAN}[6] Guide-mode bodies{NC}")
         CONTROL = re.compile(
             r"^\s*(if|for|while|switch|when|elif|else\s+if|do|try|catch|except|match)\b[\s({:]"
         )
         smuggled = []
         for tid, sec in sections.items():
-            for blk in re.findall(r"```\w*\n(.*?)```", strip_quoted(sec), re.S):
+            for blk in [c for _i, c in code_blocks(strip_quoted(sec))]:
                 if re.search(r"TODO\(|NotImplementedError|UnsupportedOperationException|fatalError\(|todo!\(|unimplemented!\(", blk):
                     # A block that still carries its marker is a skeleton; a branch beside
                     # the marker is a hint the author started writing the body.
@@ -339,7 +411,9 @@ def main() -> int:
     if not prev:
         record("pass", "no committed version to compare against")
     else:
-        prev_sections = dict(split_tasks(prev))
+        prev_sections: dict[str, str] = {}
+        for _tid, _sec in split_tasks(prev):
+            prev_sections[_tid] = prev_sections.get(_tid, '') + _sec
         def stamp(text: str) -> str:
             # Only the artifact hashes. The line ends with "| HEAD {sha}", which moves on
             # any unrelated commit and would excuse a full rewrite.
@@ -366,7 +440,7 @@ def main() -> int:
                 ", ".join(rewritten[:12]) if len(rewritten) <= 12 else "",
             )
 
-    # 7. Staleness — the header records what the blueprint was built from, so drift is a
+    # 8. Staleness — the header records what the blueprint was built from, so drift is a
     #    fact to check rather than something everyone assumes away.
     print(f"\n{CYAN}[8] Freshness{NC}")
     src_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**sources**")), "")
@@ -377,9 +451,14 @@ def main() -> int:
 
         stale, unknown = [], []
         for name, want in re.findall(r"([\w.\-/]+\.\w+)@([0-9a-f]{6,64})", src_line):
-            path = os.path.join(feature_dir, os.path.basename(name))
+            # The stamp records a repo-relative path; resolve it as one. Matching the
+            # basename inside feature_dir first let an unrelated same-named file shadow
+            # the real source and report a byte-identical artifact as changed.
+            path = os.path.join(root, name)
             if not os.path.isfile(path):
-                path = os.path.join(root, name)
+                path = os.path.join(feature_dir, name)
+            if not os.path.isfile(path):
+                path = os.path.join(feature_dir, os.path.basename(name))
             if not os.path.isfile(path):
                 unknown.append(name)
                 continue
@@ -397,7 +476,7 @@ def main() -> int:
         else:
             record("pass", "every stamped source artifact still matches")
 
-    # 7. Cited requirements are reproduced, not just named. A task header pointing at
+    # 9. Cited requirements are reproduced, not just named. A task header pointing at
     #    "FR-002" is useless to a reader working from this document alone if FR-002's text
     #    lives only in spec.md — the rule exists, but nothing enforced it until here.
     print(f"\n{CYAN}[9] Cited requirements reproduced{NC}")
@@ -428,7 +507,7 @@ def main() -> int:
     else:
         record("pass", f"all {len(cited)} cited requirement ids are stated in the document")
 
-    # 7. Open questions — not pass/fail, but a blocked task is the thing a reader
+    # 10. Open questions — not pass/fail, but a blocked task is the thing a reader
     #    most needs to see before they start typing.
     # Close at a heading of the same depth or shallower; `^##\s` let a `### Open
     # Questions` swallow every following `###` section to the end of the document.
