@@ -7,7 +7,7 @@ carries its rationale, and whether its claims about the working tree hold.
 
 These are format-level checks, so they apply to any language or project.
 
-Usage: python3 validate_blueprint.py [feature-dir] [--quiet]
+Usage: python3 validate_blueprint.py [feature-dir]
   feature-dir: specs/{feature}/ (default: auto-detect from the current branch)
 """
 from __future__ import annotations
@@ -45,6 +45,26 @@ def record(status: str, name: str, evidence: str = "") -> None:
             print(f"      {line}")
 
 
+
+def code_lines(block: str) -> list[str]:
+    """Lines of a code block that are code — comments and doc comments dropped.
+
+    Prose describes control flow constantly ("if the balance is insufficient…"),
+    and a guide skeleton's whole job is to carry that prose in its marker and its
+    doc comment. Reading those as body logic flags the healthiest skeletons.
+    """
+    out, in_doc = [], False
+    for ln in block.split(chr(10)):
+        t = ln.strip()
+        if t.startswith(('"""', "'''")) or t.endswith(('"""', "'''")):
+            in_doc = not in_doc
+            continue
+        if in_doc or t.startswith(("#", "//", "*", "/*")):
+            continue
+        out.append(ln)
+    return out
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     root = repo_root()
@@ -68,7 +88,8 @@ def main() -> int:
     bp = open(bp_path, encoding="utf-8", errors="replace").read()
     sections = dict(split_tasks(bp))
     mode_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**mode**:")), "")
-    mode = (mode_line.split(":", 1)[1].strip().split()[0].lower() if ":" in mode_line else "unknown")
+    mode_tokens = mode_line.split(":", 1)[1].split() if ":" in mode_line else []
+    mode = mode_tokens[0].lower() if mode_tokens else "unknown"
     print(f"Mode: {mode} | {len(bp.splitlines())} lines | {len(sections)} task sections\n")
 
     # 1. Coverage — every task id in tasks.md reaches the blueprint
@@ -76,7 +97,15 @@ def main() -> int:
     if os.path.isfile(tasks_path):
         tasks_text = open(tasks_path, encoding="utf-8", errors="replace").read()
         declared = set(re.findall(r"^\s*-\s*\[[ xX]\]\s*(T\d+)\b", tasks_text, re.M))
-        present = set(sections) | set(re.findall(r"\b(T\d+)\b", bp))
+        # A checklist row and a "Dependencies: T017" mention are not content. Counting
+        # every T-id anywhere made this check unfailable — the template requires a
+        # checklist listing all of them.
+        precompleted = set()
+        for m in re.finditer(r"^\|[^\n|]*\b(T\d+)\b[^\n]*\|", bp, re.M):
+            line = m.group(0)
+            if re.search(r"already complete|pre-?completed|사전 완료|이미 완료", line, re.I):
+                precompleted.add(m.group(1))
+        present = set(sections) | precompleted
         missing = sorted(declared - present)
         if not declared:
             record("warn", "no task ids found in tasks.md (check its format)")
@@ -168,7 +197,10 @@ def main() -> int:
         ):
             b_head, b_tail = edge_anchors(before)
             a_lines = [ln.strip() for ln in after.split("\n") if ln.strip()]
-            a_head, a_tail = a_lines[:5], a_lines[-5:]
+            # Windows must not overlap, or a `}` at the top of a short After satisfies
+            # the closing check and the deletion it was written to catch passes.
+            edge = max(1, min(5, len(a_lines) // 2))
+            a_head, a_tail = a_lines[:edge], a_lines[-edge:]
             for anchors, region, where in ((b_head, a_head, "opening"), (b_tail, a_tail, "closing")):
                 for t in anchors:
                     if not STRUCTURAL.match(t) or t in region:
@@ -189,7 +221,7 @@ def main() -> int:
     # hear that here than after a build fails.
     unanchored = []
     for tid, sec in sections.items():
-        kinds = re.findall(r"`[^`]+`\s*\((new|modify|delete)[^)]*\)", sec)
+        kinds = [k for _, k in file_kinds(sec)]
         if "modify" not in kinds:
             continue
         if re.search(r"\*\*Replace entire file\*\*", sec):
@@ -198,7 +230,7 @@ def main() -> int:
         anchored = len(re.findall(r"\*\*Before\*\*[^\n]*\n+```", sec)) * 2
         # A task may create new files and edit an existing one in the same breath. A block
         # introduced by its own path label is that whole new file, and has nothing to anchor to.
-        labelled_new = len(re.findall(r"\*\*`[^`]+`\*\*[^\n]*:\s*\n+```", sec))
+        labelled_new = len(re.findall(r"\*\*`[^`]+\.[A-Za-z0-9]{1,10}`\*\*", sec))
         if blocks - labelled_new > anchored:
             unanchored.append(f"{tid}: {blocks - labelled_new - anchored} block(s) with no Before/After or Replace marker")
     if unanchored:
@@ -220,7 +252,7 @@ def main() -> int:
         if len(paths) > 1 and blocks > 1:
             # A label may be followed by anything — ":", " (new):", " — **Replace entire
             # file**". Requiring a colon counted four labelled blocks as one.
-            labels = len(re.findall(r"\*\*`[^`]+\.[A-Za-z0-9]{1,6}`\*\*", authored))
+            labels = len(re.findall(r"\*\*`[^`]+\.[A-Za-z0-9]{1,10}`\*\*", authored))
             if labels < blocks:
                 unlabeled.append(f"{tid}: {len(paths)} files, {blocks} blocks, {labels} labeled")
     if unlabeled:
@@ -275,11 +307,11 @@ def main() -> int:
                 if re.search(r"TODO\(|NotImplementedError|UnsupportedOperationException|fatalError\(|todo!\(|unimplemented!\(", blk):
                     # A block that still carries its marker is a skeleton; a branch beside
                     # the marker is a hint the author started writing the body.
-                    hits = [ln.strip() for ln in blk.split("\n") if CONTROL.match(ln)]
+                    hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln)]
                     if len(hits) >= 2:
                         smuggled.append(f"{tid}: {len(hits)} control-flow lines beside a not-implemented marker")
                     continue
-                hits = [ln.strip() for ln in blk.split("\n") if CONTROL.match(ln)]
+                hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln)]
                 if len(hits) >= 3:
                     smuggled.append(f"{tid}: {len(hits)} control-flow lines in a block with no marker — {hits[0][:50]!r}")
         if smuggled:
@@ -309,8 +341,10 @@ def main() -> int:
     else:
         prev_sections = dict(split_tasks(prev))
         def stamp(text: str) -> str:
+            # Only the artifact hashes. The line ends with "| HEAD {sha}", which moves on
+            # any unrelated commit and would excuse a full rewrite.
             ln = next((l for l in text.split("\n") if l.lower().startswith("**sources**")), "")
-            return ln.strip()
+            return " ".join(sorted(re.findall(r"[\w.\-/]+@[0-9a-f]{6,64}", ln)))
 
         rewritten = sorted(
             tid for tid, sec in sections.items()
@@ -396,7 +430,16 @@ def main() -> int:
 
     # 7. Open questions — not pass/fail, but a blocked task is the thing a reader
     #    most needs to see before they start typing.
-    oq = re.search(r"^##+\s*Open Questions\b(.*?)(?=^##\s|\Z)", bp, re.M | re.S)
+    # Close at a heading of the same depth or shallower; `^##\s` let a `### Open
+    # Questions` swallow every following `###` section to the end of the document.
+    oq = re.search(
+        r"^(?P<h>#{2,})\s*Open Questions\b(?P<body>.*?)(?=^#{1,%d}\s|\Z)" % 6, bp, re.M | re.S
+    )
+    if oq:
+        depth = len(oq.group("h"))
+        oq = re.search(
+            r"^#{%d}\s*Open Questions\b(.*?)(?=^#{1,%d}\s|\Z)" % (depth, depth), bp, re.M | re.S
+        )
     if oq:
         body = oq.group(1)
         # Two shapes in the wild: a table of rows, or a heading per question.

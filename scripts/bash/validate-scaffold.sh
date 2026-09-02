@@ -151,13 +151,14 @@ while IFS= read -r line; do
             token_kind="${BASH_REMATCH[3]}"
             rest="${BASH_REMATCH[4]}"
             if [[ -n "$token_path" ]]; then
-                if [[ "$token_path" == */* ]] && [[ "$token_path" == *.* ]]; then
+                # A file at the repository root has no slash and is still a file.
+                if [[ "$token_path" == *.* ]]; then
                     pending+=("$token_path")
                 fi
             else
-                # a (kind) closes the run of paths collected since the last one
-                # "new", "new — moved from …", "new (renamed)" all create a file here.
-                if [[ "$token_kind" == new* ]]; then
+                # a (kind) closes the run of paths collected since the last one.
+                # "new", "all new", "new — moved from …" all create files here.
+                if [[ "$token_kind" == new* ]] || [[ "$token_kind" == "all new"* ]]; then
                     for pp in "${pending[@]}"; do NEW_FILES+=("$pp"); done
                 fi
                 pending=()

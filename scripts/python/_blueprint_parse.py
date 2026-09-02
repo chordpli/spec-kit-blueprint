@@ -102,7 +102,13 @@ def split_tasks(text: str) -> list[tuple[str, str]]:
     return out
 
 
-FILE_DECL = re.compile(r"\*\*File\*\*:(.*?)(?:\n\s*\n|\n(?=\*\*))", re.S)
+# A declaration runs to the blank line, the next bold label, or the end of the section —
+# and it may not be followed by any of them. Continuation lines are only taken while they
+# look like more of the declaration (a backticked path, a kind, or a separator), so a
+# following sentence that happens to cite a document is not read as a declared file.
+FILE_DECL = re.compile(
+    r"\*\*File\*\*:(?P<decl>[^\n]*(?:\n[^\n\S]*(?:[`,]|\()[^\n]*)*)",
+)
 KIND = re.compile(r"\((?:all\s+)?(new|modify|modified|delete|deleted)\)", re.I)
 
 
@@ -116,7 +122,7 @@ def file_kinds(section: str) -> list[tuple[str, str]]:
     m = FILE_DECL.search(section)
     if not m:
         return []
-    decl = m.group(1)
+    decl = m.group("decl")
     found: list[tuple[str, str | None]] = []
     for pm in re.finditer(r"`([^`]+)`", decl):
         path = pm.group(1)
@@ -126,7 +132,10 @@ def file_kinds(section: str) -> list[tuple[str, str]]:
             continue
         tail = decl[pm.end():decl.find("`", pm.end()) if "`" in decl[pm.end():] else len(decl)]
         km = KIND.search(tail)
-        found.append((path, km.group(1).rstrip("d").lower() if km else None))
+        kind = km.group(1).lower() if km else None
+        # "modified" and "deleted" are the same kinds as "modify" and "delete";
+        # rstrip("d") turned the first into "modifie".
+        found.append((path, {"modified": "modify", "deleted": "delete"}.get(kind, kind)))
     kinds: list[tuple[str, str]] = []
     for i, (path, kind) in enumerate(found):
         if kind is None:

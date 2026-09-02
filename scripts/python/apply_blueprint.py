@@ -125,6 +125,22 @@ def replace_once(path: str, before: str, after: str) -> None:
     raise Defect(f"{rel(path)}: Before block not found verbatim (starts {head!r})")
 
 
+
+def inside(tree: str, path: str) -> str:
+    """Resolve `path` under `tree`, refusing anything that leaves it.
+
+    Paths come out of the blueprint, and `os.path.join(tree, "/etc/passwd")` is
+    `/etc/passwd` — an absolute or `../` target would write to the real filesystem,
+    breaking the one promise this tool makes about not touching your tree. A symlink
+    inside the copy is followed by open(), so the resolved path is checked too.
+    """
+    full = os.path.realpath(os.path.join(tree, path))
+    root = os.path.realpath(tree)
+    if full != root and not full.startswith(root + os.sep):
+        raise Defect(f"{path}: declared path resolves outside the working copy")
+    return full
+
+
 def write_file(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     open(path, "w", encoding="utf-8").write(text)
@@ -192,11 +208,11 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
                 unanchored += 1
                 continue
             if pending in ("before", "after"):
-                target = os.path.join(tree, before_at or "")
+                target = inside(tree, before_at or "")
             elif current is None:
                 raise Defect("multi-file task has a code block before any **`path`** label")
             else:
-                target = os.path.join(tree, current)
+                target = inside(tree, current)
             if pending == "before":
                 before = payload
                 pending = None
@@ -229,7 +245,7 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
         return note, applied
     if unanchored:
         return f"{unanchored} code block(s) with no Before/After or Replace marker", 0
-    return "no code block", 0 if seen == 0 else 0
+    return "no code block", 0
 
 
 # --- Copying and building ---------------------------------------------------------
@@ -250,7 +266,7 @@ def gitignored_dirs(root: str) -> set[str]:
 def copy_tree(root: str) -> str:
     skip = SKIP_DIRS | gitignored_dirs(root)
     dest = tempfile.mkdtemp(prefix="blueprint-apply-")
-    shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=True,
+    shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=False,
                     ignore=lambda _d, names: [n for n in names if n in skip])
     return dest
 

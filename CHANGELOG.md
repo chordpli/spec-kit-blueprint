@@ -25,6 +25,17 @@ explain their choices — and now it checks them.
 
 ### Fixed
 
+- The applier refuses a declared path that resolves outside its throwaway copy, and no longer preserves symlinks into it — an absolute or `../` target in a blueprint could write to the real filesystem, against the one promise the tool makes
+- `(modified)` and `(deleted)` are read as the kinds they are; a `rstrip("d")` turned the first into `modifie`, so a correct blueprint was reported as declaring no modified file
+- A `**File**:` declaration is recognised at the end of a section, and stops before following prose, which was being read as more declared files
+- Task coverage counts task sections and pre-completed rows, not every task id in the document — the checklist the template requires made the check unfailable
+- The dropped-anchor check uses non-overlapping edge windows; in a hunk under ten lines the head and tail windows overlapped and the deletion it exists to catch passed
+- The regeneration check compares only the source hashes, not the `| HEAD` suffix that moves on any unrelated commit
+- The Open Questions section ends at a heading of its own depth instead of swallowing the rest of the document
+- Kind and label parsing in the validator go through the shared module, so `(modified)`, `(all modify)`, labels without a trailing colon, and ten-character extensions all agree with the applier
+- The scaffold validator recognises `(all new)` and repository-root files, and reads paths without word-splitting or glob-expanding them
+- The guide-mode body check ignores comments and doc comments, which describe control flow constantly
+- An empty `**Mode**:` value no longer crashes both Python tools with an IndexError
 - `--require-anchors` makes the applier fail when a task's code is not anchored, or when nothing anchored at all — off by default, because a guide blueprint of pure instructions legitimately applies nothing, and on in CI, where "verified nothing" and "verified everything" must not share an exit code
 - The command spec and manifest describe the checks that actually run; three whole sections and half of a fourth had gone undocumented
 - The scaffold validator no longer special-cases one project's wording for a moved file
