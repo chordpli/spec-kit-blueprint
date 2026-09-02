@@ -135,7 +135,7 @@ The modes are not interchangeable, and a team evaluation of this extension found
 
 Two things worth deciding up front on a team:
 
-- **Feature size.** A ~20-task feature produces roughly 1,600–1,900 lines in the full-code modes, and about a third of that in `guide` — the same 20-task feature came out at 1,612 lines as `doc-only` and 670 as `guide`. A 57-task feature produced 5,517. Past about 30 tasks the document stops being something anyone reads end to end — split the feature instead.
+- **Feature size.** A ~20-task feature produces roughly 1,600–1,900 lines in the full-code modes. `guide` is not shorter by much any more: the reference sections the closure rules require (requirements reproduced, existing APIs, state machines) and the self-contained marker messages are most of the length, and an 18-task guide blueprint came out at 1,385 lines. A 57-task feature produced 5,517. Past about 30 tasks the document stops being something anyone reads end to end — split the feature instead.
 - **Lifetime.** `blueprint.md` describes an intention, and it goes stale the moment implementation diverges. Decide whether it is deleted at merge or kept as a record; an undeleted blueprint from six months ago is a confident, wrong document.
 
 ## Commands

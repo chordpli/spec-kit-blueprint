@@ -40,6 +40,8 @@ Run the prerequisites check from the repository root:
 .specify/scripts/bash/check-prerequisites.sh --json --paths-only
 ```
 
+If that script reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
+
 Parse `FEATURE_DIR` and load `blueprint.md`. Read the `**Mode**:` token from the header — it tells you how much the blueprint dictated, which changes where the questions come from (Step 3). If the header carries a `**Sources**:` line, compare the recorded hashes against the current artifacts; on a mismatch, say so in the report and continue — the questions still stand, but the blueprint they came from is describing an older intention.
 
 Resolve the scope to a concrete task list — Step 2 decides which tasks count as implemented, and what the scope is when the arguments name none; in `upstream` mode Step U1 does, and implementation is not required — then read **the developer's actual files** for those tasks from disk. Every question and every verdict must be grounded in the code as it exists now, not in what the blueprint said it would be.

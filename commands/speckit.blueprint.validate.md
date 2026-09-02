@@ -67,28 +67,36 @@ All three scripts do this themselves when the argument is omitted.
 
 ### Document checks (`validate_blueprint.py`)
 
-Format-level, so they hold for any language. Eight numbered sections, in the order the script runs them:
+Format-level, so they hold for any language. Ten numbered sections, in the order the script runs them (section 6 prints only in the guide modes, so a full-code run goes from [5] to [7]):
 
-1. **Task coverage**: every task id declared in `tasks.md` appears somewhere in the blueprint (missing `tasks.md` is a warning, not a failure)
+1. **Task coverage**: every task id declared in `tasks.md` has a section or a pre-completed row (missing `tasks.md` is a warning, not a failure); the same id with two sections is a failure
 2. **Rationale (Why)**: every task section carries a `**Why**`
-3. **Working-tree claims**, four results:
-   - a line number cited in a `**Before**` label is within the longest file the task declares
+3. **Working-tree claims**:
+   - a line number cited in a `**Before**` label — both ends of a range — is within the file it quotes. The file is the one named on the Before line, else the nearest `**`path`**` label above, else the task's sole `(modify)` file; a `(new)` file is never a candidate, since a hunk cannot edit a file that does not exist yet. A citation past the end of a file that an *earlier task* changes is a warning naming that task, because disk cannot settle it and the applier can; a citation past the end of any other file is a failure
+   - the quoted text is where the number says it is — a Before that says line 2 over text at line 5 is a warning; the applier matches text, but the reader follows the number
+   - every `**Before**` is followed by its `**After**`; a dangling Before is a failure, not a pair with the next task's After
    - every `**After**` differs from its `**Before**` — an identical pair is not a diff
-   - no `**Before**` quotes a structural edge anchor (a closing brace, `/**`, `*/`) that its `**After**` does not return; applying such a pair deletes that line
-   - every `modify` task anchors its code to a position — a code block with no `**Before**`/`**After**` pair, no path label, and no `**Replace entire file**` marker is reported as a warning, because the applier cannot place it
+   - no `**Before**` is abbreviated (`// ... rest of file`); it has to quote the file verbatim or the applier never matches it
+   - no `**Before**` quotes a structural line (a closing brace, `/**`, `*/`, `end`, a closing tag) more times than its `**After**` returns it — a warning, since a task that removes a block legitimately drops one
+   - every task that declares a `(new)` file gives it a code block
+   - every `modify` task anchors its code to a position — a content block with no `**Before**`/`**After**` pair, no path label, and no `**Replace entire file**` marker is a warning, because the applier cannot place it. A block under `**Verification**` is a command, not content, and is not counted
 4. **Multi-file task labels**: a task naming more than one file labels each authored code block with its path
 5. **Placeholder content**: no ellipsis stubs (`// ...`, `# ...`) in any mode; in `doc-only`/`scaffold` modes, additionally no `TODO`/`FIXME`/`HACK`/`XXX` markers in code blocks
-6. **Freshness**: the header's `**Sources**` stamp records each source artifact as `name@hash`; the script re-hashes those files and fails when one has changed since the blueprint was generated. No stamp at all is a warning
-7. **Cited requirements reproduced**: every requirement id cited in a `**Requirements**` line (`FR-`, `NFR-`, `SC-`, `AC-`, `US-`) is also stated somewhere else in the document — a citation alone leaves a reader working from this file unable to look it up
-8. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
+6. **Guide-mode bodies** (guide modes only): a skeleton block that carries three or more control-flow lines beside its marker — comments and docstrings excluded — is reported as body logic the developer was meant to write. A warning: the boundary between a skeleton and an implementation is a judgment, and a body that is one `if` slips past it
+7. **Regeneration**: when the committed `blueprint.md` carries the same `**Sources**` hashes, a task whose section changed anyway is a failure — regeneration keeps unchanged tasks verbatim so the diff stays reviewable
+8. **Freshness**: the header's `**Sources**` stamp records each source artifact as `name@hash`; the script re-hashes those files and fails when one has changed since the blueprint was generated. No stamp at all is a warning
+9. **Cited requirements reproduced**: every requirement id cited in a `**Requirements**` line (`FR-`, `NFR-`, `SC-`, `AC-`, `US-`) is also stated somewhere else in the document — a citation alone leaves a reader working from this file unable to look it up
+10. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
 
-Before/After blocks are stripped before the placeholder and multi-file checks: they quote existing code, not content the blueprint authored.
+Before/After blocks are stripped before the placeholder and multi-file checks: they quote existing code, not content the blueprint authored. The abbreviation check in section 3 is the one check that reads them.
 
 ### Applying the blueprint (`apply_blueprint.py`)
 
 The document checks read the blueprint's shape. This one reads its content: it copies the working tree into a temporary directory, types every task's code into that copy in document order, and — with `--build` — runs the project's build there. A blueprint that claims its code compiles either survives that or it does not.
 
 The copy is a plain recursive copy, not `git worktree add`, so it needs neither a git repo nor a clean index and cannot touch your own tree. It skips `.git`, common build and dependency directories, and any bare directory name listed in `.gitignore`.
+
+The copy starts **without this blueprint's declared-new files**. In `guide scaffold` mode the skeletons are already on disk, and a copy that kept them let the build pass over a task whose block was missing or mislabelled — the skeleton filled the hole and the compiler never saw it. A file the blueprint declares new is a file the blueprint has to supply, so those are removed from the copy before the first task is applied, and the run says how many were.
 
 **How a task is applied**:
 
@@ -115,7 +123,7 @@ The script reads the `**Mode**:` line from `blueprint.md` first, taking only the
 1. **Blueprint Document**: verifies `blueprint.md` exists (a hard exit if not)
 2. **File Existence**: all NEW files declared in the blueprint's `**File**:` lines exist on disk (placeholder/glob paths such as `docs/2026-MM-DD-*.md` are skipped)
 3. **TODO Markers**: service/handler and test files among those NEW files carry a `TODO` or a language-native not-implemented marker (`NotImplementedError`, `TODO(`, `unimplemented!(`, `UnsupportedOperationException`, …), confirming they were scaffolded rather than implemented
-4. **Over-Implementation Detection**: a service or test file with no marker, more than one method and more than 30 lines is suspicious. It **fails** when two-thirds or more of its sibling scaffold files still carry markers — nothing has been implemented yet, so this file was written complete instead of stubbed — and warns otherwise, since a finished file is normal during implementation
+4. **Over-Implementation Detection**: a skeleton file with no marker, more than one method and more than 30 lines is suspicious. Without `--fresh` it is a **warning**, whatever its siblings look like: a finished file is normal during implementation, and with four skeletons the first one finished already looks like "most siblings still marked". With `--fresh` it is a failure, since the caller has said nothing is implemented yet. The skeleton population is every declared-new file whose blueprint block carries a marker, plus anything the basename says is a service or a test — a controller or a scheduler written complete used to escape because its name matched nothing
 
 ## Output
 

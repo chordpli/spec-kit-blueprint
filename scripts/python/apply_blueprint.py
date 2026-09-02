@@ -113,6 +113,19 @@ def replace_once(path: str, before: str, after: str) -> None:
     # the reader hunting for a blueprint bug that is not there.
     if after.strip() and after.strip() in text:
         raise AlreadyApplied(f"{rel(path)}: the After content is already in the file")
+    # Guide mode: the After adds a signature with a marker body, and the developer then
+    # replaces the marker — so after implementation neither the Before nor the After is in
+    # the file, and "not found verbatim" sent the reader hunting for a blueprint bug. If
+    # every line the After ADDS (markers aside) is in the file, the change has landed.
+    added = [
+        ln.strip() for ln in after.split("\n")
+        if ln.strip() and ln.strip() not in before and not re.search(r"\bT\d{3,}:", ln)
+        and re.search(r"[A-Za-z]", ln) and ln.strip() not in ("{", "}", "};", ")", ");")
+    ]
+    if len(added) >= 1 and all(ln in text for ln in added):
+        raise AlreadyApplied(
+            f"{rel(path)}: the lines the After adds are in the file and its markers are not — implemented since"
+        )
     head = before.strip().split("\n")[0][:60]
     raise Defect(f"{rel(path)}: Before block not found verbatim (starts {head!r})")
 
@@ -147,7 +160,7 @@ def write_file(path: str, text: str) -> None:
 
 
 _tree = ""
-# Declared-new files that were already on disk and got overwritten in the copy.
+# Declared-new files that were already on disk and were removed from the copy before applying.
 _overwritten: list[str] = []
 
 
@@ -167,6 +180,13 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
         return "no file declared", 0
     if all(k == "delete" for k in kinds.values()):
         return "delete task", 0
+    # A (modify) path has to be in the tree before anything else is decided. Checked at
+    # the write site, a task whose only block had no marker was reported "unanchored" and
+    # never reached the check — a wrong path with an unlabelled block passed all three
+    # tools with exit 0.
+    for path, kind in kinds.items():
+        if kind == "modify" and not os.path.isfile(inside(tree, path)):
+            raise Defect(f"{path}: declared (modify) but not in the tree — the path is wrong, or the file is new and mislabelled")
 
     def hunk_target(current: str | None) -> str:
         """Which file a **Before**/**After** pair edits.
@@ -198,7 +218,6 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
     before: str | None = None
     before_at: str | None = None
     applied, unanchored, seen, inferred = 0, 0, 0, 0
-    overwritten: list[str] = []
 
     for kind, payload in section_events(section):
         if kind == "label":
@@ -236,15 +255,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
                 pending = None
                 declared = kinds.get(current)
                 exists = os.path.exists(target)
-                if declared == "new" and exists:
-                    # Overwriting is right: in guide-scaffold mode the skeletons are on
-                    # disk before implementation, and typing the blueprint's version over
-                    # them in the COPY is exactly what the compile gate is for. What was
-                    # missing is that it happened silently — after the work is done, the
-                    # same overwrite discards the implementation and the build then
-                    # describes the blueprint rather than the tree.
-                    overwritten.append(rel(target))
-                    _overwritten.append(rel(target))
+                # A (new) target that exists here was written by an earlier task of this
+                # run — the copy started without any of the blueprint's new files.
                 if declared not in ("new", None) and not exists:
                     # A `(modify)` path that is not in the tree is a wrong path in the
                     # blueprint. Creating it from the fragment made a phantom file that
@@ -269,8 +281,6 @@ def apply_task(tree: str, section: str) -> tuple[str, int]:
             note += f"; {inferred} hunk(s) had no path label, resolved to the sole modified file"
         if unanchored:
             note += f"; {unanchored} unanchored block(s) left alone"
-        if overwritten:
-            note += f"; overwrote {len(overwritten)} file(s) already on disk"
         return note, applied
     if unanchored:
         return f"{unanchored} code block(s) with no Before/After or Replace marker", 0
@@ -391,6 +401,26 @@ def main() -> int:
     # so an unresolved _tree made every Defect message a six-level ../ chain.
     tree = copy_tree(root)
     _tree = os.path.realpath(tree)
+
+    # Start from a tree WITHOUT this blueprint's new files. In guide-scaffold mode the
+    # skeletons are already on disk, and a copy that keeps them lets the build pass over a
+    # task whose block is missing or mislabelled — the skeleton fills the hole and the
+    # compiler never sees it. A file the blueprint declares new is a file the blueprint
+    # has to supply; removing it first is what makes the build a test of the document.
+    for _tid, section in tasks:
+        for path, kind in file_kinds(section):
+            if kind != "new" or path in _overwritten:
+                continue
+            try:
+                full = inside(tree, path)
+            except Defect:
+                continue  # reported when the task itself is applied
+            if os.path.isfile(full):
+                os.remove(full)
+                _overwritten.append(path)
+    if _overwritten:
+        print(f"  {YELLOW}{len(_overwritten)} declared-new file(s) were already on disk and were removed from"
+              f" the copy first{NC} — the build tests what the blueprint supplies, not what the tree holds")
     print(f"Tree: {tree}\n")
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
@@ -426,7 +456,7 @@ def main() -> int:
         print(f"\n{CYAN}=== Summary ==={NC}")
         print(f"  applied: {applied_tasks}  skipped: {len(tasks) - applied_tasks - len(failed)}"
               f"  {RED}FAILED{NC}: {len(failed)}"
-              + (f"  {YELLOW}overwrote{NC}: {len(_overwritten)} file(s) already on disk" if _overwritten else ""))
+              + (f"  {YELLOW}replaced{NC}: {len(_overwritten)} declared-new file(s) that were on disk" if _overwritten else ""))
         if unanchored_tasks:
             print(f"  {YELLOW}{len(unanchored_tasks)} task(s) carry code no marker anchors to a"
                   f" position: {', '.join(unanchored_tasks[:10])}{NC}")
@@ -462,10 +492,10 @@ def main() -> int:
         # Still exit 0 — the apply and the build did succeed — but not in green. After
         # the work is done the same overwrite discards it, and a green last line then
         # says the tree is fine when it is the blueprint that was just tested.
-        print(f"\n{YELLOW}Blueprint applied{' and built' if do_build else ''} — over {len(_overwritten)}"
-              f" file(s) that were already on disk.{NC}")
-        print("      If those hold your implementation, this run describes the blueprint, not your tree;")
-        print("      if they are scaffolds, this is the run you wanted.")
+        print(f"\n{YELLOW}Blueprint applied{' and built' if do_build else ''} — from a copy that had"
+              f" {len(_overwritten)} declared-new file(s) removed first.{NC}")
+        print("      If those held your implementation, this run describes the blueprint, not your tree;")
+        print("      if they were scaffolds, this is the run you wanted.")
     else:
         print(f"\n{GREEN}Blueprint applied{' and built' if do_build else ''} cleanly{NC}")
     return rc

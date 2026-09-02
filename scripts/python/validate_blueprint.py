@@ -175,7 +175,7 @@ def main() -> int:
 
     # 3. Before blocks quote something that is actually there
     print(f"\n{CYAN}[3] Working-tree claims{NC}")
-    out_of_range, moved_first, identical, ambiguous = [], [], [], []
+    out_of_range, moved_first, identical, ambiguous, misnumbered = [], [], [], [], []
     # Which task first declares each file. A later task that cites a line past the end of
     # the file on disk may be citing the file as an EARLIER task leaves it — the wiring
     # T006 adds is what T008 edits — and disk cannot confirm or deny that. The applier
@@ -187,7 +187,8 @@ def main() -> int:
         for rel in file_paths(sec):
             first_touch.setdefault(rel, tid)
     for tid, sec in sections.items():
-        declared = file_paths(sec)
+        declared_kinds = dict(file_kinds(sec))
+        declared = list(declared_kinds)
         lengths = {}
         for rel in declared:
             path = os.path.join(root, rel)
@@ -195,6 +196,11 @@ def main() -> int:
                 lengths[rel] = len(open(path, encoding="utf-8", errors="replace").read().splitlines())
         if not lengths:
             continue
+        # A hunk can only edit a file that exists before the task — the same rule the
+        # applier uses to place it. So a Before with no path of its own is measured against
+        # the task's (modify) files, never its (new) ones: a fifteen-line new exception
+        # class was being offered as the file a sixty-line service hunk might be quoting.
+        editable = {f: n for f, n in lengths.items() if declared_kinds.get(f) != "new"} or lengths
         # Each citation is attributed to a file when the document says which: a path
         # named on the Before line itself, else the nearest `**`path`**` label above it.
         # Without that, every declared file was a candidate, and the check told an author
@@ -211,7 +217,27 @@ def main() -> int:
             named = next((f for f in lengths if f"`{f}`" in bm.group(1)), None)
             if named is None:
                 named = next((f for at, f in reversed(labels_at) if at < bm.start()), None)
-            candidates = {named: lengths[named]} if named else lengths
+            if named is None and len(editable) == 1:
+                named = next(iter(editable))
+            candidates = {named: lengths[named]} if named else editable
+            # Where the quoted text actually is. In range is not the same as right: a
+            # Before that says (lines 2-4) over text that sits at 5-7 passed every tool,
+            # because the applier matches text and the range check only had a bound.
+            quoted = None
+            pair_m = re.compile(
+                r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```", re.S
+            ).match(sec, bm.start())
+            if pair_m and named:
+                quoted = pair_m.group(1)
+                try:
+                    text = open(os.path.join(root, named), encoding="utf-8", errors="replace").read()
+                except OSError:
+                    text = ""
+                needle = quoted if quoted in text else quoted.rstrip("\n")
+                if needle and text.count(needle) == 1:
+                    actual = text[: text.index(needle)].count("\n") + 1
+                    if actual != cites[0] and first_touch.get(named) in (None, tid):
+                        misnumbered.append(f"{tid}: Before says line {cites[0]}, the quoted text is at line {actual} of {named}")
             for n in cites:
                 bound = max(candidates.values())
                 if n > bound:
@@ -237,6 +263,12 @@ def main() -> int:
         record("fail", "Before block cites a line past the end of its file", "\n".join(out_of_range[:6]))
     else:
         record("pass", "Before line references are within their files")
+    if misnumbered:
+        record(
+            "warn",
+            "a Before cites a line number that is not where its text is",
+            "\n".join(misnumbered[:6]) + "\nthe applier will still place it; the reader following the number will not",
+        )
     if moved_first:
         record(
             "warn",
@@ -317,6 +349,19 @@ def main() -> int:
     else:
         record("pass", "no Before/After pair drops a structural line")
 
+    # A task that declares a new file has to supply it. The applier removes declared-new
+    # files from its copy before applying, so a missing block is a missing file at build
+    # time — but the document can say so first, with the task id instead of a javac trace.
+    empty_new = []
+    for tid, sec in sections.items():
+        new_paths = [p for p, k in file_kinds(sec) if k == "new"]
+        if new_paths and not code_blocks(sec, content_only=True):
+            empty_new.append(f"{tid}: declares {', '.join(new_paths)} (new) and carries no code block")
+    if empty_new:
+        record("fail", "a task declares a new file and gives it no content", "\n".join(empty_new[:6]))
+    else:
+        record("pass", "every declared-new file has a code block")
+
     # A modify task's code has to say where it goes. Prose like "append this at the end of
     # the file" reads fine and is not a position, so the applier cannot place it — better to
     # hear that here than after a build fails.
@@ -377,6 +422,26 @@ def main() -> int:
         record("fail", "ellipsis placeholder in a code block", "\n".join(ellipsis[:6]))
     else:
         record("pass", "no ellipsis placeholders")
+
+    # A Before is a quotation, and `// ... rest of file` inside one is the abbreviation the
+    # generate rules forbid by name. The check above strips Before/After first — rightly,
+    # they quote existing code — so the abbreviation reached the applier before anyone
+    # said so, and only as "not found verbatim".
+    abbreviated = []
+    for tid, sec in sections.items():
+        for before, _after in BEFORE_AFTER_RE.findall(sec):
+            for ln in before.split("\n"):
+                if re.search(r"(//|#|/\*|--)\s*\.\.\.|\.\.\.\s*(rest|stub|omitted|unchanged|other)", ln, re.I):
+                    abbreviated.append(f"{tid}: {ln.strip()[:60]}")
+                    break
+    if abbreviated:
+        record(
+            "fail",
+            "a Before block is abbreviated — it has to quote the file verbatim",
+            "\n".join(abbreviated[:6]) + "\nthe applier matches the Before text exactly; an abbreviation never matches",
+        )
+    else:
+        record("pass", "no Before block is abbreviated")
 
     if mode in ("doc-only", "scaffold"):
         stubs = []

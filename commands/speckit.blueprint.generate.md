@@ -37,7 +37,7 @@ Examples:
 - `/speckit.blueprint.generate guide` → design-guidance blueprint, bodies left to the developer
 - `/speckit.blueprint.generate guide scaffold` → guide blueprint + skeleton files on disk
 
-**Choosing between full-code and guide**: `doc-only`/`scaffold` are for *reading and transcribing* a finished implementation — maximum review surface before `/speckit.implement`. `guide` is for **learning-first workflows where designing the body logic IS the learning**: the blueprint hands over everything *except* the implementation — the agreed contracts (signatures), the reasons, the invariants, the pitfalls, the references — and the developer writes the logic. If the project's rules say the human writes the business code (a constitution or CLAUDE.md rule), use `guide`.
+**Choosing between full-code and guide**: `doc-only`/`scaffold` are for *reading and transcribing* a finished implementation — maximum review surface before `/speckit.implement`. `guide` is for **learning-first workflows where designing the body logic IS the learning**: the blueprint hands over everything *except* the implementation — the agreed contracts (signatures), the reasons, the invariants, the pitfalls, the references — and the developer writes the logic. Use `guide` when the project's rules say the human writes the business code (a constitution or CLAUDE.md rule), **or when the user asks for it** — the README recommends it for anyone who wants to design the bodies, and a repository with no such rule is not a reason to hand over finished code to someone who asked to write it.
 
 > **Want full implementation?** Run `/speckit.implement` after reviewing the blueprint. The full-code blueprint is designed so that `/speckit.implement` can work entirely from `blueprint.md`. (A guide-mode blueprint is deliberately NOT sufficient for `/speckit.implement` — the bodies are the developer's work.)
 
@@ -50,6 +50,8 @@ Run the prerequisites check from the repository root:
 ```bash
 .specify/scripts/bash/check-prerequisites.sh --json --paths-only
 ```
+
+If that script reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
 
 Parse `FEATURE_DIR` from the output. Then load the following spec artifacts from that directory:
 

@@ -33,6 +33,8 @@ Run the prerequisites check from the repository root:
 .specify/scripts/bash/check-prerequisites.sh --json --paths-only
 ```
 
+If that script reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
+
 Parse `FEATURE_DIR` and load `blueprint.md` from it. If `blueprint.md` is missing, abort with: "No blueprint.md found — run `/speckit.blueprint.generate` first."
 
 The scan scope is **the files the blueprint touches**: every NEW and MODIFIED file listed in the blueprint. Never scan the whole repository — pre-existing comments outside the feature are not this command's business.

@@ -19,11 +19,13 @@
 
 set -eo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Colour only when someone is looking. The Python tools already do this; a CI log with
+# escape codes in it is the kind of thing a reviewer notices before anything else.
+if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+else
+    RED=''; GREEN=''; YELLOW=''; CYAN=''; NC=''
+fi
 
 SCRIPT_VERSION="1.2.0"
 
@@ -299,10 +301,42 @@ if [[ "$SCAFFOLD_EXPECTED" == false ]]; then
     exit 0
 fi
 
+# Which declared-new files does the BLUEPRINT give a not-implemented marker? Those are
+# the skeletons, whatever they are called. The basename guess below (`*service*`,
+# `*test*`) was the only test before, and a controller or a scheduler written complete
+# at scaffold time was never looked at because its name matched nothing.
+# Bracketed parens, not escaped: awk -v strips a backslash, and `fatalError\(` reached the
+# regex as `fatalError(` — an unbalanced group that aborted the scan.
+MARKER_ERE='TODO|NotImplemented|not_implemented|UnsupportedOperationException|NotImplementedException|fatalError[(]|todo![(]|unimplemented![(]|panic[(].TODO|panic[(].not implemented'
+BLUEPRINT_MARKER_FILES=()
+if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
+    while IFS= read -r p; do
+        [[ -n "$p" ]] && BLUEPRINT_MARKER_FILES+=("$p")
+    done < <(PATHS_FILE=$(mktemp); printf '%s\n' "${NEW_FILES[@]}" > "$PATHS_FILE"; \
+             awk -v pathsfile="$PATHS_FILE" -v re="$MARKER_ERE" '
+        # Paths come through a file: macOS awk refuses a newline inside a -v value.
+        BEGIN { while ((getline line < pathsfile) > 0) if (line != "") want[line] = 1; close(pathsfile) }
+        {
+            t = $0; sub(/^[ \t]+/, "", t)
+            fence = (substr(t, 1, 3) == "```" || substr(t, 1, 3) == "~~~")
+            if (in_fence) {
+                if (fence) { in_fence = 0; if (armed != "" && hit) print armed; armed = ""; hit = 0; next }
+                if (armed != "" && $0 ~ re) hit = 1
+                next
+            }
+            if (fence) { in_fence = 1; next }
+            # Outside a fence, the last path named in backticks is the file the next
+            # block belongs to — the **File**: line for a single-file task, the
+            # **`path`**: label above each block for a multi-file one.
+            for (p in want) if (index($0, "`" p "`") > 0) armed = p
+        }' "$GUIDE"; rm -f "$PATHS_FILE")
+fi
+
 # Collect scaffold files referenced in the blueprint that exist on disk
 SCAFFOLD_FILES=()
 SERVICE_FILES=()
 TEST_FILES=()
+SKELETON_FILES=()
 
 for f in "${NEW_FILES[@]}"; do
     FULL_PATH="$REPO_ROOT/$f"
@@ -310,6 +344,9 @@ for f in "${NEW_FILES[@]}"; do
 
     basename_f="$(basename "$f")"
     basename_lower="$(echo "$basename_f" | tr '[:upper:]' '[:lower:]')"
+
+    in_blueprint_markers=false
+    for m in "${BLUEPRINT_MARKER_FILES[@]}"; do [[ "$m" == "$f" ]] && in_blueprint_markers=true && break; done
 
     # Detect service/handler files (language-agnostic)
     if [[ "$basename_lower" == *service* ]] || [[ "$basename_lower" == *handler* ]] || \
@@ -320,6 +357,8 @@ for f in "${NEW_FILES[@]}"; do
     elif [[ "$basename_lower" == *test* ]] || [[ "$basename_lower" == *spec.* ]] || \
          [[ "$basename_lower" == test_* ]] || [[ "$basename_lower" == *_test.* ]]; then
         TEST_FILES+=("$FULL_PATH")
+    elif [[ "$in_blueprint_markers" == true ]]; then
+        SKELETON_FILES+=("$FULL_PATH")
     fi
 
     SCAFFOLD_FILES+=("$FULL_PATH")
@@ -377,6 +416,16 @@ else
     done
 fi
 
+echo ""
+echo "  Other skeletons (the blueprint gives them a marker):"
+if [[ ${#SKELETON_FILES[@]} -eq 0 ]]; then
+    echo "    (none)"
+else
+    for f in "${SKELETON_FILES[@]}"; do
+        check_todo_in_file "$f" "Skeleton"
+    done
+fi
+
 # =============================================
 # CHECK 4: Over-implementation detection
 # =============================================
@@ -416,11 +465,16 @@ check_over_implementation() {
                 # Already reported by check 3, which applies the same size test under
                 # --fresh. Counting it here made every violating file two failures.
                 return
-            elif [[ "$TOTAL_SCAFFOLDS" -gt 0 ]] && \
-               [[ $((MARKED_SCAFFOLDS * 3)) -ge $((TOTAL_SCAFFOLDS * 2)) ]]; then
-                fail "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} sibling scaffold file(s) still have them. This file was written complete instead of stubbed."
+            fi
+            # Without --fresh this cannot be a failure. The sibling ratio was meant to
+            # tell "just scaffolded" from "being implemented", but with four marker files
+            # the first one finished is 3/4 still marked, and the developer who had just
+            # implemented it honestly was told it "was written complete instead of
+            # stubbed". Only the caller knows which it is, and --fresh is how they say so.
+            if [[ "$TOTAL_SCAFFOLDS" -gt 0 ]] && [[ $((MARKED_SCAFFOLDS * 3)) -ge $((TOTAL_SCAFFOLDS * 2)) ]]; then
+                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} of ${TOTAL_SCAFFOLDS} sibling skeleton(s) still have theirs. Implemented since, or written complete at scaffold time — pass --fresh right after scaffolding to make the second a failure."
             else
-                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers left. Expected once you have implemented it; look closer only if this file was just scaffolded."
+                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers left. Expected once you have implemented it."
             fi
             OVER_IMPL_FOUND=true
         fi
@@ -437,6 +491,7 @@ TOTAL_SCAFFOLDS=0
 MARKER_POPULATION=()
 [[ ${#SERVICE_FILES[@]} -gt 0 ]] && MARKER_POPULATION+=("${SERVICE_FILES[@]}")
 [[ ${#TEST_FILES[@]} -gt 0 ]] && MARKER_POPULATION+=("${TEST_FILES[@]}")
+[[ ${#SKELETON_FILES[@]} -gt 0 ]] && MARKER_POPULATION+=("${SKELETON_FILES[@]}")
 for f in "${MARKER_POPULATION[@]}"; do
     [[ -f "$f" ]] || continue
     n_todo=$(count_matches -ci "TODO" "$f")
@@ -451,6 +506,7 @@ OVER_IMPL_FOUND=false
 ALL_CHECK_FILES=()
 [[ ${#SERVICE_FILES[@]} -gt 0 ]] && ALL_CHECK_FILES+=("${SERVICE_FILES[@]}")
 [[ ${#TEST_FILES[@]} -gt 0 ]] && ALL_CHECK_FILES+=("${TEST_FILES[@]}")
+[[ ${#SKELETON_FILES[@]} -gt 0 ]] && ALL_CHECK_FILES+=("${SKELETON_FILES[@]}")
 
 if [[ ${#ALL_CHECK_FILES[@]} -gt 0 ]]; then
     # Called directly, not in $( ), so warn()/fail() counters survive.
