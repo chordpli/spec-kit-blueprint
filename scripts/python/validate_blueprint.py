@@ -250,10 +250,13 @@ def main() -> int:
         # named on the Before line itself, else the nearest `**`path`**` label above it.
         # Without that, every declared file was a candidate, and the check told an author
         # who had labelled the block to "name the file" they had already named.
+        # Only a label for a file a hunk CAN edit attributes the hunks below it. A `(new)`
+        # file's label above the hunks made the validator measure them against the new
+        # file — an eighteen-line exception class — and fail a correct blueprint.
         labels_at = [
             (m.start(), m.group(1))
             for m in re.finditer(r"^\*\*`([^`]+)`\*\*", sec, re.M)
-            if m.group(1) in lengths
+            if m.group(1) in editable
         ]
         for bm in re.finditer(
             r"\*\*Before\*\*([^\n]*?)\blines?[^\d]{0,4}(\d+)(?:\s*[-\u2013]\s*(\d+))?", sec

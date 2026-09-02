@@ -102,6 +102,26 @@ def replace_once(path: str, before: str, after: str) -> int:
     if before.endswith("\n") and text.endswith(before[:-1]):
         candidates.append((before[:-1], after[:-1] if after.endswith("\n") else after))
 
+    # On a tree that has moved past the blueprint's commit, a hunk whose added lines are
+    # all already in the file is the developer's version of this change, placed their way:
+    # applying it again registered a test twice. Checked before the match, since the
+    # Before — three unchanged context lines — still matched.
+    if changed_since_stamp(rel(path)):
+        added_now = [
+            ln.strip() for ln in after.split("\n")
+            if ln.strip() and ln.strip() not in before and re.search(r"[A-Za-z]", ln)
+            and not re.search(r"\bT\d{3,}:", ln) and ln.strip() not in ("{", "}", "};", ")", ");")
+        ]
+        # Any of them, not all: the After registered three tests and the developer had
+        # registered one, and applying the hunk registered that one twice.
+        present = [ln for ln in added_now if ln in text]
+        if present:
+            raise AlreadyApplied(
+                f"{rel(path)}: {len(present)} of the {len(added_now)} line(s) this hunk adds are already in the"
+                f" file, and the file has changed since HEAD {_stamped_head} — implemented since; applying"
+                f" it would duplicate {present[0][:50]!r}"
+            )
+
     for b, a in candidates:
         n = text.count(b)
         if n == 1:
