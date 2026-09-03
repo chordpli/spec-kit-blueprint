@@ -15,6 +15,11 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
+
+# Set here, not only in the two scripts that ship beside it: this module lives under the
+# user's .specify/, and any third caller importing it would leave a __pycache__ there.
+sys.dont_write_bytecode = True
 
 
 def repo_root() -> str:
@@ -75,6 +80,32 @@ def scan(text: str):
 
 
 MODES = ("guide scaffold", "guide-scaffold", "doc-only", "scaffold", "guide")
+
+
+def stamped_head(text: str) -> str:
+    """The commit the blueprint's **Sources** line records, or "" if it has none."""
+    line = next((ln for ln in text.split(chr(10)) if ln.lower().startswith("**sources**")), "")
+    m = re.search(r"\bHEAD\s+([0-9a-f]{6,40})", line)
+    return m.group(1) if m else ""
+
+
+def changed_since(root: str, head: str, rel_path: str):
+    """Has `rel_path` changed since `head`? None when git cannot answer.
+
+    Both tools need this and both were about to grow their own: a Before that is not in a
+    file is a defect at the blueprint's commit and the implementation having happened on
+    a tree that has moved, and only git can tell those apart.
+    """
+    if not (head and root):
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "diff", "--quiet", head, "--", rel_path],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {0: False, 1: True}.get(proc.returncode)
 
 
 def parse_mode(text: str) -> str:

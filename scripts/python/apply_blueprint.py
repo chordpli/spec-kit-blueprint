@@ -37,9 +37,11 @@ sys.dont_write_bytecode = True  # the copy lives in the user's .specify/, and a 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
+    changed_since,
     file_kinds,
     parse_mode,
     section_events,
+    stamped_head,
     repo_root,
     resolve_feature_dir,
     scan,
@@ -131,9 +133,13 @@ def replace_once(path: str, before: str, after: str) -> int:
             and ln not in ("pass", "return", "}", "});") and len(ln) > 12
         ]
         if would_duplicate:
+            # How much of this hunk is in the file decides the headline: "already applied"
+            # for a hunk that has landed, "partly" for one where a line or two has.
+            here = sum(1 for ln in added_now if ln in file_lines)
+            scope = "" if here == len(added_now) else f" of this task's {len(added_now)} added line(s), {here} present:"
             raise AlreadyApplied(
-                f"{rel(path)}: applying this hunk would duplicate {would_duplicate[0][:50]!r}, which is already"
-                f" in the file — the change has been made another way since HEAD {_stamped_head}"
+                f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r}, which is"
+                f" already in the file — the change has been made another way since HEAD {_stamped_head}"
             )
 
     for b, a in candidates:
@@ -219,22 +225,8 @@ _stamped_head = ""
 
 
 def changed_since_stamp(rel_path: str):
-    """Has `rel_path` changed in the user's tree since the commit the blueprint stamps?
-
-    None when there is no stamp or git cannot answer. The blueprint's `**Sources**`
-    line records `HEAD <sha>`; a Before that is not in a file that has moved since that
-    commit is the implementation having happened, not a blueprint bug.
-    """
-    if not (_stamped_head and _root):
-        return None
-    try:
-        proc = subprocess.run(
-            ["git", "-C", _root, "diff", "--quiet", _stamped_head, "--", rel_path],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return {0: False, 1: True}.get(proc.returncode)
+    """Has `rel_path` changed in the user's tree since the commit the blueprint stamps?"""
+    return changed_since(_root, _stamped_head, rel_path)
 # Declared-new files that were already on disk and were removed from the copy before applying.
 _overwritten: list[str] = []
 
@@ -398,7 +390,12 @@ def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
         # Nothing of this task's hunks applied fresh: the tree already holds the work,
         # and a hunk that matched neither Before nor After beside one that did is the
         # implementation having moved on, not a blueprint bug.
-        summary = f"{hunks_already} hunk(s) already in the file"
+        total_hunks = hunks_already + len(hunk_defects) + len(hunks_unclear)
+        summary = (
+            f"{hunks_already} of this task's {total_hunks} hunk(s) already in the file"
+            if total_hunks > hunks_already
+            else f"{hunks_already} hunk(s) already in the file"
+        )
         if hunk_defects:
             summary += f", {len(hunk_defects)} Before not found — implemented since, differently"
         raise AlreadyApplied(summary + "".join(f"\n  {m}" for m in hunks_missing[:3]))
@@ -534,9 +531,7 @@ def main() -> int:
         return 1
     bp = open(bp_path, encoding="utf-8", errors="replace").read()
     tasks = split_tasks(bp)
-    src_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**sources**")), "")
-    sm = re.search(r"\bHEAD\s+([0-9a-f]{6,40})", src_line)
-    _stamped_head = sm.group(1) if sm else ""
+    _stamped_head = stamped_head(bp)
     _root = root
 
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
@@ -618,7 +613,11 @@ def main() -> int:
                 note, count, flags = apply_task(tree, section)
             except AlreadyApplied as exc:
                 already.append(tid)
-                record("warn", f"{tid}  already applied", str(exc))
+                # "already applied" for a task where only some hunks are present says the
+                # work is done when it is half done, which is the opposite of what
+                # /speckit.blueprint.review means by implemented.
+                partial = " (partly)" if " of this task's " in str(exc) else ""
+                record("warn", f"{tid}  already applied{partial}", str(exc))
                 continue
             except Ambiguous as exc:
                 # Not counted as already in the tree: nobody showed that it is.

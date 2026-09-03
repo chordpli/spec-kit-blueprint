@@ -21,6 +21,7 @@ sys.dont_write_bytecode = True
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
+    changed_since,
     code_blocks,
     count_path_labels,
     file_kinds,
@@ -29,6 +30,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     repo_root,
     resolve_feature_dir,
     split_tasks,
+    stamped_head,
     strip_quoted,
 )
 
@@ -230,6 +232,18 @@ def main() -> int:
     # 3. Before blocks quote something that is actually there
     out_of_range, moved_first, identical, ambiguous, misnumbered = [], [], [], [], []
     unjudged: set[str] = set()
+    not_quoted: list[str] = []
+    ambiguous_anchor: list[str] = []
+    # Quoting only makes a claim about the tree the blueprint was generated against. On a
+    # tree that has moved on, a Before that no longer matches is the implementation having
+    # happened — the applier learned this first; the two now ask git the same question.
+    head = stamped_head(bp)
+    moved: dict[str, bool] = {}
+
+    def has_moved(rel_path: str) -> bool:
+        if rel_path not in moved:
+            moved[rel_path] = bool(changed_since(root, head, rel_path))
+        return moved[rel_path]
     # Which task first declares each file. A later task that cites a line past the end of
     # the file on disk may be citing the file as an EARLIER task leaves it — the wiring
     # T006 adds is what T008 edits — and disk cannot confirm or deny that. The applier
@@ -291,6 +305,15 @@ def main() -> int:
                 except OSError:
                     text = ""
                 needle = quoted if quoted in text else quoted.rstrip("\n")
+                # Not there at all, in a file no earlier task rewrites: the quotation is
+                # wrong, and until now only the applier said so. "17 checks passed" did
+                # not mean the document matched the tree.
+                if (needle and text and text.count(needle) == 0
+                        and first_touch.get(named) in (None, tid) and not has_moved(named)):
+                    head = needle.strip().split("\n")[0][:50]
+                    not_quoted.append(f"{tid}: {named} does not contain the Before block (starts {head!r})")
+                if needle and text.count(needle) > 1 and not has_moved(named):
+                    ambiguous_anchor.append(f"{tid}: the Before block appears {text.count(needle)} times in {named}")
                 if needle and text.count(needle) == 1:
                     actual = text[: text.index(needle)].count("\n") + 1
                     if actual != cites[0]:
@@ -325,6 +348,20 @@ def main() -> int:
         record("fail", "Before block cites a line past the end of its file", "\n".join(out_of_range[:6]))
     else:
         record("pass", "Before line references are within their files")
+    if not_quoted:
+        record(
+            "fail",
+            "a Before block is not in the file it quotes",
+            "\n".join(not_quoted[:6]) + "\nthe applier matches this text exactly; quote the file as it is now",
+        )
+    else:
+        record("pass", "every checkable Before block is in the file it quotes")
+    if ambiguous_anchor:
+        record(
+            "warn",
+            "a Before block appears more than once in its file — the anchor is ambiguous",
+            "\n".join(ambiguous_anchor[:6]) + "\nthe applier refuses these; quote more of the surrounding lines",
+        )
     if unjudged:
         # Without this line the run names one task and looks like the others were checked.
         record(
@@ -603,10 +640,24 @@ def main() -> int:
             r"^\s*(if|for|while|switch|when|elif|else\s+if|do|try|catch|except|match)\b[\s({:]"
         )
         MARKER = re.compile(r"TODO\(|NotImplementedError|UnsupportedOperationException|fatalError\(|todo!\(|unimplemented!\(|panic\(")
+        # Body logic that carries no control-flow keyword at the head of a line. In Java,
+        # Kotlin and JS half of a body is a stream chain or a lambda, and the check saw
+        # none of it: `store.values().stream().filter(m -> …).findFirst()` passed.
+        EXPRESSION_BODY = re.compile(
+            r"\.stream\(\)|\.filter\(|\.map\(|\.flatMap\(|\.collect\(|\.reduce\(|\.forEach\("
+            r"|\.groupingBy\(|\.orElseThrow\(|\.findFirst\(|\bawait\b|\?\s*[^:\n]{1,40}\s*:"
+        )
+        # And the marker's own message. A message that hands over the exact expression is
+        # the same transfer of the body, moved inside a string where no code check looks:
+        # 3a-G asks for a self-contained instruction and forbids dictating the code, and a
+        # generator satisfying the first breaks the second.
+        CODE_IN_PROSE = re.compile(
+            r"&&|\|\||[!=<>]=|\breturn\s+\w+\s*[;(]|->\s*\w+\(|\w+\.\w+\([^)]*\)\s*(?:&&|\|\||;)"
+        )
         # The same basename reading the scaffold validator uses: a file with one of these
         # in its name holds behavior, and a guide skeleton for it has to carry a marker.
         BEHAVIORAL = re.compile(r"(service|handler|usecase|use_case|interactor|controller|scheduler|test|spec\.)", re.I)
-        smuggled, unmarked = [], []
+        smuggled, unmarked, dictated = [], [], []
         for tid, sec in sections.items():
             kinds = dict(file_kinds(sec))
             new_behavioral = [f for f, k in kinds.items() if k == "new" and BEHAVIORAL.search(os.path.basename(f))]
@@ -618,14 +669,34 @@ def main() -> int:
                 unmarked.append(f"{tid}: {', '.join(new_behavioral)} — no not-implemented marker in its block")
             for blk in blocks:
                 hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln) and not NOT_BODY.match(ln)]
+                exprs = [
+                    ln.strip() for ln in code_lines(blk)
+                    if EXPRESSION_BODY.search(ln) and not MARKER.search(ln) and not NOT_BODY.match(ln)
+                ]
                 if MARKER.search(blk):
                     # A block that still carries its marker is a skeleton; a branch beside
                     # the marker is the author starting a body. One is enough — a method
                     # written complete beside five that kept their markers is one `if`.
                     if hits:
                         smuggled.append(f"{tid}: {len(hits)} control-flow line(s) beside a not-implemented marker — {hits[0][:50]!r}")
+                    elif exprs:
+                        smuggled.append(f"{tid}: an expression body beside a not-implemented marker — {exprs[0][:50]!r}")
                 elif hits:
                     smuggled.append(f"{tid}: {len(hits)} control-flow line(s) in a block with no marker — {hits[0][:50]!r}")
+                elif exprs:
+                    smuggled.append(f"{tid}: an expression body in a block with no marker — {exprs[0][:50]!r}")
+                # The marker's message, where no code check has ever looked.
+                for m in re.finditer(r"""(?:TODO|NotImplementedError|UnsupportedOperationException|panic|todo!|fatalError)\s*\(\s*["'`](.+?)["'`]\s*\)""", blk, re.S):
+                    if CODE_IN_PROSE.search(m.group(1)):
+                        dictated.append(f"{tid}: a marker message spells out the body — {m.group(1).strip()[:60]!r}")
+                        break
+        if dictated:
+            record(
+                "warn",
+                "a not-implemented marker's message spells out the code it is standing in for",
+                "\n".join(dictated[:6])
+                + "\nsay what to achieve and what to avoid; an exact expression makes typing transcription, which is what guide mode exists to avoid",
+            )
         if unmarked:
             record(
                 "warn",

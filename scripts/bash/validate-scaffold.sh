@@ -531,11 +531,11 @@ check_over_implementation() {
             # the first one finished is 3/4 still marked, and the developer who had just
             # implemented it honestly was told it "was written complete instead of
             # stubbed". Only the caller knows which it is, and --fresh is how they say so.
-            if [[ "$TOTAL_SCAFFOLDS" -gt 0 ]] && [[ $((MARKED_SCAFFOLDS * 3)) -ge $((TOTAL_SCAFFOLDS * 2)) ]]; then
-                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers, while ${MARKED_SCAFFOLDS} of ${TOTAL_SCAFFOLDS} sibling skeleton(s) still have theirs. Implemented since, or written complete at scaffold time — pass --fresh right after scaffolding to make the second a failure."
-            else
-                warn "$rel_path — ${method_count} methods, ${line_count} lines, no markers left. Expected once you have implemented it."
-            fi
+            # Check 3 already warned about this file having no markers; a second warning
+            # here says the same thing about the same file, and a feature under
+            # implementation collected two per file until nothing in the output was signal.
+            OVER_IMPL_FOUND=true
+            return
             OVER_IMPL_FOUND=true
         fi
     fi
