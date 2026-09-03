@@ -577,10 +577,18 @@ def main() -> int:
     #         three tools, since the applier tests the block and the scaffold validator
     #         only counts markers.
     drifted = []
+    # A file that later tasks grow is not its creating task's block once they have run —
+    # the "one new file, several tasks" form in 3a-G, and what --scaffold writes. Only a
+    # file no other task touches can be compared to a single block; comparing the rest
+    # reported a scaffold nobody had opened as edited since scaffolding.
+    grown_later = {
+        p for tid, sec in sections.items()
+        for p, k in file_kinds(sec) if k != "new"
+    }
     for tid, sec in sections.items():
         blocks = code_blocks(strip_quoted(sec), content_only=True)
         for relp, kind in file_kinds(sec):
-            if kind != "new":
+            if kind != "new" or relp in grown_later:
                 continue
             path = os.path.join(root, relp)
             if not os.path.isfile(path):

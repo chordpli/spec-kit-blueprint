@@ -298,11 +298,16 @@ if [[ "$MARKERS" == true ]]; then
                         if (nxt ~ /T[0-9]+:/) out = out " " nxt
                     }
                     # A message split across concatenated string literals showed only
-                    # its first physical line.
-                    j = i
-                    while (out !~ /\)[[:space:]]*;?[[:space:]]*$/ && j < NR && j - i < 6) {
-                        j++; cont = lines[j]; sub(/^[ \t]+/, "", cont)
-                        out = out " " cont
+                    # its first physical line. Executable markers only: a comment marker
+                    # has no closing paren to stop at, so this ran on and pulled the code
+                    # under it into the listing cleanup is supposed to read.
+                    if (out ~ /(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\(/) {
+                        j = i
+                        while (out !~ /\)[[:space:]]*;?[[:space:]]*$/ && j < NR && j - i < 6) {
+                            j++; cont = lines[j]; sub(/^[ \t]+/, "", cont)
+                            if (cont == "") break
+                            out = out " " cont
+                        }
                     }
                     print i ": " out
                 }

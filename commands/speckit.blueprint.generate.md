@@ -14,6 +14,8 @@ You are reading to know what you are looking at, not to produce one. **Read 3a-G
 
 **One thing about order.** In a scaffold mode, type every `(modify)` hunk before you design any body. A hunk's Before quotes the file as the previous task left it, markers and all, so a body you write first can delete the lines the next hunk is looking for. The hunks are mechanical; do them in one pass, then think.
 
+That leaves the tree in the shape the *last* task expects, which is not the shape an earlier Checkpoint expects: a signature a later hunk widens is already widened while you are writing the body of the task before it. Read each marker against the final skeleton, and if you mean to stop at a Checkpoint and run the feature, hold back the hunks belonging to tasks after it.
+
 Then go back to `blueprint.md`. Your questions about *this feature* are answered there, not here.
 
 ### If you are generating the blueprint
@@ -24,8 +26,10 @@ Steps 1, 2, 4b and 5 apply in every mode. The content rules are split by mode; r
 
 | Mode | Read | Skip |
 |------|------|------|
-| `doc-only`, `scaffold` | Step 3, 3a, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`scaffold` only) | 3a-G |
-| `guide`, `guide scaffold` | Step 3, the Before/After form in 3a (for files that change), 3a-G, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`guide scaffold` only) | 3a's completeness rules for full code |
+| `doc-only`, `scaffold` | Step 3, 3a, 3b, 3c, 3d (rules tagged for your project), **3-Sources**, Rules, Step 4 (`scaffold` only) | 3a-G |
+| `guide`, `guide scaffold` | Step 3, the Before/After form in 3a (for files that change), 3a-G, 3b, 3c, 3d (rules tagged for your project), **3-Sources**, Rules, Step 4 (`guide scaffold` only) | 3a's completeness rules for full code |
+
+Step 3-Sources is short and easy to skip, and skipping it costs a run: it holds which hash the `**Sources**` line takes (sha256, not git's sha1) and the rule that a guide-mode `**Build**` stamps a compile check rather than a test run.
 
 The validators in Step 4b check the format this document asks for; the list there says what they expect, so a first blueprint can pass them without reading their source.
 

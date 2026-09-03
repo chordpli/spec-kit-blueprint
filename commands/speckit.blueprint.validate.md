@@ -63,6 +63,8 @@ The applier removes from its copy any file that carries a blueprint marker but t
 
 When the header carries `**Base**: specs/{slice}/blueprint.md`, the tools read the named blueprint too: references across the seam resolve in both directions, coverage counts what the base delivers, and the applier applies the base's tasks before this slice's. That is what makes "split the feature instead" something you can actually do — without it the second slice's references all dangle and its build fails on the first slice's types.
 
+**While you are implementing, this set is the wrong tool.** The applier's report is about a tree the blueprint has not been typed into; once you have started, it correctly says tasks are already there and cannot judge others, and none of that tells you whether your code works. Run the project's own tests instead, and come back to these when you regenerate.
+
 Both Python scripts take `--help`, and refuse an option they do not recognise rather than running as though it had not been typed.
 
 Two flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when
