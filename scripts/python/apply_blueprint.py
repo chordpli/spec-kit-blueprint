@@ -86,6 +86,14 @@ class AlreadyApplied(Exception):
     """The edit is already in the file — the tree has moved past this blueprint."""
 
 
+class Ambiguous(Exception):
+    """The file has moved since the stamp and this hunk's work is not visibly in it.
+
+    Neither "already applied" nor "the blueprint is wrong" can be shown, so the run says
+    so rather than counting the task as done or sending the reader after a defect.
+    """
+
+
 def replace_once(path: str, before: str, after: str) -> int:
     """Replace the one occurrence of `before` with `after`; return its 1-based line."""
     if not os.path.isfile(path):
@@ -102,24 +110,30 @@ def replace_once(path: str, before: str, after: str) -> int:
     if before.endswith("\n") and text.endswith(before[:-1]):
         candidates.append((before[:-1], after[:-1] if after.endswith("\n") else after))
 
-    # On a tree that has moved past the blueprint's commit, a hunk whose added lines are
-    # all already in the file is the developer's version of this change, placed their way:
-    # applying it again registered a test twice. Checked before the match, since the
-    # Before — three unchanged context lines — still matched.
-    if changed_since_stamp(rel(path)):
-        added_now = [
-            ln.strip() for ln in after.split("\n")
-            if ln.strip() and ln.strip() not in before and re.search(r"[A-Za-z]", ln)
-            and not re.search(r"\bT\d{3,}:", ln) and ln.strip() not in ("{", "}", "};", ")", ");")
+    # Lines this hunk would add, compared whole and stripped. Substring comparison made
+    # `def select_entries(` match inside the old signature and called an untouched task done.
+    file_lines = {ln.strip() for ln in text.split("\n") if ln.strip()}
+    added_now = [
+        ln.strip() for ln in after.split("\n")
+        if ln.strip() and ln.strip() not in before and re.search(r"[A-Za-z]", ln)
+        and not re.search(r"\bT\d{3,}:", ln) and ln.strip() not in ("{", "}", "};", ")", ");")
+    ]
+
+    # Would applying duplicate something? A hunk whose Before still matches can still be
+    # one the developer has already made their own way — the After registered three tests
+    # and they had registered one, so applying it registered that one twice. Test the harm
+    # directly rather than guessing from how many added lines happen to appear: a line the
+    # After adds once, already in the file once, becomes two.
+    if changed_since_stamp(rel(path)) and any(text.count(b) == 1 for b, _a in candidates):
+        would_duplicate = [
+            ln for ln in added_now
+            if after.count(ln) == 1 and ln in file_lines and text.count(ln) == 1
+            and ln not in ("pass", "return", "}", "});") and len(ln) > 12
         ]
-        # Any of them, not all: the After registered three tests and the developer had
-        # registered one, and applying the hunk registered that one twice.
-        present = [ln for ln in added_now if ln in text]
-        if present:
+        if would_duplicate:
             raise AlreadyApplied(
-                f"{rel(path)}: {len(present)} of the {len(added_now)} line(s) this hunk adds are already in the"
-                f" file, and the file has changed since HEAD {_stamped_head} — implemented since; applying"
-                f" it would duplicate {present[0][:50]!r}"
+                f"{rel(path)}: applying this hunk would duplicate {would_duplicate[0][:50]!r}, which is already"
+                f" in the file — the change has been made another way since HEAD {_stamped_head}"
             )
 
     for b, a in candidates:
@@ -150,9 +164,21 @@ def replace_once(path: str, before: str, after: str) -> int:
             f"{rel(path)}: the lines the After adds are in the file and its markers are not — implemented since"
         )
     if changed_since_stamp(rel(path)):
-        raise AlreadyApplied(
-            f"{rel(path)}: the Before is not in the file, and the file has changed since the commit"
-            f" this blueprint was generated at (HEAD {_stamped_head}) — implemented since"
+        # All of them, not any: a guide skeleton's boilerplate — `raise NotImplementedError(`,
+        # `def setUp(self) -> None:` — appears in every task's block, and one such line
+        # counted a task nobody had started as done.
+        if added_now and all(ln in file_lines for ln in added_now):
+            raise AlreadyApplied(
+                f"{rel(path)}: every line this hunk adds is already in the file, and the file has changed"
+                f" since HEAD {_stamped_head} — implemented since"
+            )
+        # Changed, but this hunk's work is not visibly in it. Could be implemented
+        # differently, could be an earlier task's edits having moved the anchor. Saying
+        # which would be a guess, and a failure here sends the reader after a blueprint
+        # bug that may not exist.
+        raise Ambiguous(
+            f"{rel(path)}: the Before is not in the file, which has changed since HEAD {_stamped_head}"
+            f" — this task may be implemented differently, or an earlier task moved the anchor"
         )
     head = before.strip().split("\n")[0][:60]
     raise Defect(f"{rel(path)}: Before block not found verbatim (starts {head!r})")
@@ -275,7 +301,7 @@ def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
     # A task with several hunks against an implemented file used to stop at the first
     # one already present and report "the After content is already in the file" for
     # the whole task — true of that hunk, not of the two that no longer matched at all.
-    hunks_already, hunks_missing, misnumbered = 0, [], []
+    hunks_already, hunks_missing, misnumbered, hunks_unclear = 0, [], [], []
     written: list[str] = []
     hunk_defects: list[Defect] = []
 
@@ -315,6 +341,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
                 except AlreadyApplied as exc:
                     hunks_already += 1
                     hunks_missing.append(str(exc))
+                except Ambiguous as exc:
+                    hunks_unclear.append(str(exc))
                 except Defect as exc:
                     # Held, not raised: whether this is a defect depends on the other
                     # hunks. Beside one already in the file it is "implemented since,
@@ -364,6 +392,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
         raise Defect(f"{before_at}: a **Before** block with no **After** after it")
     if hunk_defects and not hunks_already:
         raise hunk_defects[0]
+    if hunks_unclear and not applied and not hunks_already:
+        raise Ambiguous("\n  ".join(hunks_unclear[:3]))
     if hunks_already and not applied:
         # Nothing of this task's hunks applied fresh: the tree already holds the work,
         # and a hunk that matched neither Before nor After beside one that did is the
@@ -382,6 +412,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
             note += f"; {unanchored} unanchored block(s) left alone"
         if hunks_already:
             note += f"; {hunks_already} hunk(s) were already in the file or implemented since"
+        if hunks_unclear:
+            note += f"; {len(hunks_unclear)} hunk(s) could not be placed or recognised"
         if hunk_defects:
             note += f"; {len(hunk_defects)} hunk(s) matched nothing"
         if misnumbered:
@@ -579,7 +611,7 @@ def main() -> int:
     print(f"Tree: {tree}\n")
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
-    failed, applied_tasks, unanchored_tasks, already = [], 0, [], []
+    failed, applied_tasks, unanchored_tasks, already, unclear = [], 0, [], [], []
     try:
         for tid, section in tasks:
             try:
@@ -587,6 +619,11 @@ def main() -> int:
             except AlreadyApplied as exc:
                 already.append(tid)
                 record("warn", f"{tid}  already applied", str(exc))
+                continue
+            except Ambiguous as exc:
+                # Not counted as already in the tree: nobody showed that it is.
+                unclear.append(tid)
+                record("warn", f"{tid}  cannot tell", str(exc))
                 continue
             except Defect as exc:
                 failed.append(tid)
@@ -613,6 +650,10 @@ def main() -> int:
                 unanchored_tasks.append(tid)
                 record("warn", f"{tid}  skipped ({note})")
 
+        if unclear:
+            print(f"\n  {YELLOW}{len(unclear)} task(s) could not be judged{NC} — their files have changed since"
+                  "\n  this blueprint was generated, and their Before blocks are no longer in them. Run the"
+                  "\n  applier before implementing, or against a tree that predates the work.")
         if already:
             print(
                 f"\n  {YELLOW}{len(already)} task(s) are already in the tree{NC} — this blueprint describes"

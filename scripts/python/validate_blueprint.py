@@ -181,9 +181,18 @@ def main() -> int:
     else:
         record("pass", f"all {len(sections)} task sections carry a Why")
 
+    print(f"\n{CYAN}[3] Working-tree claims{NC}")
     if mode.startswith("guide"):
         build_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**build**")), "")
-        if re.search(r"\btests?\b|pytest|unittest|gradlew test|mvn test|npm test", build_line, re.I):
+        # A test RUNNER, not the word "test": `compileall -q moneylog tests` names a
+        # directory, and it is the command the spec tells a Python project to stamp.
+        RUNS_TESTS = re.compile(
+            r"\bpytest\b|\bunittest\b|\bgo\s+test\b|\bcargo\s+test\b|\bctest\b|\brspec\b|\bjest\b"
+            r"|\b(?:gradlew?|mvn|npm|yarn|pnpm|make|rake|dotnet|swift|sbt)\s+\S*test"
+            r"|\btools?/test[\w.\-]*|\btest\.sh\b",
+            re.I,
+        )
+        if RUNS_TESTS.search(build_line):
             record(
                 "warn",
                 "the **Build** command looks like it runs tests, in a guide-mode blueprint",
@@ -219,7 +228,6 @@ def main() -> int:
         record("pass", "every declared (modify) file is in the tree")
 
     # 3. Before blocks quote something that is actually there
-    print(f"\n{CYAN}[3] Working-tree claims{NC}")
     out_of_range, moved_first, identical, ambiguous, misnumbered = [], [], [], [], []
     # Which task first declares each file. A later task that cites a line past the end of
     # the file on disk may be citing the file as an EARLIER task leaves it — the wiring
@@ -573,6 +581,11 @@ def main() -> int:
     if mode.startswith("guide"):
         # Guide modes only — in a full-code mode the numbering skips from [5] to [7].
         print(f"\n{CYAN}[6] Guide-mode bodies{NC}")
+        # A module guard is not a body: 3a-G asks test skeletons to match the project's
+        # existing tests, and in Python those end with exactly this line.
+        NOT_BODY = re.compile(
+            r'^\s*if\s+__name__\s*==|^\s*if\s+TYPE_CHECKING\s*:|^\s*if\s+not\s+TYPE_CHECKING\s*:'
+        )
         CONTROL = re.compile(
             r"^\s*(if|for|while|switch|when|elif|else\s+if|do|try|catch|except|match)\b[\s({:]"
         )
@@ -591,7 +604,7 @@ def main() -> int:
                 # behavioral file's block without one is a body, however short.
                 unmarked.append(f"{tid}: {', '.join(new_behavioral)} — no not-implemented marker in its block")
             for blk in blocks:
-                hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln)]
+                hits = [ln.strip() for ln in code_lines(blk) if CONTROL.match(ln) and not NOT_BODY.match(ln)]
                 if MARKER.search(blk):
                     # A block that still carries its marker is a skeleton; a branch beside
                     # the marker is the author starting a body. One is enough — a method

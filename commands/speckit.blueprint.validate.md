@@ -51,7 +51,9 @@ The document validator's line-reference check reads the files as they are on dis
 
 `--markers` turns the scaffold validator into a listing: every blueprint marker and not-implemented call left in the files the blueprint declares, as `path:line: text`, and nothing else on stdout. It is the mechanical half of `/speckit.blueprint.cleanup`, so two runs of that command start from the same list.
 
-A missing or unreadable `**Mode**:` line is a warning from all three tools rather than a silent `unknown`, since the guide-mode checks and the placeholder rules hang on it. In a guide-mode blueprint a `**Build**:` command that runs tests is a warning too: the skeletons throw by design.
+A hunk the applier can neither place nor recognise, in a file that has changed since the blueprint's commit, is reported as "cannot tell" and is not counted among the tasks already in the tree: it may be implemented differently, or an earlier task may have moved its anchor, and claiming either would be a guess.
+
+A missing or unreadable `**Mode**:` line is a warning from all three tools rather than a silent `unknown`, since the guide-mode checks and the placeholder rules hang on it. In a guide-mode blueprint a `**Build**:` command that invokes a test runner is a warning too: the skeletons throw by design. A path that merely contains the word `tests` does not count — `compileall -q pkg tests` is the compile check the spec asks a Python project to stamp.
 
 The applier removes from its copy any file that carries a blueprint marker but that no task declares — the residue of a deleted or renamed task — and says so, so that file cannot stand in for the task the document no longer has. It also warns when a task id has more than one section, since it applies both.
 
