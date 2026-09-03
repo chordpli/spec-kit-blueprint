@@ -6,6 +6,16 @@ description: "Generate a pre-implementation blueprint from spec artifacts with o
 
 ## How to read this document
 
+**Two readers, two lists.** Find yours first — reading the wrong one is most of this document.
+
+### If you are going to type from the blueprint
+
+You are reading to know what you are looking at, not to produce one. **Read 3a-G, 3b and 3c — about 40 lines — and stop.** They say what a skeleton is, what the markers carry, and why each task looks the way it does. Everything else here is the generator's checklist: the closure rules in 3d, the format shapes in 4b, the Rules section. Skipping them costs you nothing, because the validators enforce them and the blueprint you are typing from has already passed.
+
+Then go back to `blueprint.md`. Your questions about *this feature* are answered there, not here.
+
+### If you are generating the blueprint
+
 Steps 1, 2, 4b and 5 apply in every mode. The content rules are split by mode; read yours and skip the other:
 
 | Mode | Read | Skip |
@@ -13,9 +23,9 @@ Steps 1, 2, 4b and 5 apply in every mode. The content rules are split by mode; r
 | `doc-only`, `scaffold` | Step 3, 3a, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`scaffold` only) | 3a-G |
 | `guide`, `guide scaffold` | Step 3, the Before/After form in 3a (for files that change), 3a-G, 3b, 3c, 3d (rules tagged for your project), Rules, Step 4 (`guide scaffold` only) | 3a's completeness rules for full code |
 
-This document is for whoever *generates* the blueprint. A developer who will only type from the result needs 3a-G, 3b and 3c to know what they are looking at — the README's short version — and none of the closure rules in 3d, which are the generator's checklist; the two lists differ because the two readers do.
-
 The validators in Step 4b check the format this document asks for; the list there says what they expect, so a first blueprint can pass them without reading their source.
+
+**Doing both jobs in one session** — generating, then typing what you generated — does not mean reading twice as much. Generate against the list above, and when you switch to typing you already know 3a-G, 3b and 3c; nothing in the typing list is new to you.
 
 ## Why This Exists
 

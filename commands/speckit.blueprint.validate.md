@@ -73,7 +73,7 @@ All three scripts do this themselves when the argument is omitted.
 
 ### Document checks (`validate_blueprint.py`)
 
-Format-level, so they hold for any language. Ten numbered sections, in the order the script runs them (section 6 prints only in the guide modes, so a full-code run goes from [5] to [7]):
+Format-level, so they hold for any language. Eleven numbered sections, in the order the script runs them (section 6 prints only in the guide modes, so a full-code run goes from [5] to [7]):
 
 1. **Task coverage**: every task id declared in `tasks.md` has a section or a pre-completed row (missing `tasks.md` is a warning, not a failure); the same id with two sections is a failure
 2. **Rationale (Why)**: every task section carries a `**Why**`
@@ -95,7 +95,8 @@ Format-level, so they hold for any language. Ten numbered sections, in the order
 7. **Regeneration**: when the committed `blueprint.md` carries the same `**Sources**` hashes, a task whose section changed anyway is a failure — regeneration keeps unchanged tasks verbatim so the diff stays reviewable
 8. **Freshness**: the header's `**Sources**` stamp records each source artifact as `name@hash`; the script re-hashes those files and fails when one has changed since the blueprint was generated. No stamp at all is a warning
 9. **Cited requirements reproduced**: every requirement id cited in a `**Requirements**` line (`FR-`, `NFR-`, `SC-`, `AC-`, `US-`) is also stated somewhere else in the document — a citation alone leaves a reader working from this file unable to look it up
-10. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
+10. **Forward references**: every task id a task's prose points at — "defined in T019", "see T019", a `**Dependencies**` entry — has a section or a pre-completed row. A promise pointing at a task that never delivers is worse than an open question, because the reader stops looking
+11. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
 
 Before/After blocks are stripped before the placeholder and multi-file checks: they quote existing code, not content the blueprint authored. The abbreviation check in section 3 is the one check that reads them.
 

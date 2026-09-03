@@ -727,7 +727,46 @@ def main() -> int:
     else:
         record("pass", f"all {len(cited)} cited requirement ids are stated in the document")
 
-    # 10. Open questions — not pass/fail, but a blocked task is the thing a reader
+    # 9b. A forward reference resolves. "the retry policy is defined in T019" is worse
+    #     than an open question when T019 is not in the document: the reader stops looking.
+    #     The Step 3d rule said so and nothing checked it — the one rule in that list with
+    #     no machine behind it.
+    print(f"\n{CYAN}[10] Forward references{NC}")
+    known_ids = set(sections)
+    # Pre-completed rows are real tasks too: a table row `| T004 | … |` delivers its work.
+    known_ids |= {m.group(1) for m in re.finditer(r"^\|\s*\**\s*(T\d+)\b", bp, re.M)}
+    # "defined in T019", "see T019", "delivered by T019", "T019 creates it" — a reference
+    # is a task id named in prose, not a task's own heading and not a dependency list.
+    # **Dependencies**: lines name earlier tasks by design; check them too, since a
+    # dependency on a task that does not exist is the same defect.
+    dangling: list[str] = []
+    for tid, sec in sections.items():
+        for line in sec.split("\n"):
+            t = line.strip()
+            if t.startswith("###") or t.startswith("|"):
+                continue
+            for m in re.finditer(r"\bT(\d{2,})\b", t):
+                ref = "T" + m.group(1)
+                if ref == tid or ref in known_ids:
+                    continue
+                dangling.append(f"{tid}: points at {ref}, which has no section — {t[:60]}")
+    if dangling:
+        # Deduplicate on (task, target): one missing task cited three times is one problem.
+        seen, unique = set(), []
+        for d in dangling:
+            key = d.split(" — ")[0]
+            if key not in seen:
+                seen.add(key)
+                unique.append(d)
+        record(
+            "fail",
+            f"{len(unique)} forward reference(s) point at a task the document does not have",
+            "\n".join(unique[:8]) + "\na promise pointing at a task that never delivers is worse than an open question",
+        )
+    else:
+        record("pass", "every task id referenced in prose has a section")
+
+    # 11. Open questions — not pass/fail, but a blocked task is the thing a reader
     #    most needs to see before they start typing.
     # Close at a heading of the same depth or shallower; `^##\s` let a `### Open
     # Questions` swallow every following `###` section to the end of the document.
@@ -751,7 +790,7 @@ def main() -> int:
             rows = re.findall(r"^#+\s*(OQ-\d+[^\n]*)", body, re.M)
             blocking = [r for r in rows if re.search(r"blocking|blocks|차단", r, re.I)
                         and not re.search(r"non-?blocking|미차단", r, re.I)]
-        print(f"\n{CYAN}[10] Open questions{NC}")
+        print(f"\n{CYAN}[11] Open questions{NC}")
         record(
             "warn" if blocking else "pass",
             f"{len(rows)} open question(s), {len(blocking)} blocking",
