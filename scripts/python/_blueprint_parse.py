@@ -108,6 +108,71 @@ def changed_since(root: str, head: str, rel_path: str):
     return {0: False, 1: True}.get(proc.returncode)
 
 
+def base_chain(text: str, feature_dir: str, root: str) -> list[tuple[str, str]]:
+    """(path, text) of the blueprints this one continues, oldest first.
+
+    A feature too large for one document is split, which the README advises — but the
+    closure the tool is built on made splitting fail: the second slice's tasks refer to
+    the first's, and every such reference read as a task that does not exist. A slice
+    names its predecessor with `**Base**: specs/{other}/blueprint.md` in the header, and
+    the tools read the chain as one document for the questions that span it.
+    """
+    seen, chain, current, where = set(), [], text, feature_dir
+    for _ in range(8):  # a chain, not a cycle; eight slices is already too many
+        line = next((ln for ln in current.split(chr(10)) if ln.lower().startswith("**base**:")), "")
+        if ":" not in line:
+            break
+        raw = line.split(":", 1)[1].strip().strip("`").split("|")[0].strip()
+        if not raw:
+            break
+        for cand in (os.path.join(root, raw), os.path.join(where, raw), raw):
+            path = cand if cand.endswith(".md") else os.path.join(cand, "blueprint.md")
+            if os.path.isfile(path):
+                break
+        else:
+            break
+        path = os.path.realpath(path)
+        if path in seen:
+            break
+        seen.add(path)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                current = f.read()
+        except OSError:
+            break
+        chain.append((path, current))
+        where = os.path.dirname(path)
+    chain.reverse()
+    return chain
+
+
+def dependent_slices(feature_dir: str, root: str) -> list[tuple[str, str]]:
+    """(path, text) of the blueprints that name this one in their **Base** chain.
+
+    The link is declared once, by the later slice, and read from both ends: the first
+    slice legitimately says "consumed in T040" about work its successor delivers, and
+    without this that reference is dangling in one direction while resolving in the other.
+    """
+    mine = os.path.realpath(os.path.join(feature_dir, "blueprint.md"))
+    specs = os.path.join(root, "specs")
+    out = []
+    if not os.path.isdir(specs):
+        return out
+    for name in sorted(os.listdir(specs)):
+        other_dir = os.path.join(specs, name)
+        other = os.path.join(other_dir, "blueprint.md")
+        if not os.path.isfile(other) or os.path.realpath(other) == mine:
+            continue
+        try:
+            with open(other, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if any(os.path.realpath(cp) == mine for cp, _t in base_chain(text, other_dir, root)):
+            out.append((other, text))
+    return out
+
+
 def parse_mode(text: str) -> str:
     """The mode a blueprint header declares, canonicalised.
 

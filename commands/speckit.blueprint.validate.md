@@ -59,6 +59,10 @@ A missing or unreadable `**Mode**:` line is a warning from all three tools rathe
 
 The applier removes from its copy any file that carries a blueprint marker but that no task declares — the residue of a deleted or renamed task — and says so, so that file cannot stand in for the task the document no longer has. It also warns when a task id has more than one section, since it applies both.
 
+`--scaffold` copies the declared-new files out of the verified copy into your tree, after a clean apply. It writes only files the blueprint declares new and only ones not already there, so nothing existing is touched; it is how a scaffold mode should put files on disk, because the copy holds exactly what the document says and a generator writing forty skeletons by hand is where drift comes from.
+
+When the header carries `**Base**: specs/{slice}/blueprint.md`, the tools read the named blueprint too: references across the seam resolve in both directions, coverage counts what the base delivers, and the applier applies the base's tasks before this slice's. That is what makes "split the feature instead" something you can actually do — without it the second slice's references all dangle and its build fails on the first slice's types.
+
 Both Python scripts take `--help`, and refuse an option they do not recognise rather than running as though it had not been typed.
 
 Two flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when

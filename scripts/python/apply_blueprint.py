@@ -37,6 +37,7 @@ sys.dont_write_bytecode = True  # the copy lives in the user's .specify/, and a 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
+    base_chain,
     changed_since,
     file_kinds,
     parse_mode,
@@ -519,11 +520,13 @@ def main() -> int:
         print("\n  --build            run the project's build in the copy after applying")
         print("  --keep             print the copy's path instead of deleting it")
         print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
+        print("  --scaffold         after a clean apply, copy the declared-new files into your tree")
         print("\nExit 0 applied cleanly, 1 a task failed or the build did, 2 feature directory not resolved.")
         return 0
     do_build, keep = "--build" in argv, "--keep" in argv
     strict_anchors = "--require-anchors" in argv
-    KNOWN = {"--build", "--keep", "--require-anchors"}
+    do_scaffold = "--scaffold" in argv
+    KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold"}
     unknown = [a for a in argv if a.startswith("-") and a not in KNOWN]
     if unknown:
         # A typo in --build looked like a run that simply chose not to build.
@@ -544,6 +547,10 @@ def main() -> int:
         print(f"{RED}blueprint.md not found — run /speckit.blueprint.generate first.{NC}")
         return 1
     bp = open(bp_path, encoding="utf-8", errors="replace").read()
+    # A slice of a split feature needs its predecessors applied first: its Before blocks
+    # quote the file as they leave it, and its code calls what they declare.
+    chain = base_chain(bp, feature_dir, root)
+    base_tasks = [(tid, sec) for _p, text in chain for tid, sec in split_tasks(text)]
     tasks = split_tasks(bp)
     _stamped_head = stamped_head(bp)
     _root = root
@@ -551,7 +558,8 @@ def main() -> int:
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
     mode = parse_mode(bp)
-    print(f"Mode: {mode} | {len(tasks)} task sections")
+    print(f"Mode: {mode} | {len(tasks)} task sections"
+          + (f" (+{len(base_tasks)} from {len(chain)} base blueprint(s))" if chain else ""))
     if mode == "unknown":
         print(f"  {YELLOW}Mode is unknown — the header's **Mode**: line is missing or unreadable, so"
               f" mode-specific behaviour is off.{NC}")
@@ -571,7 +579,7 @@ def main() -> int:
     # task whose block is missing or mislabelled — the skeleton fills the hole and the
     # compiler never sees it. A file the blueprint declares new is a file the blueprint
     # has to supply; removing it first is what makes the build a test of the document.
-    for _tid, section in tasks:
+    for _tid, section in base_tasks + tasks:
         for path, kind in file_kinds(section):
             if kind != "new" or path in _overwritten:
                 continue
@@ -588,7 +596,7 @@ def main() -> int:
     # A file on disk that carries a blueprint marker but that no task declares is residue
     # of a task the document no longer has — a deleted section, a renamed path. Left in
     # the copy it fills the hole the missing task left, and the build passes over it.
-    declared_all = {p for _t, sec in tasks for p, _k in file_kinds(sec)}
+    declared_all = {p for _t, sec in base_tasks + tasks for p, _k in file_kinds(sec)}
     orphans = []
     # The executable marker forms and the scaffold comment — not a bare `T014:`, which
     # the extension's own command specs use in their examples under .specify/.
@@ -618,6 +626,22 @@ def main() -> int:
               f" removed from the copy so they cannot stand in for a missing task:{NC} "
               + ", ".join(orphans[:6]))
     print(f"Tree: {tree}\n")
+
+    if base_tasks:
+        print(f"{CYAN}[0] Applying {len(base_tasks)} task(s) from the base blueprint(s){NC}")
+        base_failed = []
+        for tid, section in base_tasks:
+            try:
+                apply_task(tree, section)
+            except (Defect, AlreadyApplied, Ambiguous) as exc:
+                base_failed.append(f"{tid}: {exc}")
+        if base_failed:
+            # The base is another slice's document; its problems are not this one's, but
+            # this slice cannot be tested until they are fixed.
+            record("warn", f"{len(base_failed)} base task(s) did not apply", "\n".join(base_failed[:4])
+                   + "\nrun the applier in the base feature directory; this slice builds on top of it")
+        else:
+            record("pass", f"{len(base_tasks)} base task(s) applied")
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
     failed, applied_tasks, unanchored_tasks, already, unclear = [], 0, [], [], []
@@ -705,6 +729,32 @@ def main() -> int:
                 print("      Add a `**Build**: <command>` line to the blueprint header.")
             elif run_build(tree, cmd) != 0:
                 rc = 1
+        if do_scaffold and not failed:
+            # The generator writing forty skeletons by hand is where drift comes from;
+            # the copy already holds exactly what the document says, verified by the
+            # build. Only files the blueprint declares new, and only ones not already
+            # there: nothing existing is touched, which is the promise this flag bends
+            # far enough and no further.
+            written, skipped = [], []
+            for _tid, section in base_tasks + tasks:
+                for relp, kind in file_kinds(section):
+                    if kind != "new":
+                        continue
+                    src, dst = os.path.join(tree, relp), os.path.join(root, relp)
+                    if not os.path.isfile(src):
+                        continue
+                    if os.path.exists(dst):
+                        skipped.append(relp)
+                        continue
+                    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+                    shutil.copyfile(src, dst)
+                    written.append(relp)
+            print(f"\n{CYAN}=== Scaffold ==={NC}")
+            print(f"  wrote {len(written)} new file(s) into {root}")
+            if skipped:
+                print(f"  {YELLOW}left {len(skipped)} file(s) alone — already on disk{NC}: " + ", ".join(skipped[:6]))
+        elif do_scaffold:
+            print(f"\n{YELLOW}--scaffold skipped: {len(failed)} task(s) did not apply.{NC}")
     finally:
         if keep:
             print(f"\nTree kept at: {tree}")

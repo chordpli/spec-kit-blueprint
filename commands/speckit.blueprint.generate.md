@@ -18,6 +18,8 @@ Then go back to `blueprint.md`. Your questions about *this feature* are answered
 
 ### If you are generating the blueprint
 
+**A feature too large for one document.** Past about thirty tasks nobody reads the result end to end, so split the feature — and say so in the header, or the split breaks the closure this tool is built on. Give each slice its own `specs/{slice}/` with its own `spec.md`, `plan.md` and `tasks.md` covering that slice's tasks, and put `**Base**: specs/{earlier-slice}/blueprint.md` in the later slice's header. That one line is read from both ends: a reference across the seam resolves in either direction, coverage counts what the base delivers, and the applier applies the base's tasks before this slice's so its Before blocks match and its code compiles. Split at a user-story boundary; a slice whose tasks depend on half of another slice is a worse document than the long one.
+
 Steps 1, 2, 4b and 5 apply in every mode. The content rules are split by mode; read yours and skip the other:
 
 | Mode | Read | Skip |
@@ -76,7 +78,7 @@ Run the prerequisites check from the repository root:
 .specify/scripts/bash/check-prerequisites.sh --json --paths-only
 ```
 
-If that script reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
+If that script reports `Feature directory not found … .specify/feature.json`, do not stop: the extension does not need it. Every script here resolves the feature from the branch prefix, or from a path given as the first argument, so `specs/NNN-name` on the command line is enough. To make the spec-kit script itself work, set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session or run the specify command that writes `.specify/feature.json`.
 
 Parse `FEATURE_DIR` from the output. Then load the following spec artifacts from that directory:
 
@@ -123,7 +125,11 @@ Create `specs/{feature}/blueprint.md` with the following structure:
 any explanation follows after an em-dash. `/speckit.blueprint.validate` parses this token to decide
 whether files are expected on disk.
 **Total Tasks**: {count} | **Files**: {new} new, {modified} modified, {deleted} deleted
+**Base**: specs/{earlier-slice}/blueprint.md — omit this line unless the feature is split (see below)
 **Sources**: tasks.md@{sha12} spec.md@{sha12} plan.md@{sha12} | HEAD {short-sha}
+> Any artifact the blueprint reads belongs on the `**Sources**` line, named the way you
+> refer to it — a repository-relative path is fine and is checked as one:
+> `docs/decisions/ADR-0003.md@{sha12}`.
 **Build**: {the command that compiles or tests this project, from plan.md or the build files — omit the line if there is none}
 
 ## Key Decisions
@@ -355,6 +361,9 @@ a read-through passed a blueprint the scripts then failed.
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build
+# scaffold modes: write the declared-new files from the document rather than by hand —
+# the copy the build just verified holds exactly what the blueprint says
+python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build --scaffold
 # scaffold modes only, right after Step 4 has written the files:
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --fresh
 ```

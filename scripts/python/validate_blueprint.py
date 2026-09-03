@@ -21,7 +21,9 @@ sys.dont_write_bytecode = True
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
+    base_chain,
     changed_since,
+    dependent_slices,
     code_blocks,
     count_path_labels,
     file_kinds,
@@ -170,6 +172,28 @@ def main() -> int:
             "the guide-mode checks and the placeholder rules depend on it, and a run with no mode skips them without saying so",
         )
 
+    # The slices this blueprint continues, if the header names one. Read once: coverage
+    # and forward references both span the chain, and reading it twice would let them
+    # disagree about what exists.
+    chain = base_chain(bp, feature_dir, root)
+    # And the slices that name this one as their base. The link is declared once, by the
+    # later slice, and both ends need it: this one refers forward to work its successor
+    # delivers, and the successor refers back to work this one does.
+    later = dependent_slices(feature_dir, root)
+    chain_ids: set[str] = set()
+    for _cpath, ctext in chain + later:
+        chain_ids |= {t for t, _sec in split_tasks(ctext)}
+        chain_ids |= {m.group(1) for m in re.finditer(r"^\|\s*\**\s*(T\d+)\b", ctext, re.M)}
+    if chain or later:
+        print(f"{CYAN}[0] Sibling slices{NC}")
+        record(
+            "pass",
+            f"this feature is split across {len(chain) + len(later) + 1} blueprint(s)",
+            "base: " + (", ".join(os.path.relpath(cp, root) for cp, _t in chain) or "none")
+            + " | continued in: " + (", ".join(os.path.relpath(cp, root) for cp, _t in later) or "none")
+            + f" — {len(chain_ids)} task(s) live in them",
+        )
+
     # 1. Coverage — every task id in tasks.md reaches the blueprint
     print(f"{CYAN}[1] Task coverage{NC}")
     if os.path.isfile(tasks_path):
@@ -183,7 +207,14 @@ def main() -> int:
             line = m.group(0)
             if re.search(r"already complete|pre-?completed|사전 완료|이미 완료", line, re.I):
                 precompleted.add(m.group(1))
-        present = set(sections) | precompleted
+        # A slice covers what it has plus what its base slices deliver; tasks.md is the
+        # feature's, not the slice's, so without this every split fails here.
+        base_ids: set[str] = set()
+        for _cpath, ctext in chain:
+            base_ids |= {t for t, _sec in split_tasks(ctext)}
+        # Only the base counts as covered: a successor slice has not delivered its tasks
+        # from this one's point of view, and counting them would hide a real omission.
+        present = set(sections) | precompleted | base_ids
         missing = sorted(declared - present)
         if not declared:
             record("warn", "no task ids found in tasks.md (check its format)")
@@ -902,6 +933,9 @@ def main() -> int:
     known_ids = set(sections)
     # Pre-completed rows are real tasks too: a table row `| T004 | … |` delivers its work.
     known_ids |= {m.group(1) for m in re.finditer(r"^\|\s*\**\s*(T\d+)\b", bp, re.M)}
+    # A slice's predecessors deliver their own tasks. Without this a split feature fails
+    # here on every reference across the seam, which is most of them.
+    known_ids |= chain_ids
     # "defined in T019", "see T019", "delivered by T019", "T019 creates it" — a reference
     # is a task id named in prose, not a task's own heading and not a dependency list.
     # **Dependencies**: lines name earlier tasks by design; check them too, since a
@@ -916,7 +950,7 @@ def main() -> int:
                 ref = "T" + m.group(1)
                 if ref == tid or ref in known_ids:
                     continue
-                dangling.append(f"{tid}: points at {ref}, which has no section — {t[:60]}")
+                dangling.append(f"{tid}: points at {ref}, which no section here or in a **Base** blueprint delivers — {t[:60]}")
     if dangling:
         # Deduplicate on (task, target): one missing task cited three times is one problem.
         seen, unique = set(), []

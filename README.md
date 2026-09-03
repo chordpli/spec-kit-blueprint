@@ -46,7 +46,7 @@ Three modes:
 | `doc-only` (default) | Complete-code `blueprint.md` only — nothing written to disk |
 | `scaffold` | Complete-code `blueprint.md` + new files on disk (structural files complete, core logic as TODO stubs) |
 | `guide` | Design-guidance `blueprint.md` — signatures, Why, implementation notes, pitfalls, references, **no body code**. For learning-first workflows where the developer designs the logic |
-| `guide scaffold` | `guide`, plus the skeletons written to disk — **new files only**, so a feature that is mostly edits to existing files gets few files or none. Prefer this over plain `guide` when you will type the bodies: the skeletons' not-implemented markers carry the work instructions, and in plain `guide` you would be typing those markers out only to delete them. Each skeleton compiles against the tree as the blueprint's `(modify)` hunks leave it — so the tree as a whole builds once you have typed those hunks, not the moment the files land; type the hunks first, they are the mechanical part |
+| `guide scaffold` | `guide`, plus the skeletons written to disk — **new files only**, so a feature that is mostly edits to existing files gets few files or none. Prefer this over plain `guide` when you will type the bodies: the skeletons' not-implemented markers carry the work instructions, and in plain `guide` you would be typing those markers out only to delete them. Each skeleton compiles against the tree as the blueprint's `(modify)` hunks leave it, so the tree as a whole may not build until you have typed those hunks — type them first, they are the mechanical part |
 
 ## Why
 
@@ -135,6 +135,7 @@ The modes are not interchangeable, and a team evaluation of this extension found
 
 Two things worth deciding up front on a team:
 
+- **Splitting a large feature.** Give each slice its own `specs/{slice}/` and put `**Base**: specs/{earlier}/blueprint.md` in the later slice's header. The tools then read the slices as one feature: references across the seam resolve, coverage counts what the base delivers, and `apply_blueprint.py` applies the base before the slice so the build has the types it needs.
 - **Feature size.** A ~20-task feature produces roughly 1,600–1,900 lines in the full-code modes. `guide` is not shorter by much any more: the reference sections the closure rules require (requirements reproduced, existing APIs, state machines) and the self-contained marker messages are most of the length, and an 18-task guide blueprint came out at 1,385 lines. A 57-task feature produced 5,517. Past about 30 tasks the document stops being something anyone reads end to end — split the feature instead.
 - **Lifetime.** `blueprint.md` describes an intention, and it goes stale the moment implementation diverges. Decide whether it is deleted at merge or kept as a record; an undeleted blueprint from six months ago is a confident, wrong document.
 
