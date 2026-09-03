@@ -229,6 +229,7 @@ def main() -> int:
 
     # 3. Before blocks quote something that is actually there
     out_of_range, moved_first, identical, ambiguous, misnumbered = [], [], [], [], []
+    unjudged: set[str] = set()
     # Which task first declares each file. A later task that cites a line past the end of
     # the file on disk may be citing the file as an EARLIER task leaves it — the wiring
     # T006 adds is what T008 edits — and disk cannot confirm or deny that. The applier
@@ -292,8 +293,13 @@ def main() -> int:
                 needle = quoted if quoted in text else quoted.rstrip("\n")
                 if needle and text.count(needle) == 1:
                     actual = text[: text.index(needle)].count("\n") + 1
-                    if actual != cites[0] and first_touch.get(named) in (None, tid):
-                        misnumbered.append(f"{tid}: Before says line {cites[0]}, the quoted text is at line {actual} of {named}")
+                    if actual != cites[0]:
+                        if first_touch.get(named) in (None, tid):
+                            misnumbered.append(f"{tid}: Before says line {cites[0]}, the quoted text is at line {actual} of {named}")
+                        else:
+                            # An earlier task rewrites this file, so where the text sits on
+                            # disk says nothing about where it will sit when the hunk runs.
+                            unjudged.add(named)
             for n in cites:
                 bound = max(candidates.values())
                 if n > bound:
@@ -319,6 +325,13 @@ def main() -> int:
         record("fail", "Before block cites a line past the end of its file", "\n".join(out_of_range[:6]))
     else:
         record("pass", "Before line references are within their files")
+    if unjudged:
+        # Without this line the run names one task and looks like the others were checked.
+        record(
+            "pass",
+            f"line positions not checked in {len(unjudged)} file(s) an earlier task rewrites",
+            ", ".join(sorted(unjudged)[:6]) + " — the applier checks these, since it applies in order",
+        )
     if misnumbered:
         record(
             "warn",
