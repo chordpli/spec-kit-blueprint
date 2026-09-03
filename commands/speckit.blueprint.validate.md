@@ -41,9 +41,11 @@ Each answers a different question:
 The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The applier also runs in every mode, and is the only one of the three that hands the blueprint to a compiler. The scaffold validator short-circuits for the file-less modes unless you pass `--strict`.
 
 `apply_blueprint.py` takes `--require-anchors`, which fails the run when a task's code anchors to
-no position, or when nothing anchored at all. Leave it off locally — a guide blueprint of pure
-instructions legitimately applies nothing — and turn it on in CI, where "verified nothing" and
-"verified everything" must not share an exit code. `--build` runs a shell command, which comes from
+no position, when nothing anchored at all, or when any task is already in the tree or could not be
+judged. Leave it off locally — a guide blueprint of pure instructions legitimately applies nothing —
+and turn it on in CI, where "verified nothing" and "verified everything" must not share an exit code.
+That last condition is what keeps a CI job from staying green once the work is done: a run whose copy
+discarded the implementation in order to test the blueprint says nothing about the tree CI guards. `--build` runs a shell command, which comes from
 the blueprint's own `**Build**:` line when it has one; it is printed before it runs, skipped when a
 task failed to apply, and killed after 15 minutes.
 
@@ -56,6 +58,8 @@ A hunk the applier can neither place nor recognise, in a file that has changed s
 A missing or unreadable `**Mode**:` line is a warning from all three tools rather than a silent `unknown`, since the guide-mode checks and the placeholder rules hang on it. In a guide-mode blueprint a `**Build**:` command that invokes a test runner is a warning too: the skeletons throw by design. A path that merely contains the word `tests` does not count — `compileall -q pkg tests` is the compile check the spec asks a Python project to stamp.
 
 The applier removes from its copy any file that carries a blueprint marker but that no task declares — the residue of a deleted or renamed task — and says so, so that file cannot stand in for the task the document no longer has. It also warns when a task id has more than one section, since it applies both.
+
+Both Python scripts take `--help`, and refuse an option they do not recognise rather than running as though it had not been typed.
 
 Two flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when
 the blueprint records a file-less mode — for scaffolding done after generation. `--fresh` says the
@@ -90,11 +94,13 @@ Format-level, so they hold for any language. Eleven numbered sections, in the or
    - no authored comment narrates the blueprint's history ("moved verbatim", "pre-existing", "unchanged from") — that sentence is for this document's reader, and cleanup never touches a doc comment, so it would stay in the code for ever. A warning
    - no `**Before**` quotes a structural line (a closing brace, `/**`, `*/`, `end`, a closing tag) more times than its `**After**` returns it — a warning, since a task that removes a block legitimately drops one
    - every task that declares a `(new)` file gives it a code block
+   - a code block's `**`path`**` label names a file its task declares. A label with a typo is ignored by every tool, and the document goes on pointing a reader at a file that is not there
+   - a task with a Before/After hunk declares a file to modify; a declaration written without its `(kind)` is checked for existence like any other, since a path typo in one used to pass every document check
    - a skeleton on disk that still carries its marker is the blueprint's block for it, verbatim — a warning when it is not, since the applier tests the block and the scaffold validator only counts markers
    - every `modify` task anchors its code to a position — a content block with no `**Before**`/`**After**` pair, no path label, and no `**Replace entire file**` marker is a warning, because the applier cannot place it. A block under `**Verification**` is a command, not content, and is not counted
 4. **Multi-file task labels**: a task naming more than one file labels each authored code block with its path
 5. **Placeholder content**: no ellipsis stubs (`// ...`, `# ...`) in any mode; in `doc-only`/`scaffold` modes, additionally no `TODO`/`FIXME`/`HACK`/`XXX` markers in code blocks
-6. **Guide-mode bodies** (guide modes only): a not-implemented marker whose *message* spells out the code it stands in for — an exact expression, a chain of calls, a boolean — is reported, because a message that hands over the body makes typing transcription, which is the thing guide mode exists to avoid; an expression body (a stream chain, a lambda, a ternary) counts as body logic even with no control-flow keyword, which is half of a Java or JavaScript body; a skeleton block with any control flow beside its marker — one `if` is a method written complete beside five that kept theirs — or in a block with no marker — comments and docstrings excluded — is reported as body logic the developer was meant to write; and a new file whose name says it holds behavior (service, handler, controller, scheduler, test) whose block carries no marker at all is reported too, since the marker is what makes a skeleton a skeleton. Warnings: the boundary between a skeleton and an implementation is a judgment
+6. **Guide-mode bodies** (guide modes only): the scan covers what each `**After**` block *adds*, not only the skeletons — a guide feature's behaviour changes are usually modify hunks, and skipping them checked the mode's one promise everywhere except where it mattered. Context an After repeats from its Before is a quotation and is not scanned. A not-implemented marker whose *message* spells out the code it stands in for — an exact expression, a chain of calls, a boolean — is reported, because a message that hands over the body makes typing transcription, which is the thing guide mode exists to avoid; an expression body (a stream chain, a lambda, a ternary) counts as body logic even with no control-flow keyword, which is half of a Java or JavaScript body; a skeleton block with any control flow beside its marker — one `if` is a method written complete beside five that kept theirs — or in a block with no marker — comments and docstrings excluded — is reported as body logic the developer was meant to write; and a new file whose name says it holds behavior (service, handler, controller, scheduler, test) whose block carries no marker at all is reported too, since the marker is what makes a skeleton a skeleton. Warnings: the boundary between a skeleton and an implementation is a judgment
 7. **Regeneration**: when the committed `blueprint.md` carries the same `**Sources**` hashes, a task whose section changed anyway is a failure — regeneration keeps unchanged tasks verbatim so the diff stays reviewable
 8. **Freshness**: the header's `**Sources**` stamp records each source artifact as `name@hash`; the script re-hashes those files and fails when one has changed since the blueprint was generated. No stamp at all is a warning
 9. **Cited requirements reproduced**: every requirement id cited in a `**Requirements**` line (`FR-`, `NFR-`, `SC-`, `AC-`, `US-`) is also stated somewhere else in the document — a citation alone leaves a reader working from this file unable to look it up

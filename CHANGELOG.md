@@ -80,6 +80,13 @@ explain their choices — and now it checks them.
 - One marker form: `TODO(blueprint): T{ID}: {instruction}` with the colon, the same shape as the executable markers' messages; the generate spec had said it two ways
 - The generate spec says who it is for: the generator. A developer typing from the result reads 3a-G, 3b and 3c, as the README says, and none of the closure rules; the two lists differ because the two readers do
 - Cleanup's remaining-work list also reads the unchecked Checklist rows, since a `(modify)` task leaves no marker on disk and a feature half done had an empty list
+- Guide-mode body detection covers what an `**After**` block adds. A guide feature's behaviour changes live in modify hunks, so the mode's one mechanical promise was checked everywhere except where it mattered: a reviewer replaced an After's marker with a working body and every tool passed it. Context the After repeats from its Before stays a quotation
+- A block label naming a path its task does not declare is a failure; the applier ignored it, fell back to the sole modified file, and reported the block as having no label at all
+- A declaration written without its `(kind)` is checked for existence, and a task with a hunk but no `(modify)` file is a failure — two shapes of wrong path that passed every document check
+- `--require-anchors` fails when a task is already in the tree or cannot be judged, so a CI job does not stay green over a tree that has moved past the blueprint
+- A partly typed task is not counted among those already in the tree
+- Both Python scripts take `--help` and refuse an unknown option instead of running as though it had not been typed; a typo in `--build` looked like a run that chose not to build
+- The scaffold validator counts methods, not fields, and `--markers` joins a message split across concatenated string literals
 - Guide-mode body detection reads the marker's message and expression bodies. A message that spells out the exact expression hands over the body inside a string, where no code check had ever looked, and a stream chain or a lambda is body logic with no control-flow keyword in it — half a Java body. Both were invisible; a reviewer found four dictated markers and a completed repository method in one blueprint that had passed
 - A Before block that is not in the file it quotes, or is in it twice, is reported by the document validator — checked against the tree as the blueprint's commit left it, so an implemented tree does not report every hunk as wrong. Both tools ask git the same question now, through one shared helper
 - "Already applied" says when only part of a task has landed, and a hunk whose anchor an earlier task moved says "cannot tell" rather than claiming the work is done
