@@ -514,8 +514,22 @@ def run_build(tree: str, cmd: str) -> int:
 def main() -> int:
     global _tree, _root, _stamped_head
     argv = sys.argv[1:]
+    if "--help" in argv or "-h" in argv:
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]")
+        print("\n  --build            run the project's build in the copy after applying")
+        print("  --keep             print the copy's path instead of deleting it")
+        print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
+        print("\nExit 0 applied cleanly, 1 a task failed or the build did, 2 feature directory not resolved.")
+        return 0
     do_build, keep = "--build" in argv, "--keep" in argv
     strict_anchors = "--require-anchors" in argv
+    KNOWN = {"--build", "--keep", "--require-anchors"}
+    unknown = [a for a in argv if a.startswith("-") and a not in KNOWN]
+    if unknown:
+        # A typo in --build looked like a run that simply chose not to build.
+        print(f"{RED}ERROR: unknown option(s): {' '.join(unknown)}{NC}")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]")
+        return 2
     args = [a for a in argv if not a.startswith("--")]
 
     root = repo_root()
@@ -612,7 +626,9 @@ def main() -> int:
             try:
                 note, count, flags = apply_task(tree, section)
             except AlreadyApplied as exc:
-                already.append(tid)
+                # Partly typed is not done: /speckit.blueprint.review counts a task with
+                # one of three registrations written as unimplemented, and so does this.
+                (unclear if " of this task's " in str(exc) or " of the " in str(exc) else already).append(tid)
                 # "already applied" for a task where only some hunks are present says the
                 # work is done when it is half done, which is the opposite of what
                 # /speckit.blueprint.review means by implemented.
@@ -670,6 +686,14 @@ def main() -> int:
 
         rc = 1 if failed else 0
         if strict_anchors and (unanchored_tasks or applied_tasks == 0):
+            rc = 1
+        if strict_anchors and (already or unclear):
+            # The CI flag's whole point is that "verified nothing" must not share an exit
+            # code with "verified everything". A run whose copy discarded the
+            # implementation to test the blueprint says nothing about the tree CI is
+            # guarding, so it must not stay green there.
+            print(f"\n  {YELLOW}--require-anchors: {len(already) + len(unclear)} task(s) are already in the tree or"
+                  f" could not be judged — this run describes the blueprint, not this tree.{NC}")
             rc = 1
         if do_build and failed:
             print(f"\n{YELLOW}Build skipped — {len(failed)} task(s) did not apply, so a build here"

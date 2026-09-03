@@ -297,6 +297,13 @@ if [[ "$MARKERS" == true ]]; then
                         nxt = lines[i + 1]; sub(/^[ \t]+/, "", nxt)
                         if (nxt ~ /T[0-9]+:/) out = out " " nxt
                     }
+                    # A message split across concatenated string literals showed only
+                    # its first physical line.
+                    j = i
+                    while (out !~ /\)[[:space:]]*;?[[:space:]]*$/ && j < NR && j - i < 6) {
+                        j++; cont = lines[j]; sub(/^[ \t]+/, "", cont)
+                        out = out " " cont
+                    }
                     print i ": " out
                 }
             }' "$REPO_ROOT/$f")
@@ -504,7 +511,7 @@ check_over_implementation() {
     if [[ "$has_todo" -eq 0 ]] && [[ "$has_not_impl" -eq 0 ]]; then
         # Count function/method definitions (language-agnostic patterns)
         local method_count
-        method_count=$(count_matches -cE "^[[:space:]]*(def |fun |func |function |public |private |protected |async )" "$file")
+        method_count=$(count_matches -cE "^[[:space:]]*(def |fun |func |function |public |private |protected |async |static |[A-Za-z_][A-Za-z0-9_<>,. ]*[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\()[^;]*\(" "$file")
         local line_count=$(wc -l < "$file" | tr -d ' ')
 
         if [[ "$method_count" -gt 1 ]] && [[ "$line_count" -gt 30 ]]; then

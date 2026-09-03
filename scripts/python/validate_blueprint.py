@@ -26,6 +26,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     count_path_labels,
     file_kinds,
     file_paths,
+    looks_like_path,
     parse_mode,
     repo_root,
     resolve_feature_dir,
@@ -64,6 +65,22 @@ def record(status: str, name: str, evidence: str = "") -> None:
 
 
 
+def after_additions(sec: str) -> list[str]:
+    """What each After block ADDS, as a block of lines.
+
+    A modify hunk's After repeats the lines around the change; those are quotations of
+    existing code, and scanning them reported an untouched `if` in the context as body
+    logic. Only what the After adds was authored here.
+    """
+    out = []
+    for before, after in BEFORE_AFTER_RE.findall(sec):
+        kept = {ln.strip() for ln in before.split(chr(10)) if ln.strip()}
+        added = [ln for ln in after.split(chr(10)) if ln.strip() and ln.strip() not in kept]
+        if added:
+            out.append(chr(10).join(added))
+    return out
+
+
 def code_lines(block: str) -> list[str]:
     """Lines of a code block that are code — comments and doc comments dropped.
 
@@ -100,7 +117,19 @@ def code_lines(block: str) -> list[str]:
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    argv = sys.argv[1:]
+    if "--help" in argv or "-h" in argv:
+        print("Usage: validate_blueprint.py [specs/NNN-feature-name]")
+        print("\nChecks blueprint.md against tasks.md and the working tree. No flags.")
+        print("Exit 0 pass, 1 failures found, 2 feature directory not resolved.")
+        return 0
+    unknown = [a for a in argv if a.startswith("-")]
+    if unknown:
+        # Silently ignoring these meant a typo in a flag looked like a clean run.
+        print(f"{RED}ERROR: unknown option(s): {' '.join(unknown)}{NC}")
+        print("Usage: validate_blueprint.py [specs/NNN-feature-name]")
+        return 2
+    args = argv
     root = repo_root()
     feature_dir = resolve_feature_dir(root, args[0] if args else None)
 
@@ -214,12 +243,29 @@ def main() -> int:
                 continue
             # A file an earlier task creates is (modify) to every task after it, and is not
             # on disk until the first is typed — the "one new file, several tasks" form.
-            if kind == "modify" and relp not in created_earlier and not os.path.isfile(os.path.join(root, relp)):
-                missing_modify.append(f"{tid}: {relp}")
+            # "unknown" too: a declaration written without its `(kind)` was not counted,
+            # so a path typo in one passed every document check and failed in the applier.
+            if kind in ("modify", "unknown") and relp not in created_earlier and not os.path.isfile(os.path.join(root, relp)):
+                missing_modify.append(f"{tid}: {relp}" + ("  (no kind declared)" if kind == "unknown" else ""))
             if kind == "new":
                 created_earlier.add(relp)
     if escapes:
         record("fail", "a declared path resolves outside the repository", "\n".join(escapes[:6]))
+    # A hunk edits a file that exists, so its task has to declare one as (modify).
+    hunk_without_modify = []
+    for tid, sec in sections.items():
+        if not BEFORE_AFTER_RE.search(sec):
+            continue
+        kinds_here = {k for _p, k in file_kinds(sec)}
+        if kinds_here and "modify" not in kinds_here and "unknown" not in kinds_here:
+            hunk_without_modify.append(f"{tid}: has a Before/After hunk and declares only {', '.join(sorted(kinds_here))} file(s)")
+    if hunk_without_modify:
+        record(
+            "fail",
+            "a task has a Before/After hunk but declares no file to modify",
+            "\n".join(hunk_without_modify[:6]) + "\nif the file it edits already exists, declare it (modify), not (new)",
+        )
+
     if missing_modify:
         record(
             "fail",
@@ -528,6 +574,26 @@ def main() -> int:
             "\n".join(drifted[:6]) + "\nedited since scaffolding, or scaffolded from a different version — the applier tests the block, not the file",
         )
 
+    # 3-post-b. A block label names a file the task declares. A label with a typo in it is
+    #           ignored by every tool — the applier falls back to the sole modified file
+    #           and says the block "had no path label" — so the document keeps pointing a
+    #           reader at a file that does not exist.
+    stray_labels = []
+    for tid, sec in sections.items():
+        declared_here = {p for p, _k in file_kinds(sec)}
+        for m in re.finditer(r"^\*\*`([^`]+)`\*\*", sec, re.M):
+            label = m.group(1)
+            if looks_like_path(label) and label not in declared_here:
+                stray_labels.append(f"{tid}: labels a block `{label}`, which the task does not declare")
+    if stray_labels:
+        record(
+            "fail",
+            "a code block is labelled with a path the task does not declare",
+            "\n".join(stray_labels[:6]) + "\nthe tools ignore the label and a reader follows it to a file that is not there",
+        )
+    else:
+        record("pass", "every block label names a file its task declares")
+
     # 4. Multi-file tasks map each block to a path
     print(f"\n{CYAN}[4] Multi-file task labels{NC}")
     unlabeled = []
@@ -575,7 +641,7 @@ def main() -> int:
         # After blocks are authored content too — only the Before is a quotation — and the
         # javadoc that prompted this check sat in one.
         authored_blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
-        authored_blocks += [after for _b, after in BEFORE_AFTER_RE.findall(sec)]
+        authored_blocks += after_additions(sec)
         for blk in authored_blocks:
             for ln in blk.split("\n"):
                 t = ln.strip()
@@ -661,7 +727,11 @@ def main() -> int:
         for tid, sec in sections.items():
             kinds = dict(file_kinds(sec))
             new_behavioral = [f for f, k in kinds.items() if k == "new" and BEHAVIORAL.search(os.path.basename(f))]
+            # An After is authored content — only the Before is a quotation — and in a
+            # guide blueprint the behaviour changes usually live in modify hunks, so
+            # skipping them checked the promise everywhere except where it mattered.
             blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
+            blocks += after_additions(sec)
             if new_behavioral and blocks and not any(MARKER.search(b) for b in blocks):
                 # A complete implementation with one `if` in it carried no control flow
                 # worth counting, and passed. The marker is the skeleton's signature; a
