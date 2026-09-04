@@ -142,10 +142,22 @@ def replace_once(path: str, before: str, after: str) -> int:
     # the stamp decides is only whether the answer is "you did this" or "I cannot tell".
     _changed = changed_since_stamp(rel(path))
     if editable and any(text.count(b) == 1 for b, _a in candidates):
+        # In the same class this hunk edits, not anywhere in the file. The harm being
+        # tested is "the developer already made this change here"; a new test class that
+        # copies a method from the class above it has the same line, the same line above
+        # that, and a different class — and was reported as already applied.
+        file_lines_seq = text.split("\n")
+        here_scope = None
+        for b, _a in candidates:
+            if text.count(b) == 1:
+                here_scope = _class_at(file_lines_seq, text[: text.index(b)].count("\n"))
+                break
         would_duplicate = [
             ln for ln in added_now
             if after.count(ln) == 1 and ln in file_lines and text.count(ln) == 1
             and ln not in ("pass", "return", "}", "});") and len(ln) > 12
+            and (here_scope is None
+                 or _class_at(file_lines_seq, next(i for i, x in enumerate(file_lines_seq) if x.strip() == ln)) == here_scope)
             and _same_neighbour(text, after, ln)
         ]
         if would_duplicate:
@@ -271,6 +283,23 @@ def _above(block: str, ln: str) -> str:
     for j in range(i - 1, -1, -1):
         if lines[j]:
             return lines[j]
+    return ""
+
+
+CLASS_DECL = re.compile(
+    r"(?:export\s+|default\s+|public\s+|private\s+|protected\s+|final\s+|abstract\s+|sealed\s+|open\s+|static\s+|data\s+)*"
+    r"(?:class|interface|record|struct|object|trait|enum)\b"
+)
+
+
+def _class_at(lines: list, idx: int) -> str:
+    """The top-level type declaration this line sits inside, or "" outside one."""
+    for j in range(min(idx, len(lines) - 1), -1, -1):
+        ln = lines[j]
+        if not ln.strip():
+            continue
+        if len(ln) - len(ln.lstrip()) == 0 and CLASS_DECL.match(ln.strip()):
+            return ln.strip()
     return ""
 
 
