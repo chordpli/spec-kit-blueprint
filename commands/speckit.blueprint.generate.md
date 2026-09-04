@@ -117,6 +117,13 @@ If a task's file already exists on disk and fully satisfies the task requirement
 2. Mark it as `[X]` in the final Checklist
 3. Keep the task ID — never merge multiple task IDs into one heading
 
+**A task that had a section keeps its reasoning when it loses one.** Regenerating while the
+feature is being implemented moves tasks into this table one at a time — the work is done, the
+`**Before**` it quoted is no longer in the file, and a full section can no longer be written for
+it. Carry the section's **Why**, and any Key Decision it owned, into the row. A blueprint that
+demotes a task and drops its reasoning has deleted the record of a decision the code still
+embodies, and nothing downstream can tell that it ever existed.
+
 ### Step 3: Generate blueprint.md
 
 Create `specs/{feature}/blueprint.md` with the following structure:
@@ -163,9 +170,9 @@ For user-story phases, restate the story's Goal and Independent Test from tasks.
 
 ### Pre-completed Tasks
 
-| Task | File | Status |
-|------|------|--------|
-| T{ID}: {description} | `{path}` | Already complete — {brief reason} |
+| Task | File | Status | Why |
+|------|------|--------|-----|
+| T{ID}: {description} | `{path}` | Already complete — {brief reason} | {the reason this task's code looks the way it does — required when the task previously had a section, and the Key Decision it owned if it owned one} |
 
 > Only include this table if the phase has already-complete tasks. Tasks listed here do NOT get a full heading or code block below.
 

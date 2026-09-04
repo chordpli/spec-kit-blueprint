@@ -426,7 +426,11 @@ def main() -> int:
         record(
             "fail",
             "a Before block is not in the file it quotes",
-            "\n".join(not_quoted[:6]) + "\nthe applier matches this text exactly; quote the file as it is now",
+            "\n".join(not_quoted[:6])
+            + "\nthe applier matches this text exactly; quote the file as it is now."
+              "\nIf the work is already done — a regeneration re-stamps HEAD to a commit that includes it —"
+              "\nthe task belongs in the Pre-completed Tasks table, and its row must carry the Why and the"
+              "\nKey Decision the section held. Deleting the section makes this quiet and loses the record.",
         )
     else:
         record("pass", "every checkable Before block is in the file it quotes")
