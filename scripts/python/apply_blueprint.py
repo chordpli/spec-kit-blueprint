@@ -135,7 +135,13 @@ def replace_once(path: str, before: str, after: str) -> int:
     # copy is building out of this document has no developer's edits in it, and reading one
     # that way skipped a task nobody had typed — and then reported the run green.
     editable = in_commit(_root, _stamped_head, rel(path)) if _stamped_head else True
-    if editable and changed_since_stamp(rel(path)) and any(text.count(b) == 1 for b, _a in candidates):
+    # `None` means git could not answer — a shallow clone, a stamp from another machine.
+    # Treating that as "not changed" turned the guard off completely and the hook was
+    # applied a second time on top of itself, silently, under a green last line. The harm
+    # test below is a direct question about this file and does not need the stamp; what
+    # the stamp decides is only whether the answer is "you did this" or "I cannot tell".
+    _changed = changed_since_stamp(rel(path))
+    if editable and any(text.count(b) == 1 for b, _a in candidates):
         would_duplicate = [
             ln for ln in added_now
             if after.count(ln) == 1 and ln in file_lines and text.count(ln) == 1
@@ -147,6 +153,21 @@ def replace_once(path: str, before: str, after: str) -> int:
             # for a hunk that has landed, "partly" for one where a line or two has.
             here = sum(1 for ln in added_now if ln in file_lines)
             scope = "" if here == len(added_now) else f" of this task's {len(added_now)} added line(s), {here} present:"
+            if _changed is None:
+                raise Ambiguous(
+                    f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r},"
+                    f" and this clone cannot resolve HEAD {_stamped_head} to say whether the change is"
+                    f" already made or the file drifted — nothing was written"
+                )
+            if _changed is False and _stamped_head:
+                # The file is exactly as the stamp saw it and the change is already in it:
+                # nobody has done this since, so the document is prescribing a change its
+                # own baseline already contains.
+                raise Defect(
+                    f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r},"
+                    f" which is already there in HEAD {_stamped_head} — the blueprint prescribes a change"
+                    f" its own baseline already has"
+                )
             raise AlreadyApplied(
                 f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r}, which is"
                 f" already in the file — the change has been made another way since HEAD {_stamped_head}"
@@ -795,6 +816,16 @@ def main() -> int:
                 print("      Add a `**Build**: <command>` line to the blueprint header.")
             elif run_build(tree, cmd) != 0:
                 rc = 1
+                if not failed and _stamped_head:
+                    moved = sorted({p for p in declared_all
+                                    if changed_since(root, _stamped_head, p) is True})
+                    if moved:
+                        print(f"\n      {YELLOW}every task applied and the build still failed. {len(moved)} of the"
+                              f" file(s) this blueprint writes have changed since HEAD {_stamped_head}:{NC} "
+                              + ", ".join(moved[:6]))
+                        print("      A blueprint describes the tree at its stamp. Run against a tree that has moved on,")
+                        print("      a failure here is usually that distance rather than a defect in the document —")
+                        print("      check the errors against the files listed before rewriting anything.")
             elif mode.startswith("guide"):
                 print(f"      {YELLOW}a guide build compiles skeletons; it does not exercise behavior.{NC}")
                 stripped = [

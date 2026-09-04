@@ -973,8 +973,16 @@ def main() -> int:
                 # generate spec already says not to stamp such a file; when one is stamped
                 # anyway the drift is the work, not something to regenerate over. The
                 # document said so in prose and there was no path in the code to say it.
+                # The family, not this document: a split feature's stamp is edited by
+                # whichever slice owns that task, and looking only here left the first
+                # slice failing forever over work its sibling does.
                 owner = next((tid for tid, sec in sections.items()
                               if name in {q for q, _k in file_kinds(sec)}), "")
+                if not owner:
+                    owner = next((f"{tid} (in {os.path.relpath(cpath, root)})"
+                                  for cpath, ctext in chain + later
+                                  for tid, sec in split_tasks(ctext)
+                                  if name in {q for q, _k in file_kinds(sec)}), "")
                 (own_work if owner else stale).append(
                     f"{name}: stamped {want}, now {got}" + (f" — {owner} edits this file" if owner else "")
                 )
