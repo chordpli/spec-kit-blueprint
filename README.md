@@ -230,6 +230,19 @@ compiles" stops being a claim the generator makes about itself. Applying is dete
 `**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect
 rather than repaired by guesswork. `--keep` leaves the copy behind to inspect.
 
+Every flag the three scripts take, since until now they were documented only in `--help`:
+
+| Flag | Script | What it does |
+|------|--------|--------------|
+| `--build` | apply | Run the project's build inside the copy. Without it the run only reports whether the tasks applied |
+| `--keep` | apply | Leave the copy on disk and print its path |
+| `--scaffold` | apply | After a clean apply, copy the declared-new files into your tree — only files the blueprint declares new and only where nothing is already there |
+| `--require-anchors` | apply | Exit non-zero when a task anchors nothing, or when tasks were skipped as already-applied. This is the flag for CI: a run that verified nothing must not share an exit code with one that verified everything |
+| `--strict-guide` | validate | Turn the guide-mode body findings into failures rather than warnings |
+| `--strict` | scaffold | Check files on disk even when the mode says none were written — for scaffolding done after the blueprint was generated |
+| `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note |
+| `--markers` | scaffold | List every marker left in the declared files as `path:line: text` and exit. This is what cleanup starts from |
+
 Every edit lands in the copy, never in your tree: a declared path that resolves outside it is a
 reported defect, and symlinks are not followed into it. The one thing that is not sandboxed is the
 build itself — `--build` runs a shell command, taken from the blueprint's `**Build**:` line when it

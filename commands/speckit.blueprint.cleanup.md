@@ -63,6 +63,7 @@ For each in-scope file that exists on disk, collect every finding in these categ
 | **Stub signal** | `NotImplementedError`, `throw ... NotImplemented`, empty body with placeholder comment | Unfinished logic |
 | **Narration comment** | Comment that restates what the adjacent line visibly does, or copies blueprint prose/task text into the code | `// save the order`, `// Step 3: validate input` |
 | **Commented-out code** | Contiguous comment block that parses as code | Dead experiments |
+| **Comment the change falsified** | A doc comment, Javadoc or docstring on a symbol this feature changed, whose text still describes the old behavior — a requirement id that moved, a stated bound that changed, a named default that is no longer the default | `/** FR-008: freezes before posting */` above a method the feature reordered |
 
 Match markers only inside comment syntax for the file's language — a TODO inside a string literal or test fixture data is not a finding. Blueprints touch more than one language: apply the same rules to SQL (`--`, `/* */`), shell/YAML/config (`#`), JS/TS, and templates, using each file's own comment syntax. Two language-specific cautions: a not-implemented **call** whose argument is a string (e.g. Kotlin's `TODO("…")`, which is executable code, not a comment) is a stub signal, not a comment finding — removing it changes behavior, so it is only ever UNFINISHED or replaced by the developer's implementation, never deleted by cleanup; and a `#` line in a YAML or SQL file that documents a required setting is a constraint comment, not narration.
 
@@ -76,11 +77,13 @@ For each finding, read the surrounding code and judge it:
 | **UNFINISHED** | The described work is genuinely not implemented | KEEP — report as a blocker |
 | **NARRATION** | Restates visible code or duplicates blueprint prose; deleting it loses nothing | Remove |
 | **KEEP** | Constraint/why comment the code cannot express (invariant, lock ordering, external spec link, chosen trade-off) | Keep — never touch |
+| **FALSIFIED** | A doc comment on a symbol this feature changed still describes the behavior it had before | KEEP — report with the line it contradicts; rewriting it is the developer's call, not a deletion |
 | **UNSURE** | Cannot judge confidently from the code alone | Keep — flag for the developer |
 
 Judgment rules:
 
 - **When in doubt, keep.** A leftover comment is cheap; a deleted honest marker hides real debt.
+- A FALSIFIED comment is never removed in `apply` mode. It is the residue a change-heavy feature actually leaves: the code moved and its documentation did not, and the comment is now a false statement that outlives every marker this command was built to sweep. Deleting it loses the intent; report it with the code that contradicts it and let the developer restate it.
 - A `TODO(blueprint): T{ID}` marker is STALE only if the task's Verification criterion from `blueprint.md` is plausibly met by the code as written — check against the blueprint, not just against "code exists".
 - An **executable** blueprint marker (a not-implemented call standing as a body) is UNFINISHED by definition — the body is the marker, so there is no implemented code beneath it to make it stale. Never remove one; report it as remaining work. The only exception is a marker left *beside* real code (unreachable after an early return, or a stale line above a finished body), which is a comment-shaped leftover and follows the STALE rule.
 - Commented-out code is removable only when the live code clearly supersedes it; if it looks like an intentionally preserved alternative, mark UNSURE.

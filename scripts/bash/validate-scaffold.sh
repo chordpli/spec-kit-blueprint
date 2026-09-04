@@ -407,6 +407,55 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
         }' "$GUIDE"; rm -f "$PATHS_FILE")
 fi
 
+# What each declared-new file's block says it declares. The script checked that a file
+# exists and that it carries markers; nothing checked that it holds what the blueprint
+# said it would, so a task whose hunks never landed left a file that passes with two
+# functions missing — reported in three rounds running.
+DECLARED_SYMBOLS=()
+if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && DECLARED_SYMBOLS+=("$line")
+    done < <(PATHS_FILE=$(mktemp); printf '%s\n' "${NEW_FILES[@]}" > "$PATHS_FILE"; \
+             awk -v pathsfile="$PATHS_FILE" '
+        BEGIN { while ((getline line < pathsfile) > 0) if (line != "") want[line] = 1; close(pathsfile) }
+        {
+            t = $0; sub(/^[ \t]+/, "", t)
+            fence = (substr(t, 1, 3) == "```" || substr(t, 1, 3) == "~~~")
+            if (in_fence) {
+                # One label, one block. Letting `armed` persist attributed a shared
+                # helper block to two different test files, and both were reported
+                # missing a class neither was supposed to declare.
+                if (fence) { in_fence = 0; armed = ""; next }
+                if (armed == "") next
+                # A declaration, in the shapes the guide skeletons use. The name is the
+                # word before the parameter list, or after class/interface/struct.
+                if (match(t, /^(export[ \t]+)?(default[ \t]+)?(async[ \t]+)?(public|private|protected|internal|open|final|static|abstract|suspend)?[ \t]*(class|interface|struct|enum|object|record|trait)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+                    n = split(t, w, /[ \t]+/)
+                    for (i = 1; i <= n; i++)
+                        if (w[i] ~ /^(class|interface|struct|enum|object|record|trait)$/ && (i + 1) <= n) {
+                            nm = w[i+1]; gsub(/[^A-Za-z0-9_].*$/, "", nm)
+                            if (nm != "") print armed "\t" nm
+                            break
+                        }
+                    next
+                }
+                if (match(t, /^(export[ \t]+)?(async[ \t]+)?(def|fun|func|function|sub)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+                    n = split(t, w, /[ \t]+/)
+                    for (i = 1; i <= n; i++)
+                        if (w[i] ~ /^(def|fun|func|function|sub)$/ && (i + 1) <= n) {
+                            nm = w[i+1]; gsub(/[^A-Za-z0-9_].*$/, "", nm)
+                            if (nm != "") print armed "\t" nm
+                            break
+                        }
+                    next
+                }
+                next
+            }
+            if (fence) { in_fence = 1; next }
+            for (p in want) if (index($0, "`" p "`") > 0) armed = p
+        }' "$GUIDE" | sort -u; rm -f "$PATHS_FILE")
+fi
+
 # Collect scaffold files referenced in the blueprint that exist on disk
 SCAFFOLD_FILES=()
 SERVICE_FILES=()
@@ -602,6 +651,40 @@ fi
 
 if [[ "$OVER_IMPL_FOUND" == false ]]; then
     pass "No over-implemented scaffold files detected"
+fi
+
+# =============================================
+# CHECK 5: does each declared file hold what the blueprint says it declares?
+# =============================================
+if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "${CYAN}=== Declared symbols ===${NC}"
+    MISSING_SYMBOLS=0
+    CHECKED_SYMBOLS=0
+    for entry in "${DECLARED_SYMBOLS[@]}"; do
+        sym_path="${entry%%$'\t'*}"
+        sym_name="${entry##*$'\t'}"
+        [[ -n "$sym_path" && -n "$sym_name" ]] || continue
+        [[ -f "$REPO_ROOT/$sym_path" ]] || continue
+        CHECKED_SYMBOLS=$((CHECKED_SYMBOLS + 1))
+        if ! grep -q "[^A-Za-z0-9_]${sym_name}[^A-Za-z0-9_]\|^${sym_name}[^A-Za-z0-9_]" "$REPO_ROOT/$sym_path" 2>/dev/null; then
+            # A failure only for a scaffold just written. Once implementation starts a
+            # developer may rename what the blueprint called something else, and that is
+            # their call to make; before then, a missing declaration is a task that never
+            # landed on disk.
+            if [[ "$FRESH" == true ]]; then
+                fail "$sym_path — the blueprint declares \`$sym_name\` and the file does not have it"
+            else
+                warn "$sym_path — the blueprint declares \`$sym_name\` and the file does not have it (renamed, or the task never landed)"
+            fi
+            MISSING_SYMBOLS=$((MISSING_SYMBOLS + 1))
+        fi
+    done
+    if [[ "$CHECKED_SYMBOLS" -eq 0 ]]; then
+        warn "no declared symbols could be read from the blueprint's skeleton blocks"
+    elif [[ "$MISSING_SYMBOLS" -eq 0 ]]; then
+        pass "all $CHECKED_SYMBOLS declared symbol(s) are present in the files that should hold them"
+    fi
 fi
 
 # =============================================

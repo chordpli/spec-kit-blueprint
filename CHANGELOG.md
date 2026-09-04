@@ -28,6 +28,14 @@ explain their choices — and now it checks them.
 - `review` says where each mode writes: `export` to `specs/{feature}/review-decisions.md`, `upstream` to `specs/{feature}/review-upstream.md`, `ask` to the conversation
 - `validate-scaffold.sh --fresh` — states that the scaffold has only just been written, which is the one thing the script cannot see for itself. Its over-implementation check reads the sibling files to guess whether implementation has started, and when every file was written complete there are no marked siblings left to read
 
+### Added
+
+- `validate-scaffold.sh` checks that each declared file holds what the blueprint says it declares. It checked that a file exists and that it carries markers, so a task whose hunks never landed left a file that passed with a function missing — asked for in three rounds running. A missing declaration is a failure under `--fresh` and a warning after that, since a developer who has started implementing may legitimately rename what the document called something else
+- The header's own arithmetic is checked. `**Files**: N new, M modified` was a claim nobody read; a file declared `(new)` by one task and modified by later ones counts once, as new, and what is left disagrees in 14 of the 45 blueprints written against this tool
+- A `path:line` citation in prose that points past the end of that file is a failure. A line number is a claim about the tree like any other, and one naming a line the file does not have cannot be true
+- A marker message repeated across three or more tasks is reported. A message that fits three bodies is describing none of them
+- A JavaScript or TypeScript marker that throws a type the block never declares is reported. It parses, passes a syntax-only build, and dies with a `ReferenceError` naming the marker instead of the work
+
 ### Fixed
 
 - The end of a `**Before**` line range is checked against the block. Only the first number was ever compared, so `(lines 48-50)` above a four-line block passed every check and shipped in a delivered blueprint; a reader counting down from 48 stops one line short of what the hunk replaces

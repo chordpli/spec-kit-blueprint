@@ -32,6 +32,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     file_kinds,
     file_paths,
     looks_like_path,
+    outside_fences,
     parse_mode,
     repo_root,
     resolve_feature_dir,
@@ -222,6 +223,34 @@ def main() -> int:
             record("pass", f"all {len(declared)} tasks from tasks.md appear")
     else:
         record("warn", "tasks.md not found — coverage not checked")
+
+    # The header states counts nobody ever checked. A file some task declares `(new)` is
+    # new however many later tasks modify it — that is the documented pattern — so the
+    # strongest kind wins, and what is left is a real disagreement between the header and
+    # the document under it.
+    fm = re.search(r"^\*\*Total Tasks\*\*.*?\*\*Files\*\*:\s*([^\n]+)", bp, re.M)
+    if fm:
+        claimed = {k: int(n) for n, k in re.findall(r"(\d+)\s+(new|modified|deleted)", fm.group(1))}
+        if claimed:
+            rank = {"new": 3, "deleted": 2, "modified": 1}
+            strongest: dict = {}
+            for _t, sec in sections.items():
+                for path, kind in file_kinds(sec):
+                    k = {"new": "new", "modify": "modified", "modified": "modified",
+                         "delete": "deleted", "deleted": "deleted"}.get(kind)
+                    if k and rank[k] > rank.get(strongest.get(path, ""), 0):
+                        strongest[path] = k
+            actual = {"new": 0, "modified": 0, "deleted": 0}
+            for k in strongest.values():
+                actual[k] += 1
+            off = [f"{k}: header says {claimed[k]}, the tasks declare {actual[k]}"
+                   for k in ("new", "modified", "deleted")
+                   if k in claimed and claimed[k] != actual[k]]
+            if off:
+                record("warn", "the header's file counts do not match the tasks",
+                       "\n".join(off) + "\na file declared new by one task and modified by later ones counts once, as new")
+            else:
+                record("pass", "the header's file counts match the tasks")
 
     if duplicate_ids:
         record(
@@ -436,6 +465,27 @@ def main() -> int:
         record("fail", "Before block cites a line past the end of its file", "\n".join(out_of_range[:6]))
     else:
         record("pass", "Before line references are within their files")
+    # A `path:line` written in prose is a claim about the tree like any other, and one
+    # that names a line the file does not have is simply false. A reviewer planted
+    # `SettlementService.java:900` in a 300-line file and no check moved.
+    bad_cite = []
+    for m in re.finditer(r"`([\w./-]+\.\w{1,5}):(\d{1,5})`", outside_fences(bp)):
+        rel_p, n = m.group(1), int(m.group(2))
+        full = os.path.join(root, rel_p)
+        if not os.path.isfile(full):
+            continue
+        try:
+            with open(full, encoding="utf-8", errors="replace") as f:
+                have = sum(1 for _ in f)
+        except OSError:
+            continue
+        if n > have:
+            bad_cite.append(f"{rel_p}:{n} — the file has {have} line(s)")
+    if bad_cite:
+        record("fail", f"{len(bad_cite)} citation(s) point past the end of the file they name",
+               "\n".join(sorted(set(bad_cite))[:6])
+               + "\na line number in prose is a claim about the tree; this one cannot be true")
+
     if not_quoted:
         record(
             "fail",
@@ -884,6 +934,51 @@ def main() -> int:
                 "a not-implemented marker's message does not begin with its task id",
                 "\n".join(unlabelled_markers[:6])
                 + "\n--markers and cleanup trace a marker to its task by that id; without it the marker is orphaned",
+            )
+
+        # One message written once and pasted is not a work instruction. A reviewer found
+        # twelve of eighteen markers carrying the same sentence, all passing.
+        from collections import Counter
+        msgs = []
+        for tid, sec in sections.items():
+            for m in re.finditer(
+                r"""(?:TODO\(blueprint\)\s*:|NotImplementedError|UnsupportedOperationException"""
+                r"""|panic|todo!|fatalError|throw\s+new\s+Error)\s*[(:]?\s*["'`]?\s*T\d+\s*:\s*([^"'`\n]{10,})""",
+                sec,
+            ):
+                msgs.append(m.group(1).strip())
+        repeated = [(t, n) for t, n in Counter(msgs).items() if n >= 3]
+        if repeated:
+            repeated.sort(key=lambda x: -x[1])
+            record(
+                "warn",
+                f"{len(repeated)} marker message(s) are repeated across three or more tasks",
+                "\n".join(f"{n}x: {t[:70]!r}" for t, n in repeated[:4])
+                + "\na message that fits three tasks is describing none of them; say what THIS body must achieve",
+            )
+
+        # A type the language does not have and the block never declares.
+        JS_INFO = {"js", "jsx", "javascript", "ts", "tsx", "typescript"}
+        BUILTIN = {"Error", "TypeError", "RangeError", "SyntaxError", "EvalError", "ReferenceError", "URIError"}
+        invented = []
+        for tid, sec in sections.items():
+            for info, blk in code_blocks(sec):
+                if (info or "").lower() not in JS_INFO:
+                    continue
+                for m in re.finditer(r"throw\s+new\s+(\w+)\s*\(", blk):
+                    name = m.group(1)
+                    if name in BUILTIN:
+                        continue
+                    if re.search(r"\b(?:class|import|const|let|var|function)\b[^\n]*\b" + re.escape(name) + r"\b", blk):
+                        continue
+                    invented.append(f"{tid}: throws `{name}`, which this block never declares or imports")
+        if invented:
+            record(
+                "fail" if strict_guide else "warn",
+                "a not-implemented marker throws a type the block does not have",
+                "\n".join(sorted(set(invented))[:6])
+                + "\nJavaScript and TypeScript have no not-implemented type — 3a-G's form is `throw new Error(\"T0NN: ...\")`;"
+                  "\nan undeclared one parses, passes a syntax-only build, and dies with a ReferenceError",
             )
 
         demolished = []

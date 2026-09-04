@@ -172,7 +172,7 @@ No prior agreement exists for these. This is where review attention pays off.
 - {question graded DOES NOT HOLD, or an assumption resolved without agreement — with the task ID and who can confirm it}
 ```
 
-In `export` mode, produce this section only: the first table from the blueprint, the second from delegated decisions and divergences with the reason column left as `not stated — {file}:{line}` where no answer was collected. An unfilled reason is honest; an invented one is not.
+In `export` mode, produce this section only: the first table from the blueprint, the second from delegated decisions and divergences with the developer's-reason cells left as `not stated — {file}:{line}` where no answer was collected. An unfilled reason is honest; an invented one is not.
 
 **Where it goes.** `ask` prints its report to the conversation. `export` writes the section above to `specs/{feature}/review-decisions.md` and prints the path — it is the artifact the PR links, so it has to be a file. `upstream` writes its change requests to `specs/{feature}/review-upstream.md`, one file per run (append a dated heading when the file exists, never overwrite an earlier run's requests), and prints the path. These are the only files any mode writes.
 
@@ -289,7 +289,7 @@ An `ARTIFACT DOES NOT HOLD` doubt and an unanswered Open Questions row are the s
 ## Rules
 
 - **Ask before telling**: no blueprint rationale, implementation note, or rejected alternative appears before the developer has answered. After grading, quoting it is the whole point.
-- **Never grade your own answers**: if no human answered, the command ends at the questions.
+- **Never grade your own answers** *(`ask` only)*: if no human answered, `ask` ends at the questions and grades nothing. This does not stop `export` or `upstream` — `export` produces its section from the blueprint and the code with the reason cells left `not stated`, and an agent reading this rule as universal has stopped a mode that never needed an answer.
 - **Never bluff a verdict**: cite the line or the blueprint section, or say you cannot verify. Sycophantic grading is the one failure mode that makes this command worse than useless.
 - **Ground every question in code on disk**: read the developer's files; never quiz from the blueprint's version of what the code would be.
 - **Read-only on code**: this command never edits source files. The single write it may make is checking off completed tasks in `blueprint.md`'s Checklist, under Step 7's conditions.
