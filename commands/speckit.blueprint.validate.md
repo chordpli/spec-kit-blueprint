@@ -26,6 +26,8 @@ Run all three from the repository root, in this order:
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
+# guide and guide scaffold: make the body findings failures rather than notes
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR" --strict-guide
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR"
 ```

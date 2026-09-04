@@ -157,15 +157,101 @@ def changed_since(root: str, head: str, rel_path: str):
     return {0: False, 1: True}.get(proc.returncode)
 
 
-# Both tools read the same Before/After pairs. The gap between the two blocks may not
-# contain another **Before**: with a plain `.*?` a generator that emitted Before(A),
-# Before(B), After(C) paired A with C — a diff that is not in the document.
-BEFORE_AFTER_RE = re.compile(
-    r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```"
-    r"(?:(?!\*\*Before\*\*)[\s\S])*?"
-    r"\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```",
-    re.S,
-)
+_FENCE_LINE = re.compile(r"^[ \t]*(`{3,}|~{3,})([^\n]*)$")
+
+
+def before_after_pairs(section: str) -> list:
+    """(before, after, offset of the **Before** label) for every pair in a section.
+
+    This used to be one regex that counted exactly three backticks. A task whose quoted
+    text is itself Markdown — a README update, which most features have — has to wrap its
+    blocks in four, and then the regex read a Before with no After while the applier,
+    which tracks fence length properly, applied the same document without complaint. Two
+    of the three bundled scripts disagreed about the same file and no notation satisfied
+    both. Fence handling lives here now, once.
+    """
+    lines = section.split(chr(10))
+    offs, pos = [], 0
+    for ln in lines:
+        offs.append(pos)
+        pos += len(ln) + 1
+
+    def block_at(start: int):
+        """(content, index after the closing fence) for the first fence at or after start."""
+        i = start
+        while i < len(lines):
+            m = _FENCE_LINE.match(lines[i])
+            if m:
+                mark = m.group(1)
+                body, j = [], i + 1
+                while j < len(lines):
+                    c = _FENCE_LINE.match(lines[j])
+                    if c and c.group(1)[0] == mark[0] and len(c.group(1)) >= len(mark) and not c.group(2).strip():
+                        return chr(10).join(body) + (chr(10) if body else ""), j + 1
+                    body.append(lines[j])
+                    j += 1
+                return chr(10).join(body) + (chr(10) if body else ""), j
+            # A label's block is the next fence; prose may sit between them, but another
+            # label means this one never had one.
+            if lines[i].strip().startswith(("**Before**", "**After**")) and i != start:
+                return None, i
+            i += 1
+        return None, i
+
+    out, i = [], 0
+    while i < len(lines):
+        t = lines[i].strip()
+        if t.startswith("**Before**"):
+            label_at = offs[i]
+            before, j = block_at(i + 1)
+            if before is None:
+                i = max(j, i + 1)
+                continue
+            # The After that closes this Before, with no second Before in between.
+            k = j
+            after = None
+            while k < len(lines):
+                tt = lines[k].strip()
+                if tt.startswith("**Before**"):
+                    break
+                if tt.startswith("**After**"):
+                    after, k = block_at(k + 1)
+                    break
+                k += 1
+            if after is not None:
+                out.append((before, after, label_at))
+                i = k
+                continue
+            i = j
+            continue
+        i += 1
+    return out
+
+
+class _PairShim:
+    """Keeps `.findall(sec)` and `.search(sec)` working for callers that only want pairs."""
+
+    @staticmethod
+    def findall(section: str) -> list:
+        return [(b, a) for b, a, _o in before_after_pairs(section)]
+
+    @staticmethod
+    def search(section: str):
+        return bool(before_after_pairs(section)) or None
+
+    @staticmethod
+    def match(section: str, pos: int = 0):
+        for b, a, o in before_after_pairs(section):
+            if o == pos:
+                class _M:
+                    @staticmethod
+                    def group(n):
+                        return b if n == 1 else a
+                return _M
+        return None
+
+
+BEFORE_AFTER_RE = _PairShim
 
 # JavaScript and TypeScript have no not-implemented type, so 3a-G gives them a plain
 # `throw new Error(...)` — which is also how real code raises real errors. The task id is

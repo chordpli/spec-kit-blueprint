@@ -554,7 +554,7 @@ def main() -> int:
         record(
             "fail",
             "a **Before** block has no **After** after it",
-            ", ".join(sorted(dangling)) + "\nthe applier refuses these; give every Before its After",
+            ", ".join(sorted(dangling)) + "\ngive every Before its After — a pair is how a change is stated here",
         )
     else:
         record("pass", "every Before block is followed by its After")
@@ -977,14 +977,19 @@ def main() -> int:
         BUILTIN = {"Error", "TypeError", "RangeError", "SyntaxError", "EvalError", "ReferenceError", "URIError"}
         invented = []
         for tid, sec in sections.items():
-            for info, blk in code_blocks(sec):
+            # Quoted blocks are the file as it already is — a `(modify)` hunk whose Before
+            # shows a correct `throw new DomainError(...)` was reported as inventing the
+            # type it was quoting. And the import that declares it lives in another hunk
+            # of the same task, so the whole task is the scope, not one block.
+            declared_here = strip_quoted(sec)
+            for info, blk in code_blocks(strip_quoted(sec)):
                 if (info or "").lower() not in JS_INFO:
                     continue
                 for m in re.finditer(r"throw\s+new\s+(\w+)\s*\(", blk):
                     name = m.group(1)
                     if name in BUILTIN:
                         continue
-                    if re.search(r"\b(?:class|import|const|let|var|function)\b[^\n]*\b" + re.escape(name) + r"\b", blk):
+                    if re.search(r"\b(?:class|import|const|let|var|function)\b[^\n]*\b" + re.escape(name) + r"\b", declared_here):
                         continue
                     invented.append(f"{tid}: throws `{name}`, which this block never declares or imports")
         if invented:
@@ -1001,8 +1006,12 @@ def main() -> int:
             for first, n in body_replaced_by_marker(sec):
                 demolished.append(f"{tid}: replaces {n} line(s) of working code with a marker — first is {first[:46]!r}")
         if demolished:
+            # Not gated on --strict-guide. There is no judgment in this one: the Before
+            # holds working lines and the After holds a marker where they were. A weak
+            # generator treats FAIL 0 as the target and stops, so a warning here is a
+            # gate that passes a document which breaks a shipped feature when typed.
             record(
-                "fail" if strict_guide else "warn",
+                "fail",
                 "a guide-mode hunk replaces existing code with a not-implemented marker",
                 "\n".join(demolished[:6])
                 + "\nthe applier's build compiles the skeleton and goes green; the behavior deleted here"
