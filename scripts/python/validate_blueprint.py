@@ -203,12 +203,15 @@ def main() -> int:
                 precompleted.add(m.group(1))
         # A slice covers what it has plus what its base slices deliver; tasks.md is the
         # feature's, not the slice's, so without this every split fails here.
-        base_ids: set[str] = set()
-        for _cpath, ctext in chain:
-            base_ids |= {t for t, _sec in split_tasks(ctext)}
-        # Only the base counts as covered: a successor slice has not delivered its tasks
-        # from this one's point of view, and counting them would hide a real omission.
-        present = set(sections) | precompleted | base_ids
+        # What this slice's family delivers. tasks.md belongs to the feature, not the
+        # slice, so a split had no passing configuration: a per-slice tasks.md left the
+        # references across the seam dangling, and a whole-feature tasks.md failed here
+        # instead. A slice that exists has delivered its tasks; one that does not exist
+        # yet is still a real omission and still fails.
+        family_ids: set[str] = set()
+        for _cpath, ctext in chain + later:
+            family_ids |= {t for t, _sec in split_tasks(ctext)}
+        present = set(sections) | precompleted | family_ids
         missing = sorted(declared - present)
         if not declared:
             record("warn", "no task ids found in tasks.md (check its format)")
@@ -949,7 +952,7 @@ def main() -> int:
     else:
         import hashlib
 
-        stale, unknown = [], []
+        stale, unknown, own_work = [], [], []
         for name, want in re.findall(r"([\w.\-/]+\.\w+)@([0-9a-f]{6,64})", src_line):
             # The stamp records a repo-relative path; resolve it as one. Matching the
             # basename inside feature_dir first let an unrelated same-named file shadow
@@ -964,12 +967,28 @@ def main() -> int:
                 continue
             got = hashlib.sha256(open(path, "rb").read()).hexdigest()[: len(want)]
             if got != want:
-                stale.append(f"{name}: stamped {want}, now {got}")
+                # A stamp on a file one of this blueprint's own tasks edits goes stale the
+                # moment that task is typed, and stays stale for every run afterwards. The
+                # generate spec already says not to stamp such a file; when one is stamped
+                # anyway the drift is the work, not something to regenerate over. The
+                # document said so in prose and there was no path in the code to say it.
+                owner = next((tid for tid, sec in sections.items()
+                              if name in {q for q, _k in file_kinds(sec)}), "")
+                (own_work if owner else stale).append(
+                    f"{name}: stamped {want}, now {got}" + (f" — {owner} edits this file" if owner else "")
+                )
+        if own_work:
+            record(
+                "warn",
+                f"{len(own_work)} stamped source(s) are edited by this blueprint's own tasks",
+                "\n".join(own_work)
+                + "\nexpected once that task is typed; cite such a file in the Why that needs it rather than stamping it",
+            )
         if stale:
             record(
                 "fail",
                 f"{len(stale)} source artifact(s) changed since this blueprint was generated",
-                "\n".join(stale) + "\nregenerate, or say in the document why the difference is fine",
+                "\n".join(stale) + "\nregenerate, or move the citation into the Why of the task that depends on it",
             )
         elif unknown:
             record("warn", "stamped sources not found on disk", ", ".join(unknown))
