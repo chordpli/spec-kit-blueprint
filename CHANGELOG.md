@@ -30,6 +30,10 @@ explain their choices — and now it checks them.
 
 ### Fixed
 
+- The check for a hunk that deletes working code is no longer blind in the shape this document recommends. It skipped any hunk whose `**Before**` carried a marker — and 3a-G's own advice for a change inside an existing body is to insert a marker comment, so a Before with one `TODO(blueprint):` line above twenty lines of tested code passed in silence. Marker lines are excluded from the count instead of disqualifying the hunk
+- A marker message that chains calls is caught. `amount.amount().multiply(rate).divide(ONE, 0, HALF_UP)` carries no comparison and no `return`, so the message check saw nothing while the reader was handed the body to paste. Measured across every marker message in the corpus: 36 of 1495, and each one hands over an expression
+- A reference to a task that belongs to another feature is a warning naming that feature, not a dangling-reference failure. A `**Why**` that says "the fee table is loaded by feature 002's T021" is a correct cross-reference, and the only verdict available for it was red
+
 - A task demoted to a pre-completed row keeps its reasoning. Regenerating while a feature is being implemented moves tasks into that table one at a time — the work is done, the `**Before**` it quoted is no longer in the file, and no full section can be written for it any more. The table had columns for task, file and status, so the Why and the Key Decision went with the section, and a reviewer found the mechanism by restoring a deleted section and watching the validator fail on it. The table now carries the Why, the rule says to carry it, and the missing-Before message names the pre-completed row as the remedy rather than leaving deletion as the obvious one
 
 - The applier's two skip counts are the same count. The summary derived skips by subtraction and the last line derived them from a list that also holds tasks which *did* apply over a moved tree, so a run printed `skipped: 8` above `9 task(s) skipped` and named eight of them. Both now read one list, tasks skipped for any reason are in it, and a truncated list says how many it left out

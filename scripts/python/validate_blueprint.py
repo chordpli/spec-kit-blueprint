@@ -12,6 +12,7 @@ Usage: python3 validate_blueprint.py [feature-dir]
 """
 from __future__ import annotations
 
+import glob
 import os
 import re
 import subprocess
@@ -790,6 +791,10 @@ def main() -> int:
             r"|\?[^:\n]{1,60}:\s*\w+[.(]"
             r"|\breturn\b[^.\n]{0,60}?[\w)]\s*(?:\?|&&|\|\||[!<>]=|==)"
             r"|\breturn\s+\w[\w.]*\.\w+\s*\([^()]*\)\s*;?\s*$"
+            # A call whose result is called again. Measured over every marker message in
+            # the corpus: 36 of 1495, and each one hands the reader an expression to
+            # paste — `amount.amount().toPlainString()`, `findById(id).orElseThrow(...)`.
+            r"|\w\s*\([^()\n]*\)\s*\.\s*\w+\s*\("
         )
         # The same basename reading the scaffold validator uses: a file with one of these
         # in its name holds behavior, and a guide skeleton for it has to carry a marker.
@@ -1065,6 +1070,18 @@ def main() -> int:
     # Every id tasks.md declares is a task of this feature, wherever its section ends up.
     # Without this the first slice of a split cannot pass until the second exists, which
     # inverts the only order anyone would work in.
+    # Which ids belong to some other feature in this repo. A Why that says "feature 002's
+    # T021" was a hard failure, which is the wrong verdict for a correct cross-reference.
+    other_feature: dict = {}
+    for other in sorted(glob.glob(os.path.join(root, "specs", "*", "tasks.md"))):
+        if os.path.realpath(other) == os.path.realpath(tasks_path):
+            continue
+        try:
+            otext = open(other, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for oid in re.findall(r"^\s*-\s*\[[ xX]\]\s*(T\d+)\b", otext, re.M):
+            other_feature.setdefault(oid, os.path.basename(os.path.dirname(other)))
     feature_ids: set[str] = set()
     if os.path.isfile(tasks_path):
         feature_ids = set(re.findall(r"^\s*-\s*\[[ xX]\]\s*(T\d+)\b",
@@ -1086,6 +1103,9 @@ def main() -> int:
                     continue
                 if ref in feature_ids:
                     elsewhere.append(f"{tid}: points at {ref}, a task of this feature that this blueprint does not carry")
+                    continue
+                if ref in other_feature:
+                    elsewhere.append(f"{tid}: points at {ref}, which belongs to {other_feature[ref]}")
                     continue
                 dangling.append(f"{tid}: points at {ref}, which no section here or in a **Base** blueprint delivers — {t[:60]}")
     if dangling:

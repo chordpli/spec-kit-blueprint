@@ -190,14 +190,20 @@ def body_replaced_by_marker(section: str) -> list:
     """
     out = []
     for before, after in BEFORE_AFTER_RE.findall(section):
-        if MARKER_CALL.search(before) or not MARKER_CALL.search(after):
+        if not MARKER_CALL.search(after):
             continue
+        # A marker in the Before does not mean there is no body to lose. 3a-G's own
+        # recommended shape for a change inside an existing body is to insert a marker
+        # comment, so skipping any hunk whose Before carried one made this check blind in
+        # exactly the shape the document teaches: a Before with one `TODO(blueprint):`
+        # line above twenty lines of tested code passed silently.
         kept = {ln.strip() for ln in after.split(chr(10))}
         gone = [
             ln.strip() for ln in before.split(chr(10))
             if ln.strip() and ln.strip() not in kept
             and not ln.strip().startswith(("#", "//", "*", "/*", '"""'))
             and re.search(r"[A-Za-z]", ln)
+            and not MARKER_CALL.search(ln)
             and ln.strip() not in ("{", "}", "};", ")", ");", "else {", "try {")
         ]
         if len(gone) >= 2:
