@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: "blueprint"
   name: "Blueprint"
-  version: "1.0.0"
+  version: "1.2.0"
   description: "Stay code-literate in AI-driven development: review a complete code blueprint for every task from spec artifacts before /implement runs"
   author: "chordpli"
   repository: "https://github.com/chordpli/spec-kit-blueprint"
@@ -20,7 +20,30 @@ provides:
       description: "Generate a pre-implementation blueprint from spec artifacts with optional file scaffolding"
     - name: "speckit.blueprint.validate"
       file: "commands/speckit.blueprint.validate.md"
-      description: "Validate scaffold files against the blueprint"
+      description: "Check the blueprint document, apply it to a throwaway tree and build it, and validate any scaffold files on disk"
+    - name: "speckit.blueprint.cleanup"
+      file: "commands/speckit.blueprint.cleanup.md"
+      description: "Sweep leftover scaffold markers and stale comments after implementation"
+    - name: "speckit.blueprint.review"
+      file: "commands/speckit.blueprint.review.md"
+      description: "Check what the developer decided after implementing, export the decision list for review, and send the doubts typing raised back to the artifacts that caused them"
+
+  scripts:
+    - name: "validate-scaffold"
+      file: "scripts/bash/validate-scaffold.sh"
+      description: "Checks scaffold files against blueprint.md (existence, TODO markers, over-implementation)"
+      runtimes:
+        - bash
+    - name: "validate-blueprint"
+      file: "scripts/python/validate_blueprint.py"
+      description: "Checks blueprint.md itself — task coverage, rationale, working-tree claims, multi-file labels, placeholders, source freshness, reproduced requirements, open questions"
+      runtimes:
+        - python
+    - name: "apply-blueprint"
+      file: "scripts/python/apply_blueprint.py"
+      description: "Applies the blueprint to a throwaway copy of the tree and builds it, so 'this compiles' is evidence rather than a claim"
+      runtimes:
+        - python
 
 hooks:
   after_tasks:
@@ -28,6 +51,18 @@ hooks:
     optional: true
     prompt: "Generate blueprint from tasks?"
     description: "Auto-generate blueprint.md after task generation"
+  after_implement:
+    - command: "speckit.blueprint.cleanup"
+      priority: 10
+      optional: true
+      prompt: "Sweep leftover scaffold markers and stale comments?"
+      description: "Clean up blueprint scaffold residue after implementation"
+    - command: "speckit.blueprint.review"
+      priority: 20
+      optional: true
+      prompt: "Review the decisions you made, and export them for the PR?"
+      description: "Check comprehension of delegated decisions and produce a reviewer-facing list"
+
 tags:
   - "blueprint"
   - "pre-implementation"

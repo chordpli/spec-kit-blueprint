@@ -1,4 +1,5 @@
 .github/
+.omc/
 .git/
 *.test.*
 docs/
