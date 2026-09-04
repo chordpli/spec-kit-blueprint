@@ -30,6 +30,10 @@ explain their choices — and now it checks them.
 
 ### Fixed
 
+- The end of a `**Before**` line range is checked against the block. Only the first number was ever compared, so `(lines 48-50)` above a four-line block passed every check and shipped in a delivered blueprint; a reader counting down from 48 stops one line short of what the hunk replaces
+- `review export`'s first table asks the reviewer to test the decision instead of reading its defence. Rewording the header did nothing — measured: in a controlled pair on the same diff, the reviewer who saw only the diff called a hardcoded currency a blocker (a foreign-currency transfer dies on it) and the reviewer who saw that line justified in the table called it a minor style point and wrote that the reasoning held up. The table now carries what the decision *assumes* and what breaks here if that is wrong, which is the same information in a form that can be false
+- Truncated lists in the applier say how many they left out, in the orphan sweep and the scaffold report as well as the skip line
+
 - The check for a hunk that deletes working code is no longer blind in the shape this document recommends. It skipped any hunk whose `**Before**` carried a marker — and 3a-G's own advice for a change inside an existing body is to insert a marker comment, so a Before with one `TODO(blueprint):` line above twenty lines of tested code passed in silence. Marker lines are excluded from the count instead of disqualifying the hunk
 - A marker message that chains calls is caught. `amount.amount().multiply(rate).divide(ONE, 0, HALF_UP)` carries no comparison and no `return`, so the message check saw nothing while the reader was handed the body to paste. Measured across every marker message in the corpus: 36 of 1495, and each one hands over an expression
 - A reference to a task that belongs to another feature is a warning naming that feature, not a dangling-reference failure. A `**Why**` that says "the fee table is loaded by feature 002's T021" is a correct cross-reference, and the only verdict available for it was red

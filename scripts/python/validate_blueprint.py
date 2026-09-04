@@ -391,13 +391,26 @@ def main() -> int:
                     ambiguous_anchor.append(f"{tid}: the Before block appears {text.count(needle)} times in {named}")
                 if needle and text.count(needle) == 1:
                     actual = text[: text.index(needle)].count("\n") + 1
+                    mine = first_touch.get(named) in (None, tid)
                     if actual != cites[0]:
-                        if first_touch.get(named) in (None, tid):
+                        if mine:
                             misnumbered.append(f"{tid}: Before says line {cites[0]}, the quoted text is at line {actual} of {named}")
                         else:
                             # An earlier task rewrites this file, so where the text sits on
                             # disk says nothing about where it will sit when the hunk runs.
                             unjudged.add(named)
+                    elif len(cites) > 1 and mine:
+                        # Only the first number was ever compared, so `(lines 48-50)` over a
+                        # four-line block passed, and a delivered blueprint carried that
+                        # error through every check. The reader counting down from 48 stops
+                        # one line short of what the hunk actually replaces.
+                        span = len(needle.rstrip("\n").split("\n"))
+                        end = actual + span - 1
+                        if cites[-1] != end:
+                            misnumbered.append(
+                                f"{tid}: Before says lines {cites[0]}-{cites[-1]}, the quoted block is"
+                                f" {span} line(s) and ends at {end} of {named}"
+                            )
             for n in cites:
                 bound = max(candidates.values())
                 if n > bound:

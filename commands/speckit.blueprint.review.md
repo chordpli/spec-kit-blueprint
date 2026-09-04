@@ -151,11 +151,13 @@ Produce a section the developer can paste into the PR description verbatim. It m
 
 ### Agreed in the blueprint before implementation
 
-These were agreed before implementation and the reasons are reproduced below. Agreement is not correctness: a decision that reads well in a document can still be wrong on the line it produced, and the reviewer is the first person to see both. Check that the code applies the decision **and** that the decision holds here.
+These were agreed before implementation. Agreement is not correctness — it was reached without the code in front of anyone, and you are the first person to see both. Each row states what the decision **assumes** and what breaks if that assumption does not hold on this line; the row is there to be checked, not read.
 
-| Decision | Where in the code | Reason |
-|----------|-------------------|--------|
-| {decision} | `{file}:{line}` | {the blueprint's rationale, reproduced} |
+Do not write the rationale as a defence of the code. A reviewer given a reason tends to weigh the reason instead of the line: in a controlled pair on the same diff, the reviewer who saw only the diff called a hardcoded currency a blocker — a foreign-currency transfer dies on it — and the reviewer who saw the same line justified here called it a minor style point and wrote that the reasoning held up. State the assumption instead, so it can be false.
+
+| Decision | Where in the code | What it assumes | What breaks here if that is wrong |
+|----------|-------------------|-----------------|-----------------------------------|
+| {decision} | `{file}:{line}` | {the condition the blueprint's reasoning rests on, written so it can be checked against this code — not why the decision is good} | {the concrete failure: the input, caller, or state that would produce it, or "nothing found" if you looked and there is none} |
 
 ### Decided during implementation
 

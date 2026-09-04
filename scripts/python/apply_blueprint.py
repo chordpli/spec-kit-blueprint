@@ -706,7 +706,8 @@ def main() -> int:
         why = "carry blueprint markers, are not in the committed tree, and no task declares them"
         print(f"  {YELLOW}{len(orphans)} file(s) {why};"
               f" removed from the copy so they cannot stand in for a missing task:{NC} "
-              + ", ".join(orphans[:6]))
+              + ", ".join(orphans[:6])
+              + (f" (+{len(orphans) - 6} more)" if len(orphans) > 6 else ""))
     print(f"Tree: {tree}\n")
 
     if base_tasks:
@@ -862,7 +863,8 @@ def main() -> int:
             print(f"\n{CYAN}=== Scaffold ==={NC}")
             print(f"  wrote {len(written)} new file(s) into {root}")
             if skipped:
-                print(f"  {YELLOW}left {len(skipped)} file(s) alone — already on disk{NC}: " + ", ".join(skipped[:6]))
+                print(f"  {YELLOW}left {len(skipped)} file(s) alone — already on disk{NC}: " + ", ".join(skipped[:6])
+                  + (f" (+{len(skipped) - 6} more)" if len(skipped) > 6 else ""))
         elif do_scaffold:
             print(f"\n{YELLOW}--scaffold skipped: {len(failed)} task(s) did not apply.{NC}")
     finally:
