@@ -756,7 +756,14 @@ def main() -> int:
         CONTROL = re.compile(
             r"^\s*(if|for|while|switch|when|elif|else\s+if|do|try|catch|except|match)\b[\s({:]"
         )
-        MARKER = re.compile(r"TODO\(|NotImplementedError|UnsupportedOperationException|fatalError\(|todo!\(|unimplemented!\(|panic\(")
+        # Not in declaration position: a JS file that declares the error type it throws
+        # — `export class NotImplementedError extends Error {}` — was counted as carrying
+        # a marker, so the file that declared nothing and threw an undefined name passed
+        # and the correct one did not.
+        MARKER = re.compile(
+            r"TODO\(|(?<!class )(?<!extends )(?:NotImplementedError|UnsupportedOperationException)\b"
+            r"|fatalError\(|todo!\(|unimplemented!\(|panic\("
+        )
         # Body logic that carries no control-flow keyword at the head of a line. In Java,
         # Kotlin and JS half of a body is a stream chain or a lambda, and the check saw
         # none of it: `store.values().stream().filter(m -> …).findFirst()` passed.
@@ -838,9 +845,20 @@ def main() -> int:
             blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
             blocks += after_additions(sec)
             for blk in blocks:
-                for m in re.finditer(r"""(?:TODO\(blueprint\)\s*:|NotImplementedError|UnsupportedOperationException|panic|todo!|fatalError)\s*[(:]?\s*["'`]?([^"'`\n]{0,40})""", blk):
-                    head = m.group(1).strip()
-                    if head and not re.match(r"T\d+\s*:", head):
+                # A message, not a mention: the executable forms are matched only as a
+                # call carrying a string. Without the call, `class NotImplementedError
+                # extends Error {}` read as a marker whose message was "extends Error {}",
+                # and declaring the type correctly was reported as the defect.
+                for m in re.finditer(
+                    r"""TODO\(blueprint\)\s*:\s*([^\n]{0,40})"""
+                    r"""|(?:TODO|NotImplementedError|UnsupportedOperationException|panic|todo!|fatalError)"""
+                    r"""\s*\(\s*["'`]([^"'`\n]{0,40})""",
+                    blk,
+                ):
+                    head = (m.group(1) or m.group(2) or "").strip()
+                    # Go's documented form is `panic("TODO: T0NN: …")`; the `TODO:` in
+                    # front is the example this document gives, not a missing task id.
+                    if head and not re.match(r"(?:TODO\s*:\s*)?T\d+\s*:", head):
                         unlabelled_markers.append(f"{tid}: a marker message does not begin with a task id — {head[:45]!r}")
                         break
         if unlabelled_markers:

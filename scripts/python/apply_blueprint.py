@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     base_chain,
     changed_since,
+    commit_known,
     dependent_slices,
     in_commit,
     file_kinds,
@@ -610,6 +611,12 @@ def main() -> int:
     # A sibling slice's files are that slice's business, not residue of this one.
     for _cp, _ctext in dependent_slices(feature_dir, root):
         declared_all |= {p for _t, sec in split_tasks(_ctext) for p, _k in file_kinds(sec)}
+    # Only a stamp this clone can resolve is evidence about anything.
+    stamp_usable = bool(_stamped_head) and commit_known(root, _stamped_head)
+    if _stamped_head and not stamp_usable:
+        print(f"  {YELLOW}the **Sources** line stamps HEAD {_stamped_head}, which this clone does not have{NC}"
+              " — every undeclared file stays in the copy; a shallow checkout answers"
+              " \"not in that commit\" for the whole tree")
     orphans = []
     # The executable marker forms and the scaffold comment — not a bare `T014:`, which
     # the extension's own command specs use in their examples under .specify/.
@@ -628,7 +635,7 @@ def main() -> int:
             # that WAS in that commit is the tree's, however it looks now — deleting one
             # because a sibling slice had put a marker in it removed a baseline class and
             # produced a build failure the blueprint was blamed for.
-            if _stamped_head:
+            if stamp_usable:
                 if not in_commit(root, _stamped_head, relp):
                     orphans.append(relp)
                 continue
@@ -645,7 +652,9 @@ def main() -> int:
     for relp in orphans:
         os.remove(os.path.join(tree, relp))
     if orphans:
-        print(f"  {YELLOW}{len(orphans)} file(s) on disk carry blueprint markers but no task declares them;"
+        why = ("are absent from the commit the blueprint stamps and no task declares them"
+               if stamp_usable else "carry blueprint markers but no task declares them")
+        print(f"  {YELLOW}{len(orphans)} file(s) {why};"
               f" removed from the copy so they cannot stand in for a missing task:{NC} "
               + ", ".join(orphans[:6]))
     print(f"Tree: {tree}\n")

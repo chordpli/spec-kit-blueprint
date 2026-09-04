@@ -234,6 +234,14 @@ was generated from so that staleness is detectable instead of assumed:
   `tsc --noEmit`, `./gradlew compileKotlin` — whatever checks that the skeleton parses. The full
   test command belongs in the full-code modes, where the bodies are real.
 
+  **A parser is not a link check.** `node --check` and `python3 -m compileall` read one file
+  and stop: a skeleton that throws an error type nobody declared, or imports a module that
+  does not exist, passes them both. Prefer a checker that resolves names — `tsc --noEmit`,
+  `javac`, `./gradlew compileKotlin`. Where the language has none, stamp a command that
+  *loads* the files rather than only parsing them (`python3 -c "import moneylog.export"`,
+  `node --input-type=module -e "import('./src/settle.js')"`), so a name that does not exist
+  is caught by the gate this document stamps rather than by the developer an hour later.
+
 **Regenerating**: if `blueprint.md` already exists, read it first. Keep the text of every task whose
 inputs have not changed **verbatim**, rewrite only the tasks the changed artifacts touch, and end
 your Step 5 report with `{kept} tasks kept, {rewritten} rewritten`. A regeneration that rewrites the
@@ -286,7 +294,8 @@ The blueprint is a **complete implementation blueprint**. A developer must be ab
 
 In `guide` mode, Step 3a's completeness rule applies to **guidance, not code**: every task must be implementable by the developer *without asking anything further*, but the blueprint never contains body logic. Per task:
 
-- **Skeleton block**: one code block with the complete file skeleton — package/module declaration, imports, class/function **signatures exactly as agreed in plan/spec/contracts**, and each body as the language's canonical not-implemented form (e.g., Kotlin `TODO("...")`, Python `raise NotImplementedError("...")`, Go `panic("TODO: ...")`) whose message is a **self-contained work instruction**: what to implement, which spec section or official doc to consult, and the pitfall to avoid. Begin each message with the task ID (`T{ID}: ...`) so validation and cleanup can trace markers to tasks. The skeleton must compile/parse as written.
+- **Skeleton block**: one code block with the complete file skeleton — package/module declaration, imports, class/function **signatures exactly as agreed in plan/spec/contracts**, and each body as the language's canonical not-implemented form (e.g., Kotlin `TODO("...")`, Python `raise NotImplementedError("...")`, Go `panic("TODO: ...")`, Java `throw new UnsupportedOperationException("...")`, JavaScript/TypeScript `throw new Error("...")`) whose message is a **self-contained work instruction**: what to implement, which spec section or official doc to consult, and the pitfall to avoid. Begin each message with the task ID (`T{ID}: ...`) so validation and cleanup can trace markers to tasks. The skeleton must compile/parse as written.
+- **Never invent a not-implemented type.** Use the one the language has; where it has none — JavaScript and TypeScript — the form is `throw new Error("T0NN: ...")`. An undeclared `NotImplementedError` reads like the Python habit, parses cleanly, passes a syntax-only build, and fails at runtime with a `ReferenceError` naming the marker instead of the work. It is the most common way a guide skeleton ships broken, and the syntax check in the header is exactly the gate that will not catch it.
 - **References once, not per task**: cite an official document by name where the task needs it ("the `csv` module's writer rules") and collect the URLs in one **References** section at the end of the blueprint. Repeating a link block under every task is a measurable share of a guide blueprint's length and none of it is new after the second time.
 - **Implementation notes**: an ordered list of *what to achieve* in each body — behavior, edge cases, invariants to uphold, error handling — written as goals, never as line-by-line code dictation. Cite spec/plan/decision sections and official documentation URLs.
 - **No body logic anywhere**: no branches, queries, transaction code, or assertion bodies — not in code blocks, not spelled out in prose so literally that typing it is transcription. If a body is genuinely one obvious line (a delegation, a constant), say so in the notes instead of coding it.

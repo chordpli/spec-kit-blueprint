@@ -89,10 +89,44 @@ def stamped_head(text: str) -> str:
     return m.group(1) if m else ""
 
 
-def in_commit(root: str, head: str, rel_path: str) -> bool:
-    """Was `rel_path` in `head`? False when git cannot say, so an unknown file is treated
-    as scaffold residue rather than as tree content the copy should keep."""
+_COMMIT_KNOWN: dict = {}
+
+
+def commit_known(root: str, head: str) -> bool:
+    """Does this clone actually contain `head`?
+
+    A shallow CI checkout, a fresh clone of a fork, a blueprint written on another
+    machine: in all of them the stamped commit is simply absent, and every question
+    asked of it answers no. That is a different fact from an answer, and the tools
+    have to be able to tell them apart.
+    """
     if not (head and root):
+        return False
+    key = (os.path.realpath(root), head)
+    if key not in _COMMIT_KNOWN:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", root, "rev-parse", "--verify", "--quiet", head + "^{commit}"],
+                capture_output=True, text=True, timeout=30,
+            )
+            _COMMIT_KNOWN[key] = proc.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            _COMMIT_KNOWN[key] = False
+    return _COMMIT_KNOWN[key]
+
+
+def in_commit(root: str, head: str, rel_path: str) -> bool:
+    """Was `rel_path` in `head`? True when git cannot say — the file is presumed the tree's.
+
+    This default used to be False, reasoning that a file git cannot vouch for is scaffold
+    residue. In a clone without the stamped commit — a shallow checkout is the ordinary
+    case, and the docs recommend running this in CI — every path answered "not in it", so
+    the applier stripped the entire working tree out of its copy and reported the build
+    failure that followed as the blueprint's fault.
+    """
+    if not (head and root):
+        return True
+    if not commit_known(root, head):
         return True
     try:
         proc = subprocess.run(
