@@ -454,7 +454,11 @@ check_todo_in_file() {
         pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
     elif [[ "$FRESH" == true ]]; then
         local m_count l_count
-        m_count=$(count_matches -cE "^[[:space:]]*(def |fun |func |function |public |private |protected |async )" "$file")
+        # A method has a parameter list. Without that, `private final Money amount;` and
+        # `public interface X {` counted as methods, and the failure line said "9 methods"
+        # about a file with four — reported three rounds running, and the number is the
+        # only evidence the line offers.
+        m_count=$(count_matches -cE "^[[:space:]]*(def |fun |func |function |public |private |protected |async )[^;=]*[(]" "$file")
         l_count=$(wc -l < "$file" | tr -d ' ')
         if [[ "$m_count" -gt 1 ]] && [[ "$l_count" -gt 30 ]]; then
             fail "$rel_path — ${m_count} methods, ${l_count} lines, NO not-implemented marker, in a scaffold just written [$label]"

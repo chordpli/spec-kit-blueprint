@@ -157,6 +157,48 @@ def changed_since(root: str, head: str, rel_path: str):
     return {0: False, 1: True}.get(proc.returncode)
 
 
+# Both tools read the same Before/After pairs. The gap between the two blocks may not
+# contain another **Before**: with a plain `.*?` a generator that emitted Before(A),
+# Before(B), After(C) paired A with C — a diff that is not in the document.
+BEFORE_AFTER_RE = re.compile(
+    r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```"
+    r"(?:(?!\*\*Before\*\*)[\s\S])*?"
+    r"\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```",
+    re.S,
+)
+
+MARKER_CALL = re.compile(
+    r"TODO\(blueprint\)"
+    r"|(?:TODO|NotImplementedError|UnsupportedOperationException|NotImplementedException"
+    r"|fatalError|todo!|unimplemented!|panic)\s*\(\s*[\"\'`]"
+)
+
+
+def body_replaced_by_marker(section: str) -> list:
+    """(first line deleted, how many) for every hunk that trades working code for a marker.
+
+    Guide mode hands the body to the developer, so a hunk written against code that is
+    already there can prescribe deleting it — and a reviewer found one that replaced a
+    tested 38-line method with a single throw. The applier compiled the skeleton, went
+    green, and the project's own tests were where the loss showed. Nothing looked here.
+    """
+    out = []
+    for before, after in BEFORE_AFTER_RE.findall(section):
+        if MARKER_CALL.search(before) or not MARKER_CALL.search(after):
+            continue
+        kept = {ln.strip() for ln in after.split(chr(10))}
+        gone = [
+            ln.strip() for ln in before.split(chr(10))
+            if ln.strip() and ln.strip() not in kept
+            and not ln.strip().startswith(("#", "//", "*", "/*", '"""'))
+            and re.search(r"[A-Za-z]", ln)
+            and ln.strip() not in ("{", "}", "};", ")", ");", "else {", "try {")
+        ]
+        if len(gone) >= 2:
+            out.append((gone[0], len(gone)))
+    return out
+
+
 def base_chain(text: str, feature_dir: str, root: str) -> list[tuple[str, str]]:
     """(path, text) of the blueprints this one continues, oldest first.
 

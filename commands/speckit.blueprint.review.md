@@ -151,7 +151,7 @@ Produce a section the developer can paste into the PR description verbatim. It m
 
 ### Agreed in the blueprint before implementation
 
-Review these for correct application, not for design — the rationale was settled up front.
+These were agreed before implementation and the reasons are reproduced below. Agreement is not correctness: a decision that reads well in a document can still be wrong on the line it produced, and the reviewer is the first person to see both. Check that the code applies the decision **and** that the decision holds here.
 
 | Decision | Where in the code | Reason |
 |----------|-------------------|--------|

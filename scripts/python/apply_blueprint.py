@@ -38,6 +38,7 @@ sys.dont_write_bytecode = True  # the copy lives in the user's .specify/, and a 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     base_chain,
+    body_replaced_by_marker,
     changed_since,
     commit_known,
     dependent_slices,
@@ -130,11 +131,16 @@ def replace_once(path: str, before: str, after: str) -> int:
     # and they had registered one, so applying it registered that one twice. Test the harm
     # directly rather than guessing from how many added lines happen to appear: a line the
     # After adds once, already in the file once, becomes two.
-    if changed_since_stamp(rel(path)) and any(text.count(b) == 1 for b, _a in candidates):
+    # "Changed another way since HEAD" is a claim about the developer's file. A file the
+    # copy is building out of this document has no developer's edits in it, and reading one
+    # that way skipped a task nobody had typed — and then reported the run green.
+    editable = in_commit(_root, _stamped_head, rel(path)) if _stamped_head else True
+    if editable and changed_since_stamp(rel(path)) and any(text.count(b) == 1 for b, _a in candidates):
         would_duplicate = [
             ln for ln in added_now
             if after.count(ln) == 1 and ln in file_lines and text.count(ln) == 1
             and ln not in ("pass", "return", "}", "});") and len(ln) > 12
+            and _same_neighbour(text, after, ln)
         ]
         if would_duplicate:
             # How much of this hunk is in the file decides the headline: "already applied"
@@ -237,6 +243,30 @@ _overwritten: list[str] = []
 
 def rel(path: str) -> str:
     return os.path.relpath(path, _tree) if _tree else path
+
+
+def _above(block: str, ln: str) -> str:
+    """The nearest non-blank line above `ln` in `block`, stripped."""
+    lines = [x.strip() for x in block.split("\n")]
+    try:
+        i = lines.index(ln)
+    except ValueError:
+        return ""
+    for j in range(i - 1, -1, -1):
+        if lines[j]:
+            return lines[j]
+    return ""
+
+
+def _same_neighbour(text: str, after: str, ln: str) -> bool:
+    """Would the After put this line where the file already has it?
+
+    A method name repeats across classes: `def test_crosses_year_boundary` under two of
+    them is not one line written twice. Comparing the line alone read the second class's
+    method as the first's, called the hunk already applied, and skipped it.
+    """
+    want = _above(after, ln)
+    return not want or _above(text, ln) == want
 
 
 def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
@@ -761,6 +791,16 @@ def main() -> int:
                 print("      Add a `**Build**: <command>` line to the blueprint header.")
             elif run_build(tree, cmd) != 0:
                 rc = 1
+            elif mode.startswith("guide"):
+                print(f"      {YELLOW}a guide build compiles skeletons; it does not exercise behavior.{NC}")
+                stripped = [
+                    (tid, sum(n for _l, n in body_replaced_by_marker(sec)))
+                    for tid, sec in base_tasks + tasks if body_replaced_by_marker(sec)
+                ]
+                if stripped:
+                    print(f"      {YELLOW}{len(stripped)} task(s) replace working code with a marker: "
+                          + ", ".join(f"{t} (-{n} lines)" for t, n in stripped[:6])
+                          + f" — that behavior is gone from this copy and the build above cannot see it.{NC}")
         if do_scaffold and not failed:
             # The generator writing forty skeletons by hand is where drift comes from;
             # the copy already holds exactly what the document says, verified by the
@@ -801,14 +841,24 @@ def main() -> int:
         print(f"\n{YELLOW}Nothing was applied — no task anchored its code to a position in a file.{NC}")
         print("      The build result above describes the working tree, not this blueprint.")
         print("      Pass --require-anchors to make this a failure.")
-    elif _overwritten:
-        # Still exit 0 — the apply and the build did succeed — but not in green. After
-        # the work is done the same overwrite discards it, and a green last line then
-        # says the tree is fine when it is the blueprint that was just tested.
-        print(f"\n{YELLOW}Blueprint applied{' and built' if do_build else ''} — from a copy that had"
-              f" {len(_overwritten)} declared-new file(s) removed first.{NC}")
-        print("      If those held your implementation, this run describes the blueprint, not your tree;")
-        print("      if they were scaffolds, this is the run you wanted.")
+    elif already or unclear or _overwritten:
+        # Still exit 0 — what was applied did apply — but not in green, and never without
+        # naming what went untested. A skipped task has not seen a compiler, and a run
+        # that says "applied and built" over one is the false pass this tool exists to
+        # refuse. Same for a copy that discarded the implementation to test the document.
+        names = already + unclear
+        bits = []
+        if names:
+            bits.append(f"{len(names)} task(s) skipped: {', '.join(names[:8])}")
+        if _overwritten:
+            bits.append(f"{len(_overwritten)} declared-new file(s) removed from the copy first")
+        print(f"\n{YELLOW}Blueprint applied{' and built' if do_build else ''} — {'; '.join(bits)}.{NC}")
+        if names:
+            print("      A skipped task never reached the build; this run says nothing about its code.")
+            print("      Pass --require-anchors to make that a failure.")
+        if _overwritten:
+            print("      If those held your implementation, this run describes the blueprint, not your tree;")
+            print("      if they were scaffolds, this is the run you wanted.")
     else:
         print(f"\n{GREEN}Blueprint applied{' and built' if do_build else ''} cleanly{NC}")
     return rc

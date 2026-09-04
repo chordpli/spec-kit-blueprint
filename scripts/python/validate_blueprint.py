@@ -21,7 +21,9 @@ sys.dont_write_bytecode = True
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
+    BEFORE_AFTER_RE,
     base_chain,
+    body_replaced_by_marker,
     changed_since,
     dependent_slices,
     code_blocks,
@@ -35,17 +37,6 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     split_tasks,
     stamped_head,
     strip_quoted,
-)
-
-# Both the identical-pair check and the dropped-line check read the same pairs. The gap
-# between the two blocks may not contain another **Before**: with a plain `.*?` a
-# generator that emitted Before(A), Before(B), After(C) paired A with C — a diff that is
-# not in the document — and never reported the dangling Before at all.
-BEFORE_AFTER_RE = re.compile(
-    r"\*\*Before\*\*[^\n]*\n+```\w*\n(.*?)```"
-    r"(?:(?!\*\*Before\*\*)[\s\S])*?"
-    r"\*\*After\*\*[^\n]*\n+```\w*\n(.*?)```",
-    re.S,
 )
 
 GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0;36m", "\033[0m"
@@ -867,6 +858,19 @@ def main() -> int:
                 "a not-implemented marker's message does not begin with its task id",
                 "\n".join(unlabelled_markers[:6])
                 + "\n--markers and cleanup trace a marker to its task by that id; without it the marker is orphaned",
+            )
+
+        demolished = []
+        for tid, sec in sections.items():
+            for first, n in body_replaced_by_marker(sec):
+                demolished.append(f"{tid}: replaces {n} line(s) of working code with a marker — first is {first[:46]!r}")
+        if demolished:
+            record(
+                "fail" if strict_guide else "warn",
+                "a guide-mode hunk replaces existing code with a not-implemented marker",
+                "\n".join(demolished[:6])
+                + "\nthe applier's build compiles the skeleton and goes green; the behavior deleted here"
+                  "\nshows up in the project's own tests, which that build never runs",
             )
 
         if dictated:

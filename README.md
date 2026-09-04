@@ -2,7 +2,7 @@
 
 Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` covering every task before `/speckit.implement` runs — either the complete code (`doc-only`, `scaffold`), or the signatures, the reasons and the pitfalls with the bodies left for you to write (`guide`).
 
-**If you are here to type the code yourself and learn from it**, the short version: run `/speckit.blueprint.generate guide scaffold`, read Steps 3a-G, 3b and 3c of the generate command and stop — about 40 lines; the rest of that document is the generator's checklist, and the validators enforce it so you do not have to, run `/speckit.blueprint.validate` once, then implement from `blueprint.md` without reopening `spec.md`. When a design decision looks wrong while you type, `/speckit.blueprint.review upstream` is where that doubt goes. The rest of this README is the full picture.
+**If you are here to type the code yourself and learn from it**, the short version: run `/speckit.blueprint.generate guide scaffold`, read 3a-G's first four bullets, 3b and 3c of the generate command and stop — about 30 lines; the rest of that document is the generator's checklist, and the validators enforce it so you do not have to, run `/speckit.blueprint.validate` once, then implement from `blueprint.md` without reopening `spec.md`. When a design decision looks wrong while you type, `/speckit.blueprint.review upstream` is where that doubt goes. The rest of this README is the full picture.
 
 ![Spec Kit >= 0.2.0](https://img.shields.io/badge/spec--kit-%3E%3D0.2.0-blue)
 ![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-green)
