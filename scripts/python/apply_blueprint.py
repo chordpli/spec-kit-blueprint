@@ -159,15 +159,10 @@ def replace_once(path: str, before: str, after: str) -> int:
                     f" and this clone cannot resolve HEAD {_stamped_head} to say whether the change is"
                     f" already made or the file drifted — nothing was written"
                 )
-            if _changed is False and _stamped_head:
-                # The file is exactly as the stamp saw it and the change is already in it:
-                # nobody has done this since, so the document is prescribing a change its
-                # own baseline already contains.
-                raise Defect(
-                    f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r},"
-                    f" which is already there in HEAD {_stamped_head} — the blueprint prescribes a change"
-                    f" its own baseline already has"
-                )
+            # Not a failure when the file matches the stamp and the change is already in
+            # it: that is a blueprint regenerated after the work was typed, which the
+            # README treats as an ordinary thing to do. Calling it a defect turned a
+            # documented workflow red. What matters is that nothing gets written twice.
             raise AlreadyApplied(
                 f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r}, which is"
                 f" already in the file — the change has been made another way since HEAD {_stamped_head}"
@@ -732,6 +727,10 @@ def main() -> int:
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
     failed, applied_tasks, unanchored_tasks, already, unclear = [], 0, [], [], []
+    # What did not apply, kept as one list. `already` holds a task that applied over a
+    # moved tree too, so counting skips from it said "9 task(s) skipped" above a
+    # summary reading `skipped: 8`, and listed eight.
+    skipped_ids: list[str] = []
     try:
         for tid, section in tasks:
             try:
@@ -740,6 +739,7 @@ def main() -> int:
                 # Partly typed is not done: /speckit.blueprint.review counts a task with
                 # one of three registrations written as unimplemented, and so does this.
                 (unclear if " of this task's " in str(exc) or " of the " in str(exc) else already).append(tid)
+                skipped_ids.append(tid)
                 # "already applied" for a task where only some hunks are present says the
                 # work is done when it is half done, which is the opposite of what
                 # /speckit.blueprint.review means by implemented.
@@ -749,6 +749,7 @@ def main() -> int:
             except Ambiguous as exc:
                 # Not counted as already in the tree: nobody showed that it is.
                 unclear.append(tid)
+                skipped_ids.append(tid)
                 record("warn", f"{tid}  cannot tell", str(exc))
                 continue
             except Defect as exc:
@@ -771,9 +772,11 @@ def main() -> int:
                 applied_tasks += 1
                 record("pass", f"{tid}  applied", note)
             elif "no file" in note or "delete" in note or note == "no code block":
+                skipped_ids.append(tid)
                 record("warn", f"{tid}  skipped ({note})")
             else:
                 unanchored_tasks.append(tid)
+                skipped_ids.append(tid)
                 record("warn", f"{tid}  skipped ({note})")
 
         if unclear:
@@ -788,7 +791,7 @@ def main() -> int:
             )
 
         print(f"\n{CYAN}=== Summary ==={NC}")
-        print(f"  applied: {applied_tasks}  skipped: {len(tasks) - applied_tasks - len(failed)}"
+        print(f"  applied: {applied_tasks}  skipped: {len(skipped_ids)}"
               f"  {RED}FAILED{NC}: {len(failed)}"
               + (f"  {YELLOW}replaced{NC}: {len(_overwritten)} declared-new file(s) that were on disk" if _overwritten else ""))
         if unanchored_tasks:
@@ -876,15 +879,16 @@ def main() -> int:
         print(f"\n{YELLOW}Nothing was applied — no task anchored its code to a position in a file.{NC}")
         print("      The build result above describes the working tree, not this blueprint.")
         print("      Pass --require-anchors to make this a failure.")
-    elif already or unclear or _overwritten:
+    elif skipped_ids or _overwritten:
         # Still exit 0 — what was applied did apply — but not in green, and never without
         # naming what went untested. A skipped task has not seen a compiler, and a run
         # that says "applied and built" over one is the false pass this tool exists to
         # refuse. Same for a copy that discarded the implementation to test the document.
-        names = already + unclear
+        names = skipped_ids
         bits = []
         if names:
-            bits.append(f"{len(names)} task(s) skipped: {', '.join(names[:8])}")
+            more = f" (+{len(names) - 8} more)" if len(names) > 8 else ""
+            bits.append(f"{len(names)} task(s) skipped: {', '.join(names[:8])}{more}")
         if _overwritten:
             bits.append(f"{len(_overwritten)} declared-new file(s) removed from the copy first")
         print(f"\n{YELLOW}Blueprint applied{' and built' if do_build else ''} — {'; '.join(bits)}.{NC}")

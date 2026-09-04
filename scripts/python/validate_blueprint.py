@@ -924,6 +924,18 @@ def main() -> int:
             ln = next((l for l in text.split("\n") if l.lower().startswith("**sources**")), "")
             return " ".join(sorted(re.findall(r"[\w.\-/]+@[0-9a-f]{6,64}", ln)))
 
+        # A section that vanished is invisible to a comparison of shared ids, and a
+        # regeneration that quietly drops one reads as `2 of 11 rewritten` without saying
+        # the denominator moved from 12.
+        dropped = sorted(set(prev_sections) - set(sections))
+        if dropped:
+            record(
+                "warn",
+                f"{len(dropped)} task section(s) present in the committed version are gone",
+                ", ".join(dropped[:12])
+                + "\nif they were folded into a pre-completed row that is fine; if they were lost, the"
+                  "\nfeature is short that work and nothing else here will notice",
+            )
         rewritten = sorted(
             tid for tid, sec in sections.items()
             if tid in prev_sections and sec.strip() != prev_sections[tid].strip()
