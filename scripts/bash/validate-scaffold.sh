@@ -347,7 +347,7 @@ else
         if [[ -f "$FULL_PATH" ]]; then
             pass "$f exists"
         else
-            fail "$f MISSING"
+            fail "$f MISSING — the blueprint declares it and it is not on disk. Before scaffolding it: is the work somewhere else under another name?"
         fi
     done
     # A blueprint whose only declarations are placeholders printed nothing here at all —
@@ -447,6 +447,17 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
                             if (nm != "") print armed "\t" nm
                             break
                         }
+                    next
+                }
+                # A C-family method: a parameter list, an identifier in front of it, no
+                # assignment before it, and a body or a semicolon after. Without this a
+                # Java skeleton contributed only its type names, so the file could be
+                # missing every method it declares and still pass.
+                if (t ~ /^[A-Za-z_@<][^=;]*\(/ && (t ~ /\{[ \t]*$/ || t ~ /;[ \t]*$/)) {
+                    head2 = t; sub(/\(.*$/, "", head2)
+                    nm = head2; sub(/^.*[^A-Za-z0-9_]/, "", nm)
+                    if (nm != "" && nm !~ /^(if|for|while|switch|catch|return|new|do|else|synchronized|throw|assert|super|this)$/)
+                        print armed "\t" nm
                     next
                 }
                 next
@@ -681,7 +692,7 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
         fi
     done
     if [[ "$CHECKED_SYMBOLS" -eq 0 ]]; then
-        warn "no declared symbols could be read from the blueprint's skeleton blocks"
+        warn "${#DECLARED_SYMBOLS[@]} declared symbol(s) read from the blueprint, and none of the files that should hold them are on disk yet"
     elif [[ "$MISSING_SYMBOLS" -eq 0 ]]; then
         pass "all $CHECKED_SYMBOLS declared symbol(s) are present in the files that should hold them"
     fi

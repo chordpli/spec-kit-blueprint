@@ -473,6 +473,8 @@ def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
             note += f"; {len(hunk_defects)} hunk(s) matched nothing"
         if misnumbered:
             note += "".join(f"\n  line number: {m}" for m in misnumbered[:4])
+            if len(misnumbered) > 4:
+                note += f"\n  (+{len(misnumbered) - 4} more)"
         flags = set()
         if unanchored:
             flags.add("unanchored")
@@ -540,7 +542,7 @@ def build_command(tree: str, blueprint: str) -> str | None:
             quoted = re.search(r"`([^`]+)`", rest)
             if quoted:
                 return quoted.group(1).strip()
-            return re.split(r"\s+[—–]\s+|\s+-{1,2}\s+", rest, 1)[0].strip()
+            return re.split(r"\s+[—–]\s+|\s+-{1,2}\s+", rest, maxsplit=1)[0].strip()
     for marker, cmd in BUILD_CANDIDATES:
         if marker and os.path.exists(os.path.join(tree, marker)):
             return cmd
@@ -721,7 +723,8 @@ def main() -> int:
         if base_failed:
             # The base is another slice's document; its problems are not this one's, but
             # this slice cannot be tested until they are fixed.
-            record("warn", f"{len(base_failed)} base task(s) did not apply", "\n".join(base_failed[:4])
+            record("warn", f"{len(base_failed)} base task(s) did not apply",
+                   "\n".join(base_failed[:4]) + (f"\n(+{len(base_failed) - 4} more)" if len(base_failed) > 4 else "")
                    + "\nrun the applier in the base feature directory; this slice builds on top of it")
         else:
             record("pass", f"{len(base_tasks)} base task(s) applied")
@@ -797,7 +800,8 @@ def main() -> int:
               + (f"  {YELLOW}replaced{NC}: {len(_overwritten)} declared-new file(s) that were on disk" if _overwritten else ""))
         if unanchored_tasks:
             print(f"  {YELLOW}{len(unanchored_tasks)} task(s) carry code no marker anchors to a"
-                  f" position: {', '.join(unanchored_tasks[:10])}{NC}")
+                  f" position: {', '.join(unanchored_tasks[:10])}"
+                  + (f" (+{len(unanchored_tasks) - 10} more)" if len(unanchored_tasks) > 10 else "") + NC)
 
         rc = 1 if failed else 0
         if strict_anchors and (unanchored_tasks or applied_tasks == 0):
@@ -826,7 +830,8 @@ def main() -> int:
                     if moved:
                         print(f"\n      {YELLOW}every task applied and the build still failed. {len(moved)} of the"
                               f" file(s) this blueprint writes have changed since HEAD {_stamped_head}:{NC} "
-                              + ", ".join(moved[:6]))
+                              + ", ".join(moved[:6])
+                              + (f" (+{len(moved) - 6} more)" if len(moved) > 6 else ""))
                         print("      A blueprint describes the tree at its stamp. Run against a tree that has moved on,")
                         print("      a failure here is usually that distance rather than a defect in the document —")
                         print("      check the errors against the files listed before rewriting anything.")
@@ -839,6 +844,7 @@ def main() -> int:
                 if stripped:
                     print(f"      {YELLOW}{len(stripped)} task(s) replace working code with a marker: "
                           + ", ".join(f"{t} (-{n} lines)" for t, n in stripped[:6])
+                          + (f" (+{len(stripped) - 6} more)" if len(stripped) > 6 else "")
                           + f" — that behavior is gone from this copy and the build above cannot see it.{NC}")
         if do_scaffold and not failed:
             # The generator writing forty skeletons by hand is where drift comes from;

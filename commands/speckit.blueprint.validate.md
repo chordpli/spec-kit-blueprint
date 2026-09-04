@@ -194,7 +194,12 @@ The quoted region occurs more than once in the file, so there is no single place
 
 ### "File MISSING"
 
-A file referenced in the blueprint was not created. Re-run `/speckit.blueprint.generate scaffold` or create the file manually.
+A file the blueprint declares is not on disk. **Find out why before you create it.** There are two causes and they want opposite responses:
+
+- *The scaffold never ran, or the task never landed.* Write the file — `apply_blueprint.py {feature} --build --scaffold` puts exactly what the document says on disk, after a clean apply.
+- *The developer built that work somewhere else, under another name.* Then the file is missing because a design decision was made, and scaffolding it writes a skeleton nobody calls: the check goes green, the marker count goes up, and the tree gains a class no code constructs and tests nothing runs. A reviewer measured this — eight `MISSING` failures became `PASS 17 / FAIL 0` at the cost of one uninstantiated class, four tests no runner calls, and twenty-six unfinished markers.
+
+Look for the work first: search the tree for the type or function the blueprint declared, not for the path. If it is there under a different name, the blueprint is out of date and the fix belongs in the document, not on disk.
 
 ### "NO TODO markers found"
 

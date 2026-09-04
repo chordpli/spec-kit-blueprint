@@ -273,7 +273,7 @@ Why a document validator: rules that live only in prose get followed inconsisten
 | "blueprint.md not found" | Run `/speckit.blueprint.generate` first |
 | "Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY…" from `check-prerequisites.sh` | Newer spec-kit resolves the feature from `.specify/feature.json`; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file |
 | "Before cites a line past the end of the file on disk, in a file an earlier task changes" | Not a defect the document can settle: an earlier task changes that file first. The applier checks the Before text itself. The same warning appears once you start implementing, because your files no longer match the skeleton lengths — that is expected |
-| "File MISSING" | Re-run scaffold mode or create the file manually |
+| "File MISSING" | Find the work before you create the file. If the scaffold never ran, `apply_blueprint.py {feature} --build --scaffold` writes it; if the developer built that work elsewhere under another name, scaffolding turns the failure green by adding code nobody calls |
 | "No TODO markers found" | Core file may have been generated outside scaffold mode |
 | Command not available | Check `specify extension list`, restart agent session, reinstall |
 

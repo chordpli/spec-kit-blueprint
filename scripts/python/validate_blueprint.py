@@ -41,6 +41,8 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     strip_quoted,
 )
 
+SKIP_DIRS = {"node_modules", "venv", ".venv", "target", "build", "dist", "out", "__pycache__", "specs"}
+
 GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0;36m", "\033[0m"
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
     GREEN = YELLOW = RED = CYAN = NC = ""
@@ -469,11 +471,24 @@ def main() -> int:
     # that names a line the file does not have is simply false. A reviewer planted
     # `SettlementService.java:900` in a 300-line file and no check moved.
     bad_cite = []
+    basename_index: dict = {}
     for m in re.finditer(r"`([\w./-]+\.\w{1,5}):(\d{1,5})`", outside_fences(bp)):
         rel_p, n = m.group(1), int(m.group(2))
         full = os.path.join(root, rel_p)
         if not os.path.isfile(full):
-            continue
+            # `Money.java:900` is the shape people write in prose. Skipping it left the
+            # commonest form of this claim unchecked.
+            if os.sep in rel_p:
+                continue
+            if not basename_index:
+                for dirpath, dirnames, filenames in os.walk(root):
+                    dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS]
+                    for fn in filenames:
+                        basename_index.setdefault(fn, []).append(os.path.join(dirpath, fn))
+            hits = basename_index.get(rel_p, [])
+            if len(hits) != 1:
+                continue
+            full = hits[0]
         try:
             with open(full, encoding="utf-8", errors="replace") as f:
                 have = sum(1 for _ in f)
@@ -1229,14 +1244,18 @@ def main() -> int:
             f"{len(unique)} forward reference(s) point at a task the document does not have",
             "\n".join(unique[:8]) + "\na promise pointing at a task that never delivers is worse than an open question",
         )
-    elif elsewhere:
+    if elsewhere:
+        # Not `elif`: a document with one dangling reference and nine that resolve
+        # elsewhere reported only the first, so the nine looked like they had passed.
         uniq2 = list(dict.fromkeys(elsewhere))
         record(
             "warn",
-            f"{len(uniq2)} reference(s) point at a task of this feature that this blueprint does not carry",
-            "\n".join(uniq2[:6]) + "\nexpected while a feature is split across slices, or before the rest is written",
+            f"{len(uniq2)} reference(s) point at a task this blueprint does not carry",
+            "\n".join(uniq2[:6])
+            + (f"\n(+{len(uniq2) - 6} more)" if len(uniq2) > 6 else "")
+            + "\nexpected across the slices of a split feature, across features, or before the rest is written",
         )
-    else:
+    if not dangling and not elsewhere:
         record("pass", "every task id referenced in prose has a section")
 
     # 11. Open questions — not pass/fail, but a blocked task is the thing a reader
@@ -1284,7 +1303,10 @@ def main() -> int:
     if counts["fail"]:
         print(f"\n{RED}Validation FAILED — {counts['fail']} issue(s) found{NC}")
         return 1
-    print(f"\n{GREEN}All checks passed{NC}")
+    if counts["warn"]:
+        print(f"\n{GREEN}No failures{NC} — {counts['warn']} warning(s) above; read them before you rely on this document")
+    else:
+        print(f"\n{GREEN}All checks passed{NC}")
     return 0
 
 
