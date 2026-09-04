@@ -126,7 +126,7 @@ In `report` mode, stop here and suggest: "Run `/speckit.blueprint.cleanup apply`
 
 ## Rules
 
-- **Scope discipline**: only files listed in `blueprint.md`, plus files carrying this feature's blueprint/task-ID markers (reported separately). Never sweep the whole repo.
+- **Scope discipline**: only files listed in `blueprint.md`, plus files carrying this feature's blueprint/task-ID markers (reported separately). Never sweep the whole repo. When the header names a `**Base**:` blueprint, or another slice names this one, the sibling slices' declared files are *their* scope — list them as out of scope rather than as drift, or a split feature reports its other half as stale on every run.
 - **Report before apply**: `apply` still prints the full report first; removals must match reported verdicts exactly.
 - **Never delete honest debt**: UNFINISHED and UNSURE findings are always kept and surfaced.
 - **Never touch**: license headers, doc comments, annotations, pragmas, linter directives, comments in files the blueprint does not mention.

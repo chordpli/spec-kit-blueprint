@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     base_chain,
     changed_since,
+    dependent_slices,
     in_commit,
     file_kinds,
     parse_mode,
@@ -606,6 +607,9 @@ def main() -> int:
     # of a task the document no longer has — a deleted section, a renamed path. Left in
     # the copy it fills the hole the missing task left, and the build passes over it.
     declared_all = {p for _t, sec in base_tasks + tasks for p, _k in file_kinds(sec)}
+    # A sibling slice's files are that slice's business, not residue of this one.
+    for _cp, _ctext in dependent_slices(feature_dir, root):
+        declared_all |= {p for _t, sec in split_tasks(_ctext) for p, _k in file_kinds(sec)}
     orphans = []
     # The executable marker forms and the scaffold comment — not a bare `T014:`, which
     # the extension's own command specs use in their examples under .specify/.
@@ -620,13 +624,16 @@ def main() -> int:
             relp = os.path.relpath(full, tree)
             if relp in declared_all or relp.startswith("specs" + os.sep):
                 continue
-            # Not in the stamped commit and declared by no task: scaffold residue,
-            # whatever it holds. Keying on markers alone left a structural skeleton —
-            # which carries none by design — in the copy to fill the hole a mistyped
-            # path had left, and the build passed over it.
-            if _stamped_head and not in_commit(root, _stamped_head, relp):
-                orphans.append(relp)
+            # Residue means: not in the stamped commit AND declared by nobody. A file
+            # that WAS in that commit is the tree's, however it looks now — deleting one
+            # because a sibling slice had put a marker in it removed a baseline class and
+            # produced a build failure the blueprint was blamed for.
+            if _stamped_head:
+                if not in_commit(root, _stamped_head, relp):
+                    orphans.append(relp)
                 continue
+            # No stamp to reason from: fall back to the marker, which at least means the
+            # file came from a blueprint rather than from the project.
             try:
                 if os.path.getsize(full) > 512_000:
                     continue

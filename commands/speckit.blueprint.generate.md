@@ -133,7 +133,10 @@ whether files are expected on disk.
 **Sources**: tasks.md@{sha12} spec.md@{sha12} plan.md@{sha12} | HEAD {short-sha}
 > Any artifact the blueprint reads belongs on the `**Sources**` line, named the way you
 > refer to it — a repository-relative path is fine and is checked as one:
-> `docs/decisions/ADR-0003.md@{sha12}`.
+> `docs/decisions/ADR-0003.md@{sha12}`. Do not stamp a file that one of this blueprint's
+> own tasks modifies: the moment that task is typed the stamp is stale and every later
+> run reports the blueprint as out of date against its own work. Cite such a file in the
+> Why that depends on it instead.
 **Build**: {the command that compiles or tests this project, from plan.md or the build files — omit the line if there is none}
 
 ## Key Decisions

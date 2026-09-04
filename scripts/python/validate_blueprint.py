@@ -996,11 +996,19 @@ def main() -> int:
     # A slice's predecessors deliver their own tasks. Without this a split feature fails
     # here on every reference across the seam, which is most of them.
     known_ids |= chain_ids
+    # Every id tasks.md declares is a task of this feature, wherever its section ends up.
+    # Without this the first slice of a split cannot pass until the second exists, which
+    # inverts the only order anyone would work in.
+    feature_ids: set[str] = set()
+    if os.path.isfile(tasks_path):
+        feature_ids = set(re.findall(r"^\s*-\s*\[[ xX]\]\s*(T\d+)\b",
+                          open(tasks_path, encoding="utf-8", errors="replace").read(), re.M))
     # "defined in T019", "see T019", "delivered by T019", "T019 creates it" — a reference
     # is a task id named in prose, not a task's own heading and not a dependency list.
     # **Dependencies**: lines name earlier tasks by design; check them too, since a
     # dependency on a task that does not exist is the same defect.
     dangling: list[str] = []
+    elsewhere: list[str] = []
     for tid, sec in sections.items():
         for line in sec.split("\n"):
             t = line.strip()
@@ -1009,6 +1017,9 @@ def main() -> int:
             for m in re.finditer(r"\bT(\d{2,})\b", t):
                 ref = "T" + m.group(1)
                 if ref == tid or ref in known_ids:
+                    continue
+                if ref in feature_ids:
+                    elsewhere.append(f"{tid}: points at {ref}, a task of this feature that this blueprint does not carry")
                     continue
                 dangling.append(f"{tid}: points at {ref}, which no section here or in a **Base** blueprint delivers — {t[:60]}")
     if dangling:
@@ -1023,6 +1034,13 @@ def main() -> int:
             "fail",
             f"{len(unique)} forward reference(s) point at a task the document does not have",
             "\n".join(unique[:8]) + "\na promise pointing at a task that never delivers is worse than an open question",
+        )
+    elif elsewhere:
+        uniq2 = list(dict.fromkeys(elsewhere))
+        record(
+            "warn",
+            f"{len(uniq2)} reference(s) point at a task of this feature that this blueprint does not carry",
+            "\n".join(uniq2[:6]) + "\nexpected while a feature is split across slices, or before the rest is written",
         )
     else:
         record("pass", "every task id referenced in prose has a section")
@@ -1046,7 +1064,7 @@ def main() -> int:
         rows = [r for r in rows if not re.match(r"^\s*\|[\s|:-]+\|\s*$", r)]
         if rows:
             rows = rows[1:]  # drop the header row
-            blocking = [r for r in rows if re.search(r"\|\s*(yes|y|예|blocking)\s*\|", r, re.I)]
+            blocking = [r for r in rows if re.search(r"\|\s*[*_`]*\s*(?:yes|y|예|blocking)\b", r, re.I)]
         else:
             rows = re.findall(r"^#+\s*(OQ-\d+[^\n]*)", body, re.M)
             blocking = [r for r in rows if re.search(r"blocking|blocks|차단", r, re.I)
