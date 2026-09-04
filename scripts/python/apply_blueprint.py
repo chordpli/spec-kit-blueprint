@@ -165,6 +165,15 @@ def replace_once(path: str, before: str, after: str) -> int:
             # for a hunk that has landed, "partly" for one where a line or two has.
             here = sum(1 for ln in added_now if ln in file_lines)
             scope = "" if here == len(added_now) else f" of this task's {len(added_now)} added line(s), {here} present:"
+            if here < len(added_now):
+                # Some of the hunk is here and some is not. That is not evidence the
+                # developer made this change — it is evidence that nothing here can tell,
+                # and every attempt to sharpen the line-matching has been defeated by the
+                # next repository that writes the same idiom twice. Say so instead.
+                raise Ambiguous(
+                    f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r},"
+                    f" but {len(added_now) - here} of its added line(s) are not in the file — nothing was written"
+                )
             if _changed is None:
                 raise Ambiguous(
                     f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r},"

@@ -1001,6 +1001,22 @@ def main() -> int:
                   "\nan undeclared one parses, passes a syntax-only build, and dies with a ReferenceError",
             )
 
+        # The Build line the header stamps decides what "it compiles" is worth. In guide
+        # mode a parser accepts a skeleton that names something which does not exist, and
+        # the document says so two paragraphs after telling you to stamp one.
+        PARSER_ONLY = re.compile(
+            r"\bcompileall\b|\bpy_compile\b|node\s+--check|\bruby\s+-c\b|\bphp\s+-l\b|\bbash\s+-n\b|\bsh\s+-n\b"
+        )
+        build_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**build**")), "")
+        if build_line and PARSER_ONLY.search(build_line):
+            record(
+                "warn",
+                "the stamped build parses the skeleton and cannot resolve names",
+                build_line.strip()[:100]
+                + "\na marker that calls something the file never imports passes this and fails at runtime;"
+                  "\nprefer a checker that resolves names, or a command that loads the files",
+            )
+
         demolished = []
         for tid, sec in sections.items():
             for first, n in body_replaced_by_marker(sec):

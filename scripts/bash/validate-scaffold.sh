@@ -492,7 +492,12 @@ for f in "${NEW_FILES[@]}"; do
     elif [[ "$basename_lower" == *test* ]] || [[ "$basename_lower" == *spec.* ]] || \
          [[ "$basename_lower" == test_* ]] || [[ "$basename_lower" == *_test.* ]]; then
         TEST_FILES+=("$FULL_PATH")
-    elif [[ "$in_blueprint_markers" == true ]]; then
+    elif [[ "$in_blueprint_markers" == true ]] || [[ ${#BLUEPRINT_MARKER_FILES[@]} -eq 0 ]]; then
+        # Or the blueprint carries no markers at all. In `scaffold` and `doc-only` the
+        # document holds complete code by definition, so "the blueprint gives this file a
+        # marker" is false for every file — and a core logic file whose name matched none
+        # of the patterns above was checked for existence and nothing else. The stubs are
+        # on disk in scaffold mode, which is exactly where the marker check should look.
         SKELETON_FILES+=("$FULL_PATH")
     fi
 
