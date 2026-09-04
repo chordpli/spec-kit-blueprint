@@ -167,10 +167,16 @@ BEFORE_AFTER_RE = re.compile(
     re.S,
 )
 
+# JavaScript and TypeScript have no not-implemented type, so 3a-G gives them a plain
+# `throw new Error(...)` — which is also how real code raises real errors. The task id is
+# what makes one a marker, so it is required here and only here. Adding the form to the
+# spec without adding it to the detectors left `--markers` answering "0 marker line(s)"
+# for a file whose tests were failing, and cleanup called an unfinished feature done.
 MARKER_CALL = re.compile(
     r"TODO\(blueprint\)"
     r"|(?:TODO|NotImplementedError|UnsupportedOperationException|NotImplementedException"
     r"|fatalError|todo!|unimplemented!|panic)\s*\(\s*[\"\'`]"
+    r"|throw\s+new\s+Error\s*\(\s*[\"'`]\s*T\d{2,}\s*:"
 )
 
 

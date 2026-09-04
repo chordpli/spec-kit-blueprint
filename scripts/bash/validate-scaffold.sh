@@ -49,14 +49,17 @@ header(){ echo -e "\n${CYAN}[$1]${NC}"; }
 # yields "0\n0" and breaks every arithmetic test downstream. Always emit one integer.
 # Language-native "not implemented yet" forms. A guide-mode skeleton body is one of
 # these, so missing them makes an untouched skeleton look fully implemented.
-NOT_IMPL_RE='NotImplemented\|not_implemented\|NotImplementedError\|UnsupportedOperationException\|NotImplementedException\|fatalError(\|todo!(\|unimplemented!(\|panic(.TODO\|panic(.not implemented'
+# JS and TS have no not-implemented type, so 3a-G gives them `throw new Error("T0NN: …")`.
+# That is also how real code raises real errors, so the task id is what makes it a marker.
+# Keep this vocabulary in step with MARKER_CALL in scripts/python/_blueprint_parse.py.
+NOT_IMPL_RE='NotImplemented\|not_implemented\|NotImplementedError\|UnsupportedOperationException\|NotImplementedException\|fatalError(\|todo!(\|unimplemented!(\|panic(.TODO\|panic(.not implemented\|throw new Error(.T[0-9]'
 
 # Kept in step with DOTLESS_FILES in scripts/python/_blueprint_parse.py.
 DOTLESS_FILES="Dockerfile Makefile Procfile Jenkinsfile Gemfile Rakefile Brewfile Vagrantfile CODEOWNERS LICENSE NOTICE"
 
 # Bracketed parens, not escaped: awk -v strips a backslash, and `fatalError\(` reached the
 # regex as `fatalError(` — an unbalanced group that aborted the scan.
-MARKER_ERE='TODO|NotImplemented|not_implemented|UnsupportedOperationException|NotImplementedException|fatalError[(]|todo![(]|unimplemented![(]|panic[(].TODO|panic[(].not implemented'
+MARKER_ERE='TODO|NotImplemented|not_implemented|UnsupportedOperationException|NotImplementedException|fatalError[(]|todo![(]|unimplemented![(]|panic[(].TODO|panic[(].not implemented|throw new Error[(].T[0-9]'
 
 count_matches() {
     local n

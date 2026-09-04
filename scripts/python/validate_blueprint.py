@@ -757,6 +757,7 @@ def main() -> int:
         MARKER = re.compile(
             r"TODO\(|(?<!class )(?<!extends )(?:NotImplementedError|UnsupportedOperationException)\b"
             r"|fatalError\(|todo!\(|unimplemented!\(|panic\("
+            r"|throw\s+new\s+Error\s*\(\s*[\"'`]\s*T\d{2,}\s*:"
         )
         # Body logic that carries no control-flow keyword at the head of a line. In Java,
         # Kotlin and JS half of a body is a stream chain or a lambda, and the check saw
@@ -1097,6 +1098,14 @@ def main() -> int:
         depth = len(oq.group("h"))
         oq = re.search(
             r"^#{%d}\s*Open Questions\b(.*?)(?=^#{1,%d}\s|\Z)" % (depth, depth), bp, re.M | re.S
+        )
+    if not oq:
+        print(f"\n{CYAN}[11] Open questions{NC}")
+        record(
+            "warn",
+            "no Open Questions section",
+            "the section's absence and \"the generator had none\" look identical from here;"
+            "\nsay which by keeping the section and writing None in it",
         )
     if oq:
         body = oq.group(1)

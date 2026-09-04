@@ -515,7 +515,16 @@ BUILD_CANDIDATES = [
 def build_command(tree: str, blueprint: str) -> str | None:
     for _, line, in_fence, _ in scan(blueprint):
         if not in_fence and line.startswith("**Build**:"):
-            return line.split(":", 1)[1].strip().strip("`")
+            rest = line.split(":", 1)[1].strip()
+            # The header template teaches `— explanation` for the Mode line twelve lines
+            # above and authors write the Build line the same way, usually with the
+            # command in backticks. Stripping the ends left a backtick in the middle of
+            # the command and the shell died on it: `unexpected EOF while looking for
+            # matching ``'`.
+            quoted = re.search(r"`([^`]+)`", rest)
+            if quoted:
+                return quoted.group(1).strip()
+            return re.split(r"\s+[—–]\s+|\s+-{1,2}\s+", rest, 1)[0].strip()
     for marker, cmd in BUILD_CANDIDATES:
         if marker and os.path.exists(os.path.join(tree, marker)):
             return cmd
@@ -652,6 +661,7 @@ def main() -> int:
     marker = re.compile(
         r"TODO\(blueprint\)"
         r"|(?:NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)\s*\(\s*\"?T\d{3,}:"
+        r"|throw\s+new\s+Error\s*\(\s*[\"'`]\s*T\d{3,}\s*:"
     )
     for dirpath, dirnames, filenames in os.walk(tree):
         dirnames[:] = [d for d in dirnames if d not in SKIP_ANYWHERE | SKIP_AT_ROOT and not d.startswith(".")]
