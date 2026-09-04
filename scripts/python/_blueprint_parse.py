@@ -89,6 +89,21 @@ def stamped_head(text: str) -> str:
     return m.group(1) if m else ""
 
 
+def in_commit(root: str, head: str, rel_path: str) -> bool:
+    """Was `rel_path` in `head`? False when git cannot say, so an unknown file is treated
+    as scaffold residue rather than as tree content the copy should keep."""
+    if not (head and root):
+        return True
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "cat-file", "-e", f"{head}:{rel_path}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    return proc.returncode == 0
+
+
 def changed_since(root: str, head: str, rel_path: str):
     """Has `rel_path` changed since `head`? None when git cannot answer.
 

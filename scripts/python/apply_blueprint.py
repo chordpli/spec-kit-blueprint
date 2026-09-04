@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     base_chain,
     changed_since,
+    in_commit,
     file_kinds,
     parse_mode,
     section_events,
@@ -300,6 +301,14 @@ def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
 
     for kind, payload in section_events(section):
         if kind == "label":
+            # A label naming a path the task does not declare is how a block reached a
+            # file nobody asked for: the orphan sweep removed the stale skeleton and this
+            # wrote it straight back, so the build passed over a mistyped declaration.
+            if payload not in kinds:
+                raise Defect(
+                    f"a code block is labelled `{payload}`, which this task does not declare"
+                    " — fix the label or add the path to the **File**: line"
+                )
             current, pending = payload, "content"
         elif kind == "cite":
             cite = payload
@@ -610,6 +619,13 @@ def main() -> int:
             full = os.path.join(dirpath, name)
             relp = os.path.relpath(full, tree)
             if relp in declared_all or relp.startswith("specs" + os.sep):
+                continue
+            # Not in the stamped commit and declared by no task: scaffold residue,
+            # whatever it holds. Keying on markers alone left a structural skeleton —
+            # which carries none by design — in the copy to fill the hole a mistyped
+            # path had left, and the build passed over it.
+            if _stamped_head and not in_commit(root, _stamped_head, relp):
+                orphans.append(relp)
                 continue
             try:
                 if os.path.getsize(full) > 512_000:

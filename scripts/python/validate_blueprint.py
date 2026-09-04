@@ -121,10 +121,13 @@ def code_lines(block: str) -> list[str]:
 def main() -> int:
     argv = sys.argv[1:]
     if "--help" in argv or "-h" in argv:
-        print("Usage: validate_blueprint.py [specs/NNN-feature-name]")
-        print("\nChecks blueprint.md against tasks.md and the working tree. No flags.")
+        print("Usage: validate_blueprint.py [specs/NNN-feature-name] [--strict-guide]")
+        print("\nChecks blueprint.md against tasks.md and the working tree.")
+        print("  --strict-guide  make the guide-mode body findings failures rather than warnings")
         print("Exit 0 pass, 1 failures found, 2 feature directory not resolved.")
         return 0
+    strict_guide = "--strict-guide" in argv
+    argv = [a for a in argv if a != "--strict-guide"]
     unknown = [a for a in argv if a.startswith("-")]
     if unknown:
         # Silently ignoring these meant a typo in a flag looked like a clean run.
@@ -538,8 +541,17 @@ def main() -> int:
     empty_new = []
     for tid, sec in sections.items():
         new_paths = [p for p, k in file_kinds(sec) if k == "new"]
-        if new_paths and not code_blocks(sec, content_only=True):
+        if not new_paths:
+            continue
+        blocks = code_blocks(sec, content_only=True)
+        if not blocks:
             empty_new.append(f"{tid}: declares {', '.join(new_paths)} (new) and carries no code block")
+        elif len(new_paths) > 1:
+            # Per file, not per task: a task declaring two new files with one block
+            # between them passed, and the missing file surfaced as a compiler error.
+            for relp in new_paths:
+                if not re.search(r"^\*\*`" + re.escape(relp) + r"`\*\*", sec, re.M):
+                    empty_new.append(f"{tid}: declares {relp} (new) and no code block is labelled with it")
     if empty_new:
         record("fail", "a task declares a new file and gives it no content", "\n".join(empty_new[:6]))
     else:
@@ -756,8 +768,22 @@ def main() -> int:
         # the same transfer of the body, moved inside a string where no code check looks:
         # 3a-G asks for a self-contained instruction and forbids dictating the code, and a
         # generator satisfying the first breaks the second.
+        # Precision over recall, and measured: the first version of this caught `&&` and
+        # `==` and nothing else, while a sweep of every blueprint written against this
+        # tool showed its other rules firing only on honest prose — a `->` between two
+        # states, an API named mid-sentence, a semicolon between list items. A check that
+        # fires on prose and misses expressions trains the author backwards.
+        #
+        # What survives is what a reader could paste: boolean operators, a comparison
+        # with a call on one side, a ternary with code arms, a `return` carrying an
+        # operator, and a `return` of a method call that ends the message.
         CODE_IN_PROSE = re.compile(
-            r"&&|\|\||[!=<>]=|\breturn\s+\w+\s*[;(]|->\s*\w+\(|\w+\.\w+\([^)]*\)\s*(?:&&|\|\||;)"
+            r"&&|\|\|"
+            r"|[\w)\]]\s*(?:==|!=|<=|>=)\s*[\w.]*\w\s*[.(]"
+            r"|[\w.]*\w\s*[.(][^\n]{0,30}?(?:==|!=|<=|>=)"
+            r"|\?[^:\n]{1,60}:\s*\w+[.(]"
+            r"|\breturn\b[^.\n]{0,60}?[\w)]\s*(?:\?|&&|\|\||[!<>]=|==)"
+            r"|\breturn\s+\w[\w.]*\.\w+\s*\([^()]*\)\s*;?\s*$"
         )
         # The same basename reading the scaffold validator uses: a file with one of these
         # in its name holds behavior, and a guide skeleton for it has to carry a marker.
@@ -796,25 +822,51 @@ def main() -> int:
                     smuggled.append(f"{tid}: an expression body in a block with no marker — {exprs[0][:50]!r}")
                 # The marker's message, where no code check has ever looked.
                 for m in re.finditer(r"""(?:TODO|NotImplementedError|UnsupportedOperationException|panic|todo!|fatalError)\s*\(\s*["'`](.+?)["'`]\s*\)""", blk, re.S):
-                    if CODE_IN_PROSE.search(m.group(1)):
-                        dictated.append(f"{tid}: a marker message spells out the body — {m.group(1).strip()[:60]!r}")
+                    hit = CODE_IN_PROSE.search(m.group(1))
+                    if hit:
+                        # The fragment, not the opening of the message: a reviewer had to
+                        # bisect one marker twelve times to find what had fired.
+                        frag = hit.group(0).strip()
+                        at = m.group(1).find(frag)
+                        around = m.group(1)[max(0, at - 20): at + len(frag) + 20].strip()
+                        dictated.append(f"{tid}: a marker message spells out the body — {frag!r} in …{around}…")
                         break
+        # 4b asks every marker message to begin with its task id, and --markers and
+        # cleanup both trace markers to tasks by it. Nothing checked it.
+        unlabelled_markers = []
+        for tid, sec in sections.items():
+            blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
+            blocks += after_additions(sec)
+            for blk in blocks:
+                for m in re.finditer(r"""(?:TODO\(blueprint\)\s*:|NotImplementedError|UnsupportedOperationException|panic|todo!|fatalError)\s*[(:]?\s*["'`]?([^"'`\n]{0,40})""", blk):
+                    head = m.group(1).strip()
+                    if head and not re.match(r"T\d+\s*:", head):
+                        unlabelled_markers.append(f"{tid}: a marker message does not begin with a task id — {head[:45]!r}")
+                        break
+        if unlabelled_markers:
+            record(
+                "fail" if strict_guide else "warn",
+                "a not-implemented marker's message does not begin with its task id",
+                "\n".join(unlabelled_markers[:6])
+                + "\n--markers and cleanup trace a marker to its task by that id; without it the marker is orphaned",
+            )
+
         if dictated:
             record(
-                "warn",
+                "fail" if strict_guide else "warn",
                 "a not-implemented marker's message spells out the code it is standing in for",
                 "\n".join(dictated[:6])
                 + "\nsay what to achieve and what to avoid; an exact expression makes typing transcription, which is what guide mode exists to avoid",
             )
         if unmarked:
             record(
-                "warn",
+                "fail" if strict_guide else "warn",
                 "a guide-mode skeleton for a file with behavior carries no marker",
                 "\n".join(unmarked[:6]) + "\na structural file (types, config, wiring) is complete on purpose; a service or a test is not",
             )
         if smuggled:
             record(
-                "warn",
+                "fail" if strict_guide else "warn",
                 "a guide-mode block looks like it contains body logic",
                 "\n".join(smuggled[:6]) + "\nguide skeletons carry signatures and markers; the branches are the developer's to write",
             )
