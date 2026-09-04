@@ -237,7 +237,7 @@ Every flag the three scripts take, since until now they were documented only in 
 | `--build` | apply | Run the project's build inside the copy. Without it the run only reports whether the tasks applied |
 | `--keep` | apply | Leave the copy on disk and print its path |
 | `--scaffold` | apply | After a clean apply, copy the declared-new files into your tree — only files the blueprint declares new and only where nothing is already there |
-| `--require-anchors` | apply | Exit non-zero when a task anchors nothing, or when tasks were skipped as already-applied. This is the flag for CI: a run that verified nothing must not share an exit code with one that verified everything |
+| `--require-anchors` | apply | Exit non-zero when a task anchors nothing, or when tasks were skipped as already-applied. Useful on the commit that has a blueprint and no code yet; from the first implemented task onward it is red on every commit, so it is not a standing CI gate |
 | `--strict-guide` | validate | Turn the guide-mode body findings into failures rather than warnings |
 | `--strict` | scaffold | Check files on disk even when the mode says none were written — for scaffolding done after the blueprint was generated |
 | `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note |
@@ -253,8 +253,9 @@ line before passing `--build` to a blueprint you did not generate.
 `--require-anchors` makes the applier fail when a task's code is not anchored to a position, or when
 nothing anchored at all. It is off by default: a guide blueprint applies its skeletons like any
 other, but one whose tasks are all edits described in prose has nothing to apply, and that is not
-a defect locally. Turn it on in CI, where "verified nothing" and "verified everything" must not
-share an exit code.
+a defect locally. It is not the CI flag it was described as: a reviewer measured it across a
+feature's life and it is green only on the commit that has a blueprint and no code — from the first
+implemented task onward it is red on every commit, which is an alarm that is always on.
 
 The scaffold validator cannot tell a file written complete against the mode's rules from one a
 developer has since implemented — both look the same on disk. Pass `--fresh` right after
@@ -262,6 +263,13 @@ scaffolding to say nothing is implemented yet, and a missing not-implemented mar
 failure instead of a warning.
 
 Color-coded output: green (pass), yellow (warning), red (failure). All three exit non-zero on failure, so they work in CI or a pre-commit hook.
+
+**In CI, check out the full history.** `actions/checkout` clones to depth 1 by default, and both
+Python scripts ask git what has changed since the commit the blueprint stamps. A clone that does
+not have that commit cannot answer, and they now report what they could not check rather than
+guessing — which is safe, and also means a shallow job verifies much less than it appears to. Set
+`fetch-depth: 0`. Run `validate_blueprint.py` and `apply_blueprint.py --build`; leave
+`--require-anchors` off unless you are gating the pre-implementation commit specifically.
 
 Why a document validator: rules that live only in prose get followed inconsistently. Running this against two independently generated blueprints for the same feature caught the same defect in both — multi-file tasks that never said which code block belonged to which file — which no amount of reading had surfaced.
 

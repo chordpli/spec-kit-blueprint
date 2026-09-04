@@ -264,6 +264,13 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
 fi
 
 if [[ "$MARKERS" == true ]]; then
+    # This feature's task ids, so a marker belonging to an earlier feature can be named
+    # as such rather than counted as work left here.
+    IDS_FILE=$(mktemp)
+    if [[ -f "$FEATURE_DIR/tasks.md" ]]; then
+        grep -oE '^[[:space:]]*-[[:space:]]*\[[ xX]\][[:space:]]*T[0-9]+' "$FEATURE_DIR/tasks.md" 2>/dev/null \
+            | grep -oE 'T[0-9]+' > "$IDS_FILE" || true
+    fi
     # Every declared path, not only the new ones: a marker inserted into an existing
     # file by a (modify) task is residue too. Comment-syntax markers and executable
     # not-implemented calls both count; the judgment about each is cleanup's.
@@ -289,7 +296,17 @@ if [[ "$MARKERS" == true ]]; then
         # that line joined on, or the listing shows the call and never the task id.
         while IFS= read -r hit; do
             [[ -n "$hit" ]] || continue
-            echo "$f:$hit" >&3; found=$((found + 1))
+            # Task ids restart at T001 in every feature, so a `T014:` marker left by an
+            # earlier feature was listed as work still owed here — and both features had
+            # a T014. What decides it is whether this blueprint wrote the marker: take a
+            # distinctive run of its message and look for it in the document.
+            probe="${hit#*T}"; probe="${probe#*: }"; probe="${probe:0:48}"
+            if [[ ${#probe} -ge 16 ]] && ! grep -qF -- "$probe" "$GUIDE" 2>/dev/null; then
+                echo "$f:$hit   [not written by this blueprint — an earlier feature left it]" >&3
+            else
+                echo "$f:$hit" >&3
+            fi
+            found=$((found + 1))
         done < <(awk -v re="TODO[(]blueprint[)]|$MARKER_ERE" '
             { lines[NR] = $0 }
             END {
@@ -316,6 +333,7 @@ if [[ "$MARKERS" == true ]]; then
                 }
             }' "$REPO_ROOT/$f")
     done
+    rm -f "$IDS_FILE"
     echo "  ($found marker line(s) in ${#DECLARED[@]} declared file(s))" >&2
     exit 0
 fi
@@ -453,6 +471,10 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
                 # assignment before it, and a body or a semicolon after. Without this a
                 # Java skeleton contributed only its type names, so the file could be
                 # missing every method it declares and still pass.
+                # Not a statement. `throw new UnsupportedOperationException("T0NN: ...");`
+                # ends in a paren-and-semicolon like a declaration does, and its last word
+                # before the paren was reported as a symbol the file must contain.
+                if (t ~ /^(throw|return|new|assert|super|this|import|package|@)[^A-Za-z0-9_]/) next
                 if (t ~ /^[A-Za-z_@<][^=;]*\(/ && (t ~ /\{[ \t]*$/ || t ~ /;[ \t]*$/)) {
                     head2 = t; sub(/\(.*$/, "", head2)
                     nm = head2; sub(/^.*[^A-Za-z0-9_]/, "", nm)

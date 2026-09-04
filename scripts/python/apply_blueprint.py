@@ -216,7 +216,14 @@ def replace_once(path: str, before: str, after: str) -> int:
         raise AlreadyApplied(
             f"{rel(path)}: the lines the After adds are in the file and its markers are not — implemented since"
         )
-    if changed_since_stamp(rel(path)):
+    _ch = changed_since_stamp(rel(path))
+    # A document with no `| HEAD` stamp makes no claim about which tree it describes, so
+    # "the Before is not in the file" is exactly what it looks like. Only a stamp that
+    # exists and cannot be resolved is a reason to say nothing can tell.
+    if _ch is True or (_ch is None and _stamped_head):
+        # `None` is git declining to answer, which a shallow clone does for every path.
+        # Falling through to "Before block not found verbatim" accused a correct blueprint
+        # of a defect in exactly the checkout CI performs by default.
         # All of them, not any: a guide skeleton's boilerplate — `raise NotImplementedError(`,
         # `def setUp(self) -> None:` — appears in every task's block, and one such line
         # counted a task nobody had started as done.
@@ -229,6 +236,11 @@ def replace_once(path: str, before: str, after: str) -> int:
         # differently, could be an earlier task's edits having moved the anchor. Saying
         # which would be a guess, and a failure here sends the reader after a blueprint
         # bug that may not exist.
+        if _ch is None:
+            raise Ambiguous(
+                f"{rel(path)}: the Before is not in the file, and this clone cannot resolve HEAD"
+                f" {_stamped_head} — nothing here can say whether the file moved or the quotation is wrong"
+            )
         raise Ambiguous(
             f"{rel(path)}: the Before is not in the file, which has changed since HEAD {_stamped_head}"
             f" — this task may be implemented differently, or an earlier task moved the anchor"

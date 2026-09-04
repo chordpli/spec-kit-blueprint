@@ -348,7 +348,13 @@ def main() -> int:
 
     def has_moved(rel_path: str) -> bool:
         if rel_path not in moved:
-            moved[rel_path] = bool(changed_since(root, head, rel_path))
+            answer = changed_since(root, head, rel_path)
+            # `None` is git declining to answer — a shallow clone, a stamp from another
+            # machine. Reading it as "unchanged" ran every position check against a tree
+            # nothing could vouch for, and a correct blueprint came back red under
+            # `actions/checkout`, whose default is depth 1. The applier learned this; the
+            # document validator had the same line and never got the fix.
+            moved[rel_path] = True if answer is None else answer
         return moved[rel_path]
     # Which task first declares each file. A later task that cites a line past the end of
     # the file on disk may be citing the file as an EARLIER task leaves it — the wiring
@@ -418,7 +424,10 @@ def main() -> int:
                         and first_touch.get(named) in (None, tid) and not has_moved(named)):
                     head = needle.strip().split("\n")[0][:50]
                     not_quoted.append(f"{tid}: {named} does not contain the Before block (starts {head!r})")
-                if needle and text.count(needle) > 1 and not has_moved(named):
+                # Not gated on whether the tree moved: a Before that appears twice is
+                # ambiguous for the applier wherever the tree stands, and this is the one
+                # position finding that needs no stamp to be true.
+                if needle and text.count(needle) > 1:
                     ambiguous_anchor.append(f"{tid}: the Before block appears {text.count(needle)} times in {named}")
                 if needle and text.count(needle) == 1:
                     actual = text[: text.index(needle)].count("\n") + 1

@@ -38,6 +38,15 @@ explain their choices — and now it checks them.
 
 ### Fixed
 
+- A shallow clone no longer turns a correct blueprint red. The document validator asked git whether each file had changed since the stamped commit and read git's "I cannot answer" as "unchanged", so every position check ran against a tree nothing could vouch for — `actions/checkout` defaults to depth 1, and a correct feature came back with six false failures that `git fetch --unshallow` alone cleared. The applier had the same line in its anchor path and reported "Before block not found verbatim" for the same reason. Both now say what they could not check. A document with no `| HEAD` stamp still gets the plain verdict: it claims no baseline, so a missing Before is a missing Before
+- The declared-symbol check stops reading `throw new UnsupportedOperationException("T0NN: …");` as a declaration. It ends in a parenthesis and a semicolon the way a method does, so the exception's name was demanded of the file
+- `--markers` says which markers this blueprint did not write. Task ids restart at T001 in every feature, so five `T014:` markers left by feature 001 were listed as work still owed by feature 004 — which has its own T014. The id cannot decide it; whether the document contains the marker's message can
+- The ambiguous-anchor warning no longer depends on the stamp. A `**Before**` that appears twice is ambiguous for the applier wherever the tree stands
+
+### Changed
+
+- The README no longer recommends `--require-anchors` as a standing CI gate. Measured across a feature's life, it is green only on the commit that has a blueprint and no code; from the first implemented task onward it is red on every commit, and an alarm that is always on is not an alarm. The CI guidance now asks for `fetch-depth: 0` and names the two scripts worth running
+
 - The scaffold validator's marker check reaches core logic files in the full-code modes. A file was checked for markers only if its name matched `*service*`, `*handler*` or `*test*`, or if the *blueprint* gave it a marker — and in `scaffold` and `doc-only` the document holds complete code by definition, so that last condition is false for every file. A fully implemented `search.py` with no markers passed `--fresh` with `All checks passed`, while `--markers` listed its four marker lines: the enumeration path and the checking path had come apart. This is the mode the README defaults to
 - A hunk that is partly present is `cannot tell`, not `already applied`. Every attempt to sharpen the line matching has been defeated by the next repository that writes the same idiom twice, and thirteen of twenty-three lines present is not evidence the developer made this change — it is evidence that nothing here can tell. The cost was measured: the only test of a requirement never entered the build while the run ended `Blueprint applied and built`
 - A guide-mode `**Build**` that only parses says so. The spec explains two paragraphs below that a parser cannot resolve names, and nothing checked the line it had just told you to write
