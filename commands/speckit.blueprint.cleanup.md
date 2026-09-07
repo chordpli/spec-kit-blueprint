@@ -37,9 +37,16 @@ If that script reports `Feature directory not found … .specify/feature.json`, 
 
 Parse `FEATURE_DIR` and load `blueprint.md` from it. If `blueprint.md` is missing, abort with: "No blueprint.md found — run `/speckit.blueprint.generate` first."
 
+**Check that it answered about the feature you are on.** `check-prerequisites.sh` resolves the feature from `.specify/feature.json`, which is written by whichever specify command ran last and is not updated by switching branches. On branch `005-refund-releases-cap` it will answer `specs/004-daily-debit-cap` with exit 0 and no error if that file is stale, and this command would then clean the wrong feature silently. Compare the directory it returned against the branch's own numeric prefix; if they disagree, **stop and ask** which feature is meant rather than proceeding with either.
+
 The scan scope is **the files the blueprint touches**: every NEW and MODIFIED file listed in the blueprint. Never scan the whole repository — pre-existing comments outside the feature are not this command's business.
 
-Implementation always drifts from the plan, so extend the scope by one rule: also include files that are **not** named in the blueprint but carry a `TODO(blueprint):` marker or a marker naming one of this feature's task IDs. Report these under a separate "outside the blueprint" heading — a file the plan never mentioned is a signal the blueprint is stale, not just a cleanup target. Anything else stays out of scope.
+Implementation always drifts from the plan, so extend the scope by two rules:
+
+- Also include files that are **not** named in the blueprint but carry a `TODO(blueprint):` marker or a marker naming one of this feature's task IDs. Report these under a separate "outside the blueprint" heading — a file the plan never mentioned is a signal the blueprint is stale, not just a cleanup target.
+- Also include, **for the FALSIFIED verdict only**, decision records and prose docs that name a symbol this feature changed: `docs/**`, `*.md` at the repository root, and any file the blueprint's Why sections cite. A decision record is not in any diff, so code review does not catch it, and it was outside this command's scope while the verdict that exists for it — FALSIFIED — sat unusable. Read them, report what this feature made untrue, and **never edit them**: the FALSIFIED rule already says rewriting is the developer's call. Two rounds of review found the same ADR sentence made false by two different features with no machine signal of any kind.
+
+Anything else stays out of scope.
 
 ### Step 2: Scan
 

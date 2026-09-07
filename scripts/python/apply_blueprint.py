@@ -44,6 +44,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     dependent_slices,
     in_commit,
     file_kinds,
+    outside_fences,
     parse_mode,
     section_events,
     stamped_head,
@@ -70,9 +71,17 @@ SKIP_AT_ROOT = {"build", "target", "out", "dist"}
 
 results: list[tuple[str, str, str]] = []  # (status, name, evidence)
 
+# Per-task ✓/⚠ lines are printed only with --verbose. Sixteen "applied" ticks and eight
+# "the tree has moved on" warnings say one thing between them, and the summary says it in
+# a line. Measured over one repository: 33 of the applier's 35 findings were the same two
+# facts repeated per task.
+VERBOSE = False
 
-def record(status: str, name: str, evidence: str = "") -> None:
+
+def record(status: str, name: str, evidence: str = "", *, always: bool = False) -> None:
     results.append((status, name, evidence))
+    if not (VERBOSE or always or status == "fail"):
+        return
     mark = {"pass": f"{GREEN}✓{NC}", "warn": f"{YELLOW}⚠{NC}", "fail": f"{RED}✗{NC}"}[status]
     print(f"  {mark} {name}")
     if evidence:
@@ -604,6 +613,84 @@ def build_command(tree: str, blueprint: str) -> str | None:
 
 
 BUILD_TIMEOUT = 900
+VERIFY_TIMEOUT = 300
+
+# A runner, not a sentence. `**Verification**` lines are half prose ("`pace --help` shows
+# `--month`") and half command, and the backticked span that starts with one of these is
+# the half a machine can settle. Anything else in the line is left to the reader — the
+# alternative is running whatever a generated document put between backticks.
+VERIFY_RUNNER = re.compile(
+    r"^(?:python3?|py|bash|sh|zsh|node|npm|npx|yarn|pnpm|make|rake|mvn|gradlew?|\./gradlew"
+    r"|go|cargo|dotnet|swift|ruby|php|pytest|unittest|javac|java|jest|tsc|deno|\./[\w./-]+)\b"
+)
+
+
+def verification_commands(section: str) -> list[str]:
+    """Every runnable command a task's **Verification** line names, in order.
+
+    Five rounds of review asked for this. The line has been required of every task since
+    the first version of the spec, every task carries one, and until now the string
+    "Verification" appeared in these scripts exactly once — in a comment explaining that
+    the block under it should be skipped.
+    """
+    out: list[str] = []
+    for m in re.finditer(r"^\*\*Verification\*\*:?(.*?)(?=^\*\*|^#|\Z)",
+                         outside_fences(section), re.M | re.S):
+        for cm in re.finditer(r"`([^`\n]+)`", m.group(1)):
+            cmd = cm.group(1).strip()
+            if VERIFY_RUNNER.match(cmd) and cmd not in out:
+                out.append(cmd)
+    # The template also allows a fenced block under the label; ILLUSTRATIVE_LABELS keeps
+    # the applier from writing it to a file, which is why it has to be read here.
+    under_label = False
+    for _i, line, in_fence, block in scan(section):
+        if block is not None:
+            if under_label:
+                for ln in block.split(chr(10)):
+                    ln = ln.strip()
+                    if ln.startswith("$"):
+                        ln = ln[1:].strip()
+                    if ln and VERIFY_RUNNER.match(ln) and ln not in out:
+                        out.append(ln)
+                under_label = False
+            continue
+        if not in_fence and line.startswith("**"):
+            under_label = line.startswith("**Verification**")
+    return out
+
+
+def run_verifications(tree: str, tasks_applied: list) -> int:
+    """Run each applied task's verification command in the copy. Returns failures."""
+    print(f"\n{CYAN}=== Verification ==={NC}")
+    ran = failures = silent = 0
+    for tid, section in tasks_applied:
+        cmds = verification_commands(section)
+        if not cmds:
+            silent += 1
+            continue
+        for cmd in cmds:
+            ran += 1
+            try:
+                proc = subprocess.run(cmd, shell=True, cwd=tree, capture_output=True,
+                                      text=True, timeout=VERIFY_TIMEOUT)
+                code = proc.returncode
+                tail = (proc.stdout + proc.stderr).rstrip().split("\n")[-8:]
+            except subprocess.TimeoutExpired:
+                code, tail = 124, [f"did not finish within {VERIFY_TIMEOUT}s"]
+            except OSError as exc:
+                code, tail = 127, [str(exc)]
+            if code == 0:
+                record("pass", f"{tid}  $ {cmd}", always=VERBOSE)
+            else:
+                failures += 1
+                record("fail", f"{tid}  $ {cmd} — exit {code}", "\n".join(tail))
+    print(f"  ran {ran} verification command(s) from {len(tasks_applied)} applied task(s):"
+          f" {ran - failures} passed, {failures} failed"
+          + (f"; {silent} task(s) name no runnable command" if silent else ""))
+    if failures:
+        print("  A **Verification** line is a claim the document makes about itself.")
+        print("  These ran in the copy, against the code the blueprint dictates — not against your tree.")
+    return failures
 
 
 def run_build(tree: str, cmd: str) -> int:
@@ -639,12 +726,17 @@ def main() -> int:
         print("  --keep             print the copy's path instead of deleting it")
         print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
         print("  --scaffold         after a clean apply, copy the declared-new files into your tree")
+        print("  --verify           run each applied task's **Verification** command in the copy")
+        print("  --verbose          print the per-task line for every task, not just the failures")
         print("\nExit 0 applied cleanly, 1 a task failed or the build did, 2 feature directory not resolved.")
         return 0
+    global VERBOSE
     do_build, keep = "--build" in argv, "--keep" in argv
     strict_anchors = "--require-anchors" in argv
     do_scaffold = "--scaffold" in argv
-    KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold"}
+    do_verify = "--verify" in argv
+    VERBOSE = "--verbose" in argv
+    KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold", "--verify", "--verbose"}
     unknown = [a for a in argv if a.startswith("-") and a not in KNOWN]
     if unknown:
         # A typo in --build looked like a run that simply chose not to build.
@@ -785,6 +877,7 @@ def main() -> int:
     # moved tree too, so counting skips from it said "9 task(s) skipped" above a
     # summary reading `skipped: 8`, and listed eight.
     skipped_ids: list[str] = []
+    applied_sections: list = []
     try:
         for tid, section in tasks:
             try:
@@ -824,6 +917,7 @@ def main() -> int:
                 record("warn", f"{tid}  applied, with a block left unplaced", note)
             elif count:
                 applied_tasks += 1
+                applied_sections.append((tid, section))
                 record("pass", f"{tid}  applied", note)
             elif "no file" in note or "delete" in note or note == "no code block":
                 skipped_ids.append(tid)
@@ -833,21 +927,41 @@ def main() -> int:
                 skipped_ids.append(tid)
                 record("warn", f"{tid}  skipped ({note})")
 
-        if unclear:
-            print(f"\n  {YELLOW}{len(unclear)} task(s) could not be judged{NC} — their files have changed since"
-                  "\n  this blueprint was generated, and their Before blocks are no longer in them. Run the"
-                  "\n  applier before implementing, or against a tree that predates the work.")
-        if already:
-            print(
-                f"\n  {YELLOW}{len(already)} task(s) are already in the tree{NC} — this blueprint describes"
-                "\n  work that is done, so applying it does not test anything. Run the applier before"
-                "\n  implementing, or against a tree that predates the work."
-            )
+        # One state, said once. "Already applied", "cannot tell" and "applied over a tree
+        # that has moved on" are three readings of a single fact — this tree is past the
+        # commit the blueprint describes — and printing them per task filled the run with
+        # the same sentence. What a reader needs is the state and the count.
+        moved_files = sorted({p for p in declared_all
+                              if changed_since(root, _stamped_head, p) is True}) if _stamped_head else []
+        ahead = sorted(set(already) | set(unclear))
+        if ahead:
+            if moved_files:
+                print(f"\n  {YELLOW}AHEAD — this tree is past the blueprint's stamp.{NC}"
+                      f" {len(moved_files)} of the file(s) it writes have changed since"
+                      f" HEAD {_stamped_head}, so {len(ahead)} task(s) could not be tested:"
+                      f" {', '.join(ahead[:10])}"
+                      + (f" (+{len(ahead) - 10} more)" if len(ahead) > 10 else ""))
+            else:
+                print(f"\n  {YELLOW}{len(ahead)} task(s) are already in the tree or could not be judged{NC}:"
+                      f" {', '.join(ahead[:10])}"
+                      + (f" (+{len(ahead) - 10} more)" if len(ahead) > 10 else ""))
+            print("  Applying a blueprint over work that is done tests nothing. Run it before implementing,")
+            print("  or against a tree that predates the work; --verbose gives the per-task reason.")
 
         print(f"\n{CYAN}=== Summary ==={NC}")
         print(f"  applied: {applied_tasks}  skipped: {len(skipped_ids)}"
               f"  {RED}FAILED{NC}: {len(failed)}"
               + (f"  {YELLOW}replaced{NC}: {len(_overwritten)} declared-new file(s) that were on disk" if _overwritten else ""))
+        # How much of the document this run actually tested. `applied: 3 skipped: 11` and
+        # exit 0 is honest in the body and a lie to a CI job reading only the code; the
+        # fraction is the number a reader needs to know what the green covers, and it goes
+        # in the summary rather than a paragraph underneath it.
+        total_tasks = len(tasks) + len(base_tasks)
+        if total_tasks:
+            pct = round(100 * applied_tasks / total_tasks)
+            colour = GREEN if pct >= 80 else YELLOW
+            print(f"  {colour}coverage: this run typed and tested {applied_tasks} of {total_tasks}"
+                  f" task(s) ({pct}%){NC}")
         if unanchored_tasks:
             print(f"  {YELLOW}{len(unanchored_tasks)} task(s) carry code no marker anchors to a"
                   f" position: {', '.join(unanchored_tasks[:10])}"
@@ -896,6 +1010,13 @@ def main() -> int:
                           + ", ".join(f"{t} (-{n} lines)" for t, n in stripped[:6])
                           + (f" (+{len(stripped) - 6} more)" if len(stripped) > 6 else "")
                           + f" — that behavior is gone from this copy and the build above cannot see it.{NC}")
+        if do_verify:
+            if failed:
+                print(f"\n{YELLOW}Verification skipped — {len(failed)} task(s) did not apply.{NC}")
+            elif not applied_sections:
+                print(f"\n{YELLOW}Verification skipped — nothing was applied, so there is nothing to verify.{NC}")
+            elif run_verifications(tree, applied_sections):
+                rc = 1
         if do_scaffold and not failed:
             # The generator writing forty skeletons by hand is where drift comes from;
             # the copy already holds exactly what the document says, verified by the
