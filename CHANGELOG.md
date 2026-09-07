@@ -7,12 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Three reviewers ran the tools over their own repositories and counted what came back.
-Across seven runs of one repository the three scripts produced 101 findings: 22 actionable,
-5 informational, 74 noise, an average of 187 lines per run, and three distinct real defects
-for 1,310 lines read. Nine rounds of adding checks, and nobody had counted how often each
-one was right. So this release mostly removes, merges and silences; what it adds, it adds
-because a check that had never once been correct was standing in for one.
+Three reviewers ran the tools over their own repositories and counted what came back. One
+of them classified every finding: over seven runs the three scripts produced 101 — 22
+actionable, 5 informational, 74 noise — averaging 187 lines a run, and three distinct real
+defects for 1,310 lines read. Nine rounds of adding checks, and nobody had counted how often
+each check was right.
+
+Re-measured here on that repository's five features with the same classification: **before,
+87 findings — 17 actionable (19.5%), 4 informational, 66 noise, 1,008 lines. After, 19
+findings — 14 actionable (73.7%), 1 informational, 4 noise, 610 lines.** The four that
+remain are the applier's build failing over a tree that has moved past the blueprint, which
+is left red on purpose: making it green would trade a false alarm for a false pass, and the
+reviewer who weighed both said the second is worse.
+
+So this release mostly removes, merges and silences. What it adds, it adds because something
+that had never once been right was standing in for it.
 
 ### Fixed
 
@@ -90,7 +99,7 @@ because a check that had never once been correct was standing in for one.
 - **A section with nothing to report is one line.** 92% of the document validator's output was
   green ticks, and three warnings sat among twenty-one of them. A pass that carries evidence
   still prints; a pass that carries none is counted. `--verbose` restores the old listing on
-  both Python scripts. Over 43 blueprints the validator's output fell from 1,090 lines to 360
+  both Python scripts. Over 43 blueprints the validator's output fell from 1,090 lines to 408
 - The applier's summary carries a `coverage:` line — how many of the document's tasks this run
   actually typed and compiled. `applied: 3 skipped: 11` with exit 0 is honest in the body and
   misleading to a job that reads only the exit code. The code is unchanged on purpose: an old
