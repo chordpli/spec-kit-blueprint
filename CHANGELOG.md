@@ -5,6 +5,148 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Three reviewers ran the tools over their own repositories and counted what came back.
+Across seven runs of one repository the three scripts produced 101 findings: 22 actionable,
+5 informational, 74 noise, an average of 187 lines per run, and three distinct real defects
+for 1,310 lines read. Nine rounds of adding checks, and nobody had counted how often each
+one was right. So this release mostly removes, merges and silences; what it adds, it adds
+because a check that had never once been correct was standing in for one.
+
+### Fixed
+
+- **The check this extension's README names as its founding success was structurally dead in
+  the mode the README recommends.** `[4] Multi-file task labels` counted *authored* code
+  blocks, and `strip_quoted` drops every Before/After pair, so a task made only of hunks
+  collapsed to one block and `blocks > 1` was never true for it. In one 16-task blueprint the
+  two largest multi-file tasks — nine files and 37 blocks, three files and 14 — never reached
+  the check, while the applier failed one of them for exactly this defect. It now asks the
+  applier's own question about hunks: a Before/After that follows no usable `**`path`**`
+  label, in a task with two or more files to modify, is a hunk nothing can place. The same
+  document now fails at the document stage instead of two scripts disagreeing about it
+- **A hard failure fired on the shape the spec teaches.** `body_replaced_by_marker` tested one
+  line at a time for a marker, and a self-contained work instruction — which 3a-G asks for —
+  runs over several lines in Python (implicit string concatenation) and Java (text blocks). The
+  continuation lines read as "working code being deleted", so a task quoting the previous
+  task's marker in its Before was reported as demolishing tested code. This check is a failure
+  with no `--strict-guide` escape, so the false positive stopped a junior with no way past it
+  but reading the parser. Marker calls are now read as whole expressions
+- **The document validator and the applier disagreed about the same hunk.** `before_after_pairs`
+  read its blocks with the fence-aware scanner and its `**Before**`/`**After**` labels with a
+  plain line test, so a task carrying a stray fence — the shape a README task takes when it
+  quotes a shell example — hid its `**After**` inside a block: the applier walked the blocks
+  and reported "a Before with no After", the validator paired them and printed a tick. Both
+  halves are fence-aware now, and the validator fails the same task the applier fails
+- **The tool said the blueprint declared things it does not declare.** The declared-symbol
+  extractor read `System.out.println("…");` and `Objects.requireNonNull(id, "id");` as
+  declarations, because a call statement ends in a paren and a semicolon the way a method does.
+  Five of one feature's 48 "declared symbols" were ghosts of this kind, and the tool told the
+  developer their blueprint declares `println`. A dotted receiver in front of the name, or no
+  token at all in front of it, now means a call
+- **Three validators exited 0 over a tree that would not compile.** The declared-symbol check
+  asked whether the name appeared *anywhere* in the file, which the line calling a deleted
+  method satisfies. Deleting `usedToday` from a policy class left `Money used =
+  usedToday(accountId);` behind: `bash tools/build.sh` failed with 12 errors and the check
+  answered "all 19 declared symbol(s) are present". Counted over three implemented features of
+  that repository, 111 of 163 declared symbols appear in their file more than once — every one
+  of those could be deleted without this check moving. Both sides of the comparison
+  now use one declaration recogniser — the same one the extractor uses
+- **A check no document could satisfy.** `[6]` demanded a not-implemented marker in
+  `FeeScheduleRepository.java` — a Java interface with no bodies — because the basename
+  classifier matched `scheduler` across the seam of `Schedule` + `Repository`. Matching is on
+  whole words now (camel-case seams included), and a block that declares no method body is
+  exempt: there is nowhere to put a marker in a port
+- **A section that printed a heading and no verdict.** `[4. Over-Implementation Detection]`
+  set a flag and returned without printing whenever it found something outside `--fresh`,
+  leaving a reader with "it found something and will not say what" on every post-implementation
+  run. It now says what it can and cannot judge, in one line; the unreachable assignment left
+  from a half-finished edit is gone
+- The name `head` held the stamped commit and was rebound, inside the same function, to the
+  first line of a Before block. Every position check after the first finding asked git to diff
+  against a line of Java, git declined, and the rest of the document went unchecked
+
+### Changed
+
+- **Truncated lists say how many they left out, in the document validator too.** The applier
+  learned this last release; the validator has about forty truncating sites and one of them
+  said so. Making 29 Before headers wrong reported six and never mentioned the other 23. All
+  of them now go through one helper
+- **The tools stop reporting the passage of time as a defect.** A `**Before**` whose text sits
+  at a different line than its header cites was reported on all five implemented features of
+  one repository and on none of the freshly generated ones; not one was a defect in a document.
+  It is now silent for a file git says has changed since the stamp — the run still says how
+  many files it declined to judge and why. The applier collapses "already applied", "cannot
+  tell" and "applied over a tree that has moved on" into one `AHEAD` line naming the state and
+  the task ids: they are three readings of one fact, and repeating it per task was 24 of its 35
+  findings
+- **Two warnings whose own evidence line said "expected" are passes.** A stamped source edited
+  by this blueprint's own tasks, and a reference to a task that lives in a sibling slice or
+  another feature: both resolve, both were reported in yellow on every run for ever
+- **`NO TODO markers found` is a count, not a warning per file.** Without `--fresh` a file with
+  no marker is a file someone finished. That single warning was 34 of the 45 findings the
+  scaffold validator produced over one corpus. Eight absent declared files are likewise one
+  finding with the list, not eight failures repeating one sentence
+- **A section with nothing to report is one line.** 92% of the document validator's output was
+  green ticks, and three warnings sat among twenty-one of them. A pass that carries evidence
+  still prints; a pass that carries none is counted. `--verbose` restores the old listing on
+  both Python scripts. Over 43 blueprints the validator's output fell from 1,090 lines to 360
+- The applier's summary carries a `coverage:` line — how many of the document's tasks this run
+  actually typed and compiled. `applied: 3 skipped: 11` with exit 0 is honest in the body and
+  misleading to a job that reads only the exit code. The code is unchanged on purpose: an old
+  blueprint is a fact, not a defect, and `--require-anchors` is how a caller asks for the
+  failure instead
+
+### Added
+
+- `apply_blueprint.py --verify` runs each applied task's `**Verification**` command inside the
+  copy. Asked for in five consecutive rounds; the string "Verification" appeared in these
+  scripts exactly once before this, in a comment explaining that the block under it should be
+  skipped. Only a backticked span beginning with a runner (`python3`, `bash`, `mvn`, `npm`,
+  `go`, `./gradlew`, …) is run — the rest of the line is prose — and a task naming no runnable
+  command is counted, not failed. Opt-in, for the same reason `--build` is: these are shell
+  commands out of a generated document
+- **The body-dictation check reads the two places the generator actually puts the body.** It
+  looked inside marker *calls* only, so 3a-G's own recommended shape for a change inside an
+  existing body — a `// TODO(blueprint):` comment — was the one form nothing examined, and the
+  string "Implementation notes" did not appear in any of the three scripts. Both are now read,
+  and one reviewer's `WARN 0` blueprint has three notes that are whole Java statements
+- **The check knows what a Python body looks like.** Its rules were written against Java and
+  Kotlin, where a body is a chain of calls; six of the seven expressions in one reviewer's
+  Python marker — four formulas and two constructor calls with eight keyword arguments — passed.
+  Arithmetic between identifiers, a call with two or more keyword arguments, a subscripted call
+  and an identifier compared against a number are now read too. Each was measured over all 2,400
+  marker messages, TODO comments and implementation notes in the corpus before being kept:
+  twelve new hits, all of them pasteable code, none on the prose shapes that trip a careless
+  rule — a path, a requirement id, `and/or`, a `*` used for emphasis
+- README: a table of what the three scripts do **not** check, beside each green they print
+- `cleanup` reads decision records and prose docs for its `FALSIFIED` verdict. The category
+  existed and the scope excluded the only files it applies to: an ADR is in no diff, so code
+  review does not catch it, and two rounds found the same ADR sentence made false by two
+  different features with no machine signal at all. Report-only, never edited
+- `cleanup` and `review` check that `check-prerequisites.sh` answered about the branch they are
+  on. It resolves the feature from `.specify/feature.json`, which switching branches does not
+  update, so on `005-…` it answers `specs/004-…` with exit 0 and no error — and the command
+  would then clean or quiz the wrong feature silently
+
+### Not done, and why
+
+- **The header's file counts stay a warning.** Asked twice as a promotion to failure. The
+  check's own rule — a file declared new by one task and modified by later ones counts once, as
+  new — is a heuristic, and 12 of 43 corpus blueprints trip it; a gate built on that would be
+  wrong more often than the documents it rejects
+- **The dictated-body finding stays a warning by default.** Widening it was the right half of
+  the request; promoting it was not. Whether a sentence is too literal is a judgment, this check
+  has over-fired before, and `--strict-guide` already promotes it for teams that want the gate
+- **No marker-symbol-to-import check.** Asked for three rounds. It cannot tell "same package",
+  "language builtin" and "no import needed in this language" from a real omission without
+  knowing the language, and this release's measurement is that a check which cannot be satisfied
+  is worse than no check at all. Recorded here as declined rather than left open
+- **No `blueprint drift` command.** The ownership-cost problem is real and this is not a new
+  command's worth of answer: the applier's `AHEAD` state and `coverage:` fraction are the two
+  numbers such a command would print, and the README now says plainly that nothing here measures
+  how much of a merged blueprint is still true
+
 ## [1.2.0] - 2026-09-02
 
 Everything here came out of two people using the extension on real projects and

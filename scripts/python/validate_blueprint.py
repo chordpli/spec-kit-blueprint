@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     BEFORE_AFTER_RE,
     base_chain,
+    before_labels,
     body_replaced_by_marker,
     changed_since,
     dependent_slices,
@@ -36,6 +37,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     parse_mode,
     repo_root,
     resolve_feature_dir,
+    section_events,
     split_tasks,
     stamped_head,
     strip_quoted,
@@ -52,13 +54,70 @@ SCRIPT_VERSION = "1.2.0"
 results: list[tuple[str, str, str]] = []  # (status, name, evidence)
 
 
+# A run prints twenty-odd green ticks and hides its warnings among them. Measured over one
+# repository: 92% of the lines this script produced were passes, and a reader looking for
+# the one warning in section [3] read eighteen of them first. A pass that carries evidence
+# still prints — it is saying something the reader needs. A pass that carries none is
+# counted. `--verbose` restores the old listing.
+VERBOSE = False
+_pending_pass = 0
+_cur_title = ""
+_printed_any = False
+_cur_lines: list[str] = []
+
+
+def flush_passes() -> None:
+    """Print the section just finished: its findings, or one line saying it had none."""
+    global _pending_pass, _cur_title, _cur_lines, _printed_any
+    if not _cur_title and not _cur_lines and not _pending_pass:
+        return
+    lead = "" if not _printed_any else "\n"
+    _printed_any = True
+    if _cur_lines:
+        print(f"{lead}{CYAN}{_cur_title}{NC}")
+        for ln in _cur_lines:
+            print(ln)
+        if _pending_pass:
+            print(f"  {GREEN}✓{NC} {_pending_pass} other check(s) passed")
+    elif _cur_title:
+        print(f"{lead}{CYAN}{_cur_title}{NC} {GREEN}— {_pending_pass} check(s) passed{NC}")
+    _pending_pass = 0
+    _cur_lines = []
+    _cur_title = ""
+
+
+def section(title: str, *, first: bool = False) -> None:
+    global _cur_title
+    flush_passes()
+    _cur_title = title
+
+
 def record(status: str, name: str, evidence: str = "") -> None:
+    global _pending_pass
     results.append((status, name, evidence))
+    if status == "pass" and not evidence and not VERBOSE:
+        _pending_pass += 1
+        return
     mark = {"pass": f"{GREEN}✓{NC}", "warn": f"{YELLOW}⚠{NC}", "fail": f"{RED}✗{NC}"}[status]
-    print(f"  {mark} {name}")
+    _cur_lines.append(f"  {mark} {name}")
     if evidence:
         for line in evidence.split("\n"):
-            print(f"      {line}")
+            _cur_lines.append(f"      {line}")
+
+
+def listing(rows, limit: int = 6, sep: str = "\n") -> str:
+    """The first `limit` rows, and — when there are more — how many were left out.
+
+    A truncated list that does not say it is truncated is a count the reader gets wrong.
+    Twenty-nine misnumbered Before headers were reported as six, and the other twenty-three
+    went unmentioned; the applier had already learned to say `(+N more)` and the checker
+    that fires on every run had not.
+    """
+    rows = list(rows)
+    out = sep.join(rows[:limit])
+    if len(rows) > limit:
+        out += f"{sep}(+{len(rows) - limit} more)"
+    return out
 
 
 
@@ -116,13 +175,16 @@ def code_lines(block: str) -> list[str]:
 def main() -> int:
     argv = sys.argv[1:]
     if "--help" in argv or "-h" in argv:
-        print("Usage: validate_blueprint.py [specs/NNN-feature-name] [--strict-guide]")
+        print("Usage: validate_blueprint.py [specs/NNN-feature-name] [--strict-guide] [--verbose]")
         print("\nChecks blueprint.md against tasks.md and the working tree.")
         print("  --strict-guide  make the guide-mode body findings failures rather than warnings")
+        print("  --verbose       print a line for every check that passed, not just the count")
         print("Exit 0 pass, 1 failures found, 2 feature directory not resolved.")
         return 0
+    global VERBOSE
     strict_guide = "--strict-guide" in argv
-    argv = [a for a in argv if a != "--strict-guide"]
+    VERBOSE = "--verbose" in argv
+    argv = [a for a in argv if a not in ("--strict-guide", "--verbose")]
     unknown = [a for a in argv if a.startswith("-")]
     if unknown:
         # Silently ignoring these meant a typo in a flag looked like a clean run.
@@ -183,7 +245,7 @@ def main() -> int:
         chain_ids |= {t for t, _sec in split_tasks(ctext)}
         chain_ids |= {m.group(1) for m in re.finditer(r"^\|\s*\**\s*(T\d+)\b", ctext, re.M)}
     if chain or later:
-        print(f"{CYAN}[0] Sibling slices{NC}")
+        section("[0] Sibling slices", first=True)
         record(
             "pass",
             f"this feature is split across {len(chain) + len(later) + 1} blueprint(s)",
@@ -193,7 +255,7 @@ def main() -> int:
         )
 
     # 1. Coverage — every task id in tasks.md reaches the blueprint
-    print(f"{CYAN}[1] Task coverage{NC}")
+    section("[1] Task coverage", first=True)
     if os.path.isfile(tasks_path):
         tasks_text = open(tasks_path, encoding="utf-8", errors="replace").read()
         declared = set(re.findall(r"^\s*-\s*\[[ xX]\]\s*(T\d+)\b", tasks_text, re.M))
@@ -220,7 +282,7 @@ def main() -> int:
         if not declared:
             record("warn", "no task ids found in tasks.md (check its format)")
         elif missing:
-            record("fail", f"{len(missing)} task(s) from tasks.md missing", ", ".join(missing[:12]))
+            record("fail", f"{len(missing)} task(s) from tasks.md missing", listing(missing, 12, ", "))
         else:
             record("pass", f"all {len(declared)} tasks from tasks.md appear")
     else:
@@ -263,16 +325,16 @@ def main() -> int:
         )
 
     # 2. Rationale — every task states why it looks the way it does
-    print(f"\n{CYAN}[2] Rationale (Why){NC}")
+    section("[2] Rationale (Why)")
     no_why = sorted(tid for tid, sec in sections.items() if "**Why**" not in sec)
     if not sections:
         record("warn", "no task sections found (check blueprint format)")
     elif no_why:
-        record("fail", f"{len(no_why)} task(s) without a Why", ", ".join(no_why[:12]))
+        record("fail", f"{len(no_why)} task(s) without a Why", listing(no_why, 12, ", "))
     else:
         record("pass", f"all {len(sections)} task sections carry a Why")
 
-    print(f"\n{CYAN}[3] Working-tree claims{NC}")
+    section("[3] Working-tree claims")
     if mode.startswith("guide"):
         build_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**build**")), "")
         # A test RUNNER, not the word "test": `compileall -q moneylog tests` names a
@@ -310,7 +372,7 @@ def main() -> int:
             if kind == "new":
                 created_earlier.add(relp)
     if escapes:
-        record("fail", "a declared path resolves outside the repository", "\n".join(escapes[:6]))
+        record("fail", "a declared path resolves outside the repository", listing(escapes))
     # A hunk edits a file that exists, so its task has to declare one as (modify).
     hunk_without_modify = []
     for tid, sec in sections.items():
@@ -323,14 +385,14 @@ def main() -> int:
         record(
             "fail",
             "a task has a Before/After hunk but declares no file to modify",
-            "\n".join(hunk_without_modify[:6]) + "\nif the file it edits already exists, declare it (modify), not (new)",
+            listing(hunk_without_modify) + "\nif the file it edits already exists, declare it (modify), not (new)",
         )
 
     if missing_modify:
         record(
             "fail",
             "a task declares a (modify) file that is not in the tree",
-            "\n".join(missing_modify[:6]) + "\nthe path is wrong, or the file is new and mislabelled",
+            listing(missing_modify) + "\nthe path is wrong, or the file is new and mislabelled",
         )
     else:
         record("pass", "every declared (modify) file is in the tree")
@@ -346,9 +408,17 @@ def main() -> int:
     head = stamped_head(bp)
     moved: dict[str, bool] = {}
 
+    answers: dict = {}
+
+    def moved_answer(rel_path: str):
+        """True changed, False unchanged, None git could not say."""
+        if rel_path not in answers:
+            answers[rel_path] = changed_since(root, head, rel_path)
+        return answers[rel_path]
+
     def has_moved(rel_path: str) -> bool:
         if rel_path not in moved:
-            answer = changed_since(root, head, rel_path)
+            answer = moved_answer(rel_path)
             # `None` is git declining to answer — a shallow clone, a stamp from another
             # machine. Reading it as "unchanged" ran every position check against a tree
             # nothing could vouch for, and a correct blueprint came back red under
@@ -356,6 +426,9 @@ def main() -> int:
             # document validator had the same line and never got the fix.
             moved[rel_path] = True if answer is None else answer
         return moved[rel_path]
+    # Files this run declined to judge because the tree moved past the stamp. Named on the
+    # `unjudged` pass line, so "not checked" is still said out loud.
+    drifted_files: set = set()
     # Which task first declares each file. A later task that cites a line past the end of
     # the file on disk may be citing the file as an EARLIER task leaves it — the wiring
     # T006 adds is what T008 edits — and disk cannot confirm or deny that. The applier
@@ -422,8 +495,13 @@ def main() -> int:
                 # not mean the document matched the tree.
                 if (needle and text and text.count(needle) == 0
                         and first_touch.get(named) in (None, tid) and not has_moved(named)):
-                    head = needle.strip().split("\n")[0][:50]
-                    not_quoted.append(f"{tid}: {named} does not contain the Before block (starts {head!r})")
+                    # Not `head`: that name holds the stamped commit every position check
+                    # asks git about, and rebinding it here left every later call running
+                    # `git diff` against a line of Java. git answered nothing, the tools
+                    # read "cannot say", and the rest of the document went unchecked from
+                    # the first finding onward.
+                    starts = needle.strip().split("\n")[0][:50]
+                    not_quoted.append(f"{tid}: {named} does not contain the Before block (starts {starts!r})")
                 # Not gated on whether the tree moved: a Before that appears twice is
                 # ambiguous for the applier wherever the tree stands, and this is the one
                 # position finding that needs no stamp to be true.
@@ -433,7 +511,16 @@ def main() -> int:
                     actual = text[: text.index(needle)].count("\n") + 1
                     mine = first_touch.get(named) in (None, tid)
                     if actual != cites[0]:
-                        if mine:
+                        if mine and has_moved(named):
+                            # The file has changed since the stamp, so the number was right
+                            # about the tree the blueprint describes and the reader is
+                            # looking at a different one. Measured over one corpus: this
+                            # warning fired on all five implemented features and on none of
+                            # the freshly generated ones, and not one of the five was a
+                            # defect in a document. An alarm that only rings after the work
+                            # is done is not reporting the work.
+                            drifted_files.add(named)
+                        elif mine:
                             misnumbered.append(f"{tid}: Before says line {cites[0]}, the quoted text is at line {actual} of {named}")
                         else:
                             # An earlier task rewrites this file, so where the text sits on
@@ -447,10 +534,13 @@ def main() -> int:
                         span = len(needle.rstrip("\n").split("\n"))
                         end = actual + span - 1
                         if cites[-1] != end:
-                            misnumbered.append(
-                                f"{tid}: Before says lines {cites[0]}-{cites[-1]}, the quoted block is"
-                                f" {span} line(s) and ends at {end} of {named}"
-                            )
+                            if has_moved(named):
+                                drifted_files.add(named)
+                            else:
+                                misnumbered.append(
+                                    f"{tid}: Before says lines {cites[0]}-{cites[-1]}, the quoted block is"
+                                    f" {span} line(s) and ends at {end} of {named}"
+                                )
             for n in cites:
                 bound = max(candidates.values())
                 if n > bound:
@@ -473,7 +563,7 @@ def main() -> int:
             if before.strip() == after.strip():
                 identical.append(tid)
     if out_of_range:
-        record("fail", "Before block cites a line past the end of its file", "\n".join(out_of_range[:6]))
+        record("fail", "Before block cites a line past the end of its file", listing(out_of_range))
     else:
         record("pass", "Before line references are within their files")
     # A `path:line` written in prose is a claim about the tree like any other, and one
@@ -507,14 +597,14 @@ def main() -> int:
             bad_cite.append(f"{rel_p}:{n} — the file has {have} line(s)")
     if bad_cite:
         record("fail", f"{len(bad_cite)} citation(s) point past the end of the file they name",
-               "\n".join(sorted(set(bad_cite))[:6])
+               listing(sorted(set(bad_cite)))
                + "\na line number in prose is a claim about the tree; this one cannot be true")
 
     if not_quoted:
         record(
             "fail",
             "a Before block is not in the file it quotes",
-            "\n".join(not_quoted[:6])
+            listing(not_quoted)
             + "\nthe applier matches this text exactly; quote the file as it is now."
               "\nIf the work is already done — a regeneration re-stamps HEAD to a commit that includes it —"
               "\nthe task belongs in the Pre-completed Tasks table, and its row must carry the Why and the"
@@ -526,38 +616,49 @@ def main() -> int:
         record(
             "warn",
             "a Before block appears more than once in its file — the anchor is ambiguous",
-            "\n".join(ambiguous_anchor[:6]) + "\nthe applier refuses these; quote more of the surrounding lines",
+            listing(ambiguous_anchor) + "\nthe applier refuses these; quote more of the surrounding lines",
         )
     if unjudged:
         # Without this line the run names one task and looks like the others were checked.
         record(
             "pass",
             f"line positions not checked in {len(unjudged)} file(s) an earlier task rewrites",
-            ", ".join(sorted(unjudged)[:6]) + " — the applier checks these, since it applies in order",
+            listing(sorted(unjudged), 6, ", ") + " — the applier checks these, since it applies in order",
+        )
+    if drifted_files:
+        record(
+            "pass",
+            f"line positions not checked in {len(drifted_files)} file(s) this run cannot vouch for",
+            listing(sorted(drifted_files), 6, ", ")
+            + "\n— changed since the stamp, or the stamp is not in this clone; either way the numbers"
+              "\ndescribe the tree the blueprint was written against and not this one",
         )
     if misnumbered:
         record(
             "warn",
             "a Before cites a line number that is not where its text is",
-            "\n".join(misnumbered[:6]) + "\nthe applier will still place it; the reader following the number will not",
+            listing(misnumbered) + "\nthe applier will still place it; the reader following the number will not",
         )
     if moved_first:
         record(
             "warn",
             "a Before cites a line past the end of the file on disk, in a file an earlier task changes",
-            "\n".join(moved_first[:6])
+            listing(moved_first)
             + "\ndisk cannot check this one; apply_blueprint.py can, since it applies in order and matches the text",
         )
     if ambiguous:
         record(
             "warn",
             "a Before citation is out of range for some of its task's files",
-            "\n".join(ambiguous[:6]) + "\nname the file the block quotes so the reference can be checked",
+            listing(ambiguous) + "\nname the file the block quotes so the reference can be checked",
         )
+    # Labels outside the code blocks, since a blueprint that documents this format quotes
+    # `**Before**` inside one. Counting those made a task that explains the notation look
+    # like a task with a dangling hunk.
     dangling = [
         tid
         for tid, sec in sections.items()
-        if len(re.findall(r"^\*\*Before\*\*", sec, re.M)) > len(BEFORE_AFTER_RE.findall(sec))
+        if before_labels(sec) > len(BEFORE_AFTER_RE.findall(sec))
     ]
     if dangling:
         record(
@@ -615,7 +716,7 @@ def main() -> int:
         record(
             "warn",
             "a Before quotes a structural line the After does not return — applying it deletes that line",
-            "\n".join(lossy[:6])
+            listing(lossy)
             + "\nintended if the task removes that block; otherwise the hunk is lossy and the build breaks elsewhere",
         )
     else:
@@ -639,7 +740,7 @@ def main() -> int:
                 if not re.search(r"^\*\*`" + re.escape(relp) + r"`\*\*", sec, re.M):
                     empty_new.append(f"{tid}: declares {relp} (new) and no code block is labelled with it")
     if empty_new:
-        record("fail", "a task declares a new file and gives it no content", "\n".join(empty_new[:6]))
+        record("fail", "a task declares a new file and gives it no content", listing(empty_new))
     else:
         record("pass", "every declared-new file has a code block")
 
@@ -664,7 +765,7 @@ def main() -> int:
         record(
             "warn",
             "modify task has code that is not anchored to a position",
-            "\n".join(unanchored[:6]) + "\nthe applier cannot place these; quote the surrounding lines in a Before block",
+            listing(unanchored) + "\nthe applier cannot place these; quote the surrounding lines in a Before block",
         )
     else:
         record("pass", "every modify task anchors its code")
@@ -708,7 +809,7 @@ def main() -> int:
         record(
             "warn",
             "a skeleton on disk differs from the block the blueprint declares for it",
-            "\n".join(drifted[:6]) + "\nedited since scaffolding, or scaffolded from a different version — the applier tests the block, not the file",
+            listing(drifted) + "\nedited since scaffolding, or scaffolded from a different version — the applier tests the block, not the file",
         )
 
     # 3-post-b. A block label names a file the task declares. A label with a typo in it is
@@ -726,13 +827,13 @@ def main() -> int:
         record(
             "fail",
             "a code block is labelled with a path the task does not declare",
-            "\n".join(stray_labels[:6]) + "\nthe tools ignore the label and a reader follows it to a file that is not there",
+            listing(stray_labels) + "\nthe tools ignore the label and a reader follows it to a file that is not there",
         )
     else:
         record("pass", "every block label names a file its task declares")
 
     # 4. Multi-file tasks map each block to a path
-    print(f"\n{CYAN}[4] Multi-file task labels{NC}")
+    section("[4] Multi-file task labels")
     unlabeled = []
     for tid, sec in sections.items():
         paths = file_paths(sec)
@@ -744,17 +845,50 @@ def main() -> int:
             labels = count_path_labels(authored)
             if labels < blocks:
                 unlabeled.append(f"{tid}: {len(paths)} files, {blocks} blocks, {labels} labeled")
-    if unlabeled:
+    # And the hunks. `strip_quoted` above drops every Before/After pair — rightly, they
+    # quote existing code — so a task made ONLY of hunks collapsed to a single authored
+    # block and `blocks > 1` was false for it whatever the document said. The two largest
+    # multi-file tasks in the corpus that prompted this (nine files and three, thirty-seven
+    # and fourteen blocks) never reached the check at all, while the applier failed both
+    # for the very defect it exists to catch. This half asks the applier's own question:
+    # when a hunk follows no usable label and the task declares more than one file to
+    # modify, nothing can say which file it edits.
+    unattributed = []
+    for tid, sec in sections.items():
+        kinds: dict[str, str] = {}
+        for _p, _k in file_kinds(sec):
+            kinds.setdefault(_p, _k)
+        mods = [p for p, k in kinds.items() if k == "modify"]
+        if len(mods) < 2:
+            # One modifiable file is never ambiguous — the applier infers it, and so can
+            # a reader. No file to modify at all is a different check's finding.
+            continue
+        current: str | None = list(kinds)[0] if len(kinds) == 1 else None
+        bad = 0
+        for ev_kind, payload in section_events(sec):
+            if ev_kind == "label" and payload in kinds:
+                current = payload
+            elif ev_kind == "directive" and payload == "before":
+                if not (current and kinds.get(current) in ("modify", "unknown")):
+                    bad += 1
+        if bad:
+            unattributed.append(
+                f"{tid}: {bad} Before/After hunk(s) follow no **`path`** label, and the task"
+                f" declares {len(mods)} files to modify"
+            )
+    if unlabeled or unattributed:
+        rows = unlabeled + unattributed
         record(
             "fail",
             "multi-file task does not label every code block with its path",
-            "\n".join(unlabeled[:8]),
+            listing(rows, 8)
+            + "\nthe applier fails these too; label the block or the hunk with the file it edits",
         )
     else:
         record("pass", "multi-file tasks label each code block")
 
     # 5. Placeholders — full-code modes forbid them; guide mode expects markers in bodies only
-    print(f"\n{CYAN}[5] Placeholder content{NC}")
+    section("[5] Placeholder content")
     ellipsis = []
     for tid, sec in sections.items():
         for blk in [c for _i, c in code_blocks(strip_quoted(sec))]:
@@ -762,7 +896,7 @@ def main() -> int:
                 if re.search(r"(//|#|/\*)\s*\.\.\.", ln):
                     ellipsis.append(f"{tid}: {ln.strip()[:60]}")
     if ellipsis:
-        record("fail", "ellipsis placeholder in a code block", "\n".join(ellipsis[:6]))
+        record("fail", "ellipsis placeholder in a code block", listing(ellipsis))
     else:
         record("pass", "no ellipsis placeholders")
 
@@ -789,7 +923,7 @@ def main() -> int:
         record(
             "warn",
             "a comment narrates the blueprint's history rather than the code",
-            "\n".join(history[:6]) + "\nsay it in the task's prose; cleanup leaves doc comments alone, so this one stays for ever",
+            listing(history) + "\nsay it in the task's prose; cleanup leaves doc comments alone, so this one stays for ever",
         )
 
     # A Before is a quotation, and `// ... rest of file` inside one is the abbreviation the
@@ -807,7 +941,7 @@ def main() -> int:
         record(
             "fail",
             "a Before block is abbreviated — it has to quote the file verbatim",
-            "\n".join(abbreviated[:6]) + "\nthe applier matches the Before text exactly; an abbreviation never matches",
+            listing(abbreviated) + "\nthe applier matches the Before text exactly; an abbreviation never matches",
         )
     else:
         record("pass", "no Before block is abbreviated")
@@ -822,7 +956,7 @@ def main() -> int:
             record(
                 "fail",
                 f"{mode} blueprint contains stub markers in code blocks",
-                ", ".join(sorted(set(stubs))[:10]),
+                listing(sorted(set(stubs)), 10, ", "),
             )
         else:
             record("pass", f"{mode} blueprint has no stub markers")
@@ -833,7 +967,7 @@ def main() -> int:
     #     signature and a not-implemented marker need none of it.
     if mode.startswith("guide"):
         # Guide modes only — in a full-code mode the numbering skips from [5] to [7].
-        print(f"\n{CYAN}[6] Guide-mode bodies{NC}")
+        section("[6] Guide-mode bodies")
         # A module guard is not a body: 3a-G asks test skeletons to match the project's
         # existing tests, and in Python those end with exactly this line.
         NOT_BODY = re.compile(
@@ -882,20 +1016,102 @@ def main() -> int:
             # the corpus: 36 of 1495, and each one hands the reader an expression to
             # paste — `amount.amount().toPlainString()`, `findById(id).orElseThrow(...)`.
             r"|\w\s*\([^()\n]*\)\s*\.\s*\w+\s*\("
+            # Everything above was written against Java and Kotlin, where a body is a
+            # chain of calls. A Python body is arithmetic and keyword arguments, and the
+            # check saw none of it: six of the seven expressions in one reviewer's
+            # `pace.py` marker — four formulas and two constructor calls with eight
+            # keyword arguments — passed. The five rules below were each measured over
+            # every marker message, TODO comment and implementation note in the corpus
+            # (2,400 texts): twelve new hits, all of them pasteable code, and none on the
+            # prose shapes that trip a careless rule — a path (`moneylog/storage.py`), an
+            # id (`FR-002`), `and/or`, a `*` used for emphasis.
+            #
+            # Two or more keyword arguments: `CategoryPace(category=category, budget=…)`.
+            r"|\b\w+\s*=\s*[^=\s][^\n,]{0,40},\s*\w{3,}\s*=\s*[^=\s]"
+            # A call subscripted: `calendar.monthrange(year, month)[1]`.
+            r"|\w\s*\([^()\n]{0,60}\)\s*\["
+            # An identifier compared against a number: `elapsed_days > 0`.
+            r"|\b[a-z_][A-Za-z0-9_]{2,}\s*[<>]\s*-?\d"
+            # Arithmetic between identifiers, where one side is unmistakably an
+            # identifier (it carries a `_` or a digit) rather than an English word.
+            r"|(?<![*\w])[a-z_][A-Za-z0-9_]*[_0-9][A-Za-z0-9_]*\s*\*\s*[a-z_][A-Za-z0-9_]{2,}(?![*\w])"
+            r"|(?<![*\w])[a-z_][A-Za-z0-9_]{2,}\s*\*\s*[a-z_][A-Za-z0-9_]*[_0-9][A-Za-z0-9_]*(?![*\w])"
+            r"|(?<![/\w.])[a-z_][A-Za-z0-9_]*_[A-Za-z0-9_]*\s*/\s*[a-z_][A-Za-z0-9_]{2,}(?![/.\w])"
+            r"|(?<![/\w.])[a-z_][A-Za-z0-9_]{2,}\s*/\s*[a-z_][A-Za-z0-9_]*_[A-Za-z0-9_]*(?![/.\w])"
+            r"|\)\s*/\s*[a-z_][A-Za-z0-9_]{2,}(?![/.\w])"
         )
+        # Where a body can be dictated. The check used to read the string inside a marker
+        # CALL and nothing else, and 3a-G's own recommended shape for a change inside an
+        # existing body is a `// TODO(blueprint):` COMMENT — so the form the spec teaches
+        # was the one form nothing looked at. Implementation notes are the third: a
+        # reviewer's notes 2, 3 and 4 for one task were whole Java statements, and the
+        # string "Implementation notes" did not appear anywhere in these scripts.
+        MSG_CALL = re.compile(
+            r"""(?:TODO|NotImplementedError|UnsupportedOperationException|panic|todo!|fatalError)"""
+            r"""\s*\(\s*["'`](.+?)["'`]\s*\)""",
+            re.S,
+        )
+        MSG_COMMENT = re.compile(r"""(?://|#|--)\s*TODO\(blueprint\)\s*:?\s*([^\n]+)""")
+        NOTES = re.compile(r"^\*\*Implementation [Nn]otes?\*\*:?(.*?)(?=^\*\*|\Z)", re.M | re.S)
+
+        def dictation_sources(sec: str, blocks: list):
+            """(what kind of text, the text) for everything that can spell out a body."""
+            for blk in blocks:
+                for m in MSG_CALL.finditer(blk):
+                    yield "a marker message", m.group(1)
+                for m in MSG_COMMENT.finditer(blk):
+                    yield "a TODO(blueprint) comment", m.group(1)
+            for m in NOTES.finditer(outside_fences(sec)):
+                for para in m.group(1).split("\n"):
+                    if para.strip():
+                        yield "an implementation note", para.strip()
         # The same basename reading the scaffold validator uses: a file with one of these
         # in its name holds behavior, and a guide skeleton for it has to carry a marker.
-        BEHAVIORAL = re.compile(r"(service|handler|usecase|use_case|interactor|controller|scheduler|test|spec\.)", re.I)
+        #
+        # WORDS, not substrings. `FeeScheduleRepository.java` contains the letters of
+        # "scheduler" across the seam between `Schedule` and `Repository`, so a port — a
+        # Java interface with no bodies at all — was told to carry a not-implemented
+        # marker it has nowhere to put. A check nothing can satisfy is worse than no check.
+        BEHAVIORAL_WORDS = {
+            "service", "handler", "usecase", "use", "case", "interactor",
+            "controller", "scheduler", "test", "spec",
+        }
+
+        def is_behavioral(basename: str) -> bool:
+            words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", basename)
+            words = re.split(r"[^A-Za-z]+", words.lower())
+            if "use" in words and "case" in words:
+                return True
+            return any(w in BEHAVIORAL_WORDS - {"use", "case"} for w in words)
+
+        # A block that declares no method BODY cannot hold a marker. Java and Kotlin
+        # interfaces, TypeScript `interface`/`type`, Python `Protocol` — the whole point of
+        # the file is that the bodies live elsewhere, and adding a `default` method to
+        # satisfy a checker stops it being a port.
+        def has_body(block: str) -> bool:
+            lines = code_lines(block)
+            for i, ln in enumerate(lines):
+                t = ln.strip()
+                if not t:
+                    continue
+                # A type declaration's own brace opens the type, not a body.
+                if re.match(r"^(export\s+|public\s+|private\s+|protected\s+|final\s+|abstract\s+|sealed\s+)*"
+                            r"(class|interface|struct|enum|object|record|trait|type)\b", t):
+                    continue
+                if t.endswith("{") or t.endswith(":") and re.match(r"^\s*def\s", ln):
+                    return True
+            return False
         smuggled, unmarked, dictated = [], [], []
         for tid, sec in sections.items():
             kinds = dict(file_kinds(sec))
-            new_behavioral = [f for f, k in kinds.items() if k == "new" and BEHAVIORAL.search(os.path.basename(f))]
+            new_behavioral = [f for f, k in kinds.items() if k == "new" and is_behavioral(os.path.basename(f))]
             # An After is authored content — only the Before is a quotation — and in a
             # guide blueprint the behaviour changes usually live in modify hunks, so
             # skipping them checked the promise everywhere except where it mattered.
             blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
             blocks += after_additions(sec)
-            if new_behavioral and blocks and not any(MARKER.search(b) for b in blocks):
+            if (new_behavioral and blocks and not any(MARKER.search(b) for b in blocks)
+                    and any(has_body(b) for b in blocks)):
                 # A complete implementation with one `if` in it carried no control flow
                 # worth counting, and passed. The marker is the skeleton's signature; a
                 # behavioral file's block without one is a body, however short.
@@ -918,17 +1134,18 @@ def main() -> int:
                     smuggled.append(f"{tid}: {len(hits)} control-flow line(s) in a block with no marker — {hits[0][:50]!r}")
                 elif exprs:
                     smuggled.append(f"{tid}: an expression body in a block with no marker — {exprs[0][:50]!r}")
-                # The marker's message, where no code check has ever looked.
-                for m in re.finditer(r"""(?:TODO|NotImplementedError|UnsupportedOperationException|panic|todo!|fatalError)\s*\(\s*["'`](.+?)["'`]\s*\)""", blk, re.S):
-                    hit = CODE_IN_PROSE.search(m.group(1))
-                    if hit:
-                        # The fragment, not the opening of the message: a reviewer had to
-                        # bisect one marker twelve times to find what had fired.
-                        frag = hit.group(0).strip()
-                        at = m.group(1).find(frag)
-                        around = m.group(1)[max(0, at - 20): at + len(frag) + 20].strip()
-                        dictated.append(f"{tid}: a marker message spells out the body — {frag!r} in …{around}…")
-                        break
+            # Marker messages, TODO(blueprint) comments and implementation notes — the
+            # three places a body can be handed over in prose.
+            for what, text in dictation_sources(sec, blocks):
+                hit = CODE_IN_PROSE.search(text)
+                if hit:
+                    # The fragment, not the opening of the message: a reviewer had to
+                    # bisect one marker twelve times to find what had fired.
+                    frag = hit.group(0).strip()
+                    at = text.find(frag)
+                    around = text[max(0, at - 20): at + len(frag) + 20].strip()
+                    dictated.append(f"{tid}: {what} spells out the body — {frag!r} in …{around}…")
+                    break
         # 4b asks every marker message to begin with its task id, and --markers and
         # cleanup both trace markers to tasks by it. Nothing checked it.
         unlabelled_markers = []
@@ -956,7 +1173,7 @@ def main() -> int:
             record(
                 "fail" if strict_guide else "warn",
                 "a not-implemented marker's message does not begin with its task id",
-                "\n".join(unlabelled_markers[:6])
+                listing(unlabelled_markers)
                 + "\n--markers and cleanup trace a marker to its task by that id; without it the marker is orphaned",
             )
 
@@ -1005,7 +1222,7 @@ def main() -> int:
             record(
                 "fail" if strict_guide else "warn",
                 "a not-implemented marker throws a type the block does not have",
-                "\n".join(sorted(set(invented))[:6])
+                listing(sorted(set(invented)))
                 + "\nJavaScript and TypeScript have no not-implemented type — 3a-G's form is `throw new Error(\"T0NN: ...\")`;"
                   "\nan undeclared one parses, passes a syntax-only build, and dies with a ReferenceError",
             )
@@ -1038,7 +1255,7 @@ def main() -> int:
             record(
                 "fail",
                 "a guide-mode hunk replaces existing code with a not-implemented marker",
-                "\n".join(demolished[:6])
+                listing(demolished)
                 + "\nthe applier's build compiles the skeleton and goes green; the behavior deleted here"
                   "\nshows up in the project's own tests, which that build never runs",
             )
@@ -1046,21 +1263,21 @@ def main() -> int:
         if dictated:
             record(
                 "fail" if strict_guide else "warn",
-                "a not-implemented marker's message spells out the code it is standing in for",
-                "\n".join(dictated[:6])
+                "prose in this task spells out the code it is standing in for",
+                listing(dictated)
                 + "\nsay what to achieve and what to avoid; an exact expression makes typing transcription, which is what guide mode exists to avoid",
             )
         if unmarked:
             record(
                 "fail" if strict_guide else "warn",
                 "a guide-mode skeleton for a file with behavior carries no marker",
-                "\n".join(unmarked[:6]) + "\na structural file (types, config, wiring) is complete on purpose; a service or a test is not",
+                listing(unmarked) + "\na structural file (types, config, wiring) is complete on purpose; a service or a test is not",
             )
         if smuggled:
             record(
                 "fail" if strict_guide else "warn",
                 "a guide-mode block looks like it contains body logic",
-                "\n".join(smuggled[:6]) + "\nguide skeletons carry signatures and markers; the branches are the developer's to write",
+                listing(smuggled) + "\nguide skeletons carry signatures and markers; the branches are the developer's to write",
             )
         else:
             record("pass", "no guide-mode block carries body logic")
@@ -1069,7 +1286,7 @@ def main() -> int:
     #     tasks verbatim, so the diff stays reviewable — and until now that was a sentence
     #     in a prompt with nothing behind it. If the previous blueprint is in git, the
     #     claim is checkable: sources that did not move cannot justify rewritten tasks.
-    print(f"\n{CYAN}[7] Regeneration{NC}")
+    section("[7] Regeneration")
     prev = ""
     try:
         prev = subprocess.run(
@@ -1098,7 +1315,7 @@ def main() -> int:
             record(
                 "warn",
                 f"{len(dropped)} task section(s) present in the committed version are gone",
-                ", ".join(dropped[:12])
+                listing(dropped, 12, ", ")
                 + "\nif they were folded into a pre-completed row that is fine; if they were lost, the"
                   "\nfeature is short that work and nothing else here will notice",
             )
@@ -1112,19 +1329,19 @@ def main() -> int:
             record(
                 "fail",
                 f"{len(rewritten)} task(s) rewritten while every source stayed the same",
-                ", ".join(rewritten[:12])
+                listing(rewritten, 12, ", ")
                 + "\nunchanged inputs cannot justify new text — keep those tasks verbatim",
             )
         else:
             record(
                 "pass",
                 f"{len(rewritten)} of {len(sections)} task(s) rewritten, {len(sections) - len(rewritten)} kept verbatim",
-                ", ".join(rewritten[:12]) if len(rewritten) <= 12 else "",
+                listing(rewritten, 12, ", ") if len(rewritten) <= 12 else "",
             )
 
     # 8. Staleness — the header records what the blueprint was built from, so drift is a
     #    fact to check rather than something everyone assumes away.
-    print(f"\n{CYAN}[8] Freshness{NC}")
+    section("[8] Freshness")
     src_line = next((ln for ln in bp.split("\n") if ln.lower().startswith("**sources**")), "")
     if not src_line:
         record("warn", "no **Sources** stamp — staleness cannot be checked (regenerate to add one)")
@@ -1165,11 +1382,14 @@ def main() -> int:
                     f"{name}: stamped {want}, now {got}" + (f" — {owner} edits this file" if owner else "")
                 )
         if own_work:
+            # A pass, not a warning. The evidence line already said "expected once that
+            # task is typed" — a finding that explains why it is not a finding is one the
+            # reader has to read to learn they can ignore it, on every run, for ever.
             record(
-                "warn",
-                f"{len(own_work)} stamped source(s) are edited by this blueprint's own tasks",
-                "\n".join(own_work)
-                + "\nexpected once that task is typed; cite such a file in the Why that needs it rather than stamping it",
+                "pass",
+                f"{len(own_work)} stamped source(s) are edited by this blueprint's own tasks — expected once those tasks are typed",
+                listing(own_work)
+                + "\ncite such a file in the Why that needs it rather than stamping it",
             )
         if stale:
             record(
@@ -1185,7 +1405,7 @@ def main() -> int:
     # 9. Cited requirements are reproduced, not just named. A task header pointing at
     #    "FR-002" is useless to a reader working from this document alone if FR-002's text
     #    lives only in spec.md — the rule exists, but nothing enforced it until here.
-    print(f"\n{CYAN}[9] Cited requirements reproduced{NC}")
+    section("[9] Cited requirements reproduced")
     ID_RE = r"\b((?:FR|NFR|SC|AC|US)[- ]?\d+(?:\.\d+)*)\b"
     cited: set[str] = set()
     for sec in sections.values():
@@ -1208,7 +1428,7 @@ def main() -> int:
         record(
             "fail",
             f"{len(missing)} cited requirement(s) never stated in the document",
-            ", ".join(missing[:12]) + " — a reader working from this file alone cannot look them up",
+            listing(missing, 12, ", ") + " — a reader working from this file alone cannot look them up",
         )
     else:
         record("pass", f"all {len(cited)} cited requirement ids are stated in the document")
@@ -1217,7 +1437,7 @@ def main() -> int:
     #     than an open question when T019 is not in the document: the reader stops looking.
     #     The Step 3d rule said so and nothing checked it — the one rule in that list with
     #     no machine behind it.
-    print(f"\n{CYAN}[10] Forward references{NC}")
+    section("[10] Forward references")
     known_ids = set(sections)
     # Pre-completed rows are real tasks too: a table row `| T004 | … |` delivers its work.
     known_ids |= {m.group(1) for m in re.finditer(r"^\|\s*\**\s*(T\d+)\b", bp, re.M)}
@@ -1276,18 +1496,19 @@ def main() -> int:
         record(
             "fail",
             f"{len(unique)} forward reference(s) point at a task the document does not have",
-            "\n".join(unique[:8]) + "\na promise pointing at a task that never delivers is worse than an open question",
+            listing(unique, 8) + "\na promise pointing at a task that never delivers is worse than an open question",
         )
     if elsewhere:
         # Not `elif`: a document with one dangling reference and nine that resolve
         # elsewhere reported only the first, so the nine looked like they had passed.
+        # A pass, not a warning: every one of these resolves — to a sibling slice, to
+        # another feature, or to a task of this feature that lives in another document —
+        # and the line that reported them ended by saying so itself.
         uniq2 = list(dict.fromkeys(elsewhere))
         record(
-            "warn",
-            f"{len(uniq2)} reference(s) point at a task this blueprint does not carry",
-            "\n".join(uniq2[:6])
-            + (f"\n(+{len(uniq2) - 6} more)" if len(uniq2) > 6 else "")
-            + "\nexpected across the slices of a split feature, across features, or before the rest is written",
+            "pass",
+            f"{len(uniq2)} reference(s) resolve outside this blueprint — expected across slices and features",
+            listing(uniq2),
         )
     if not dangling and not elsewhere:
         record("pass", "every task id referenced in prose has a section")
@@ -1305,7 +1526,7 @@ def main() -> int:
             r"^#{%d}\s*Open Questions\b(.*?)(?=^#{1,%d}\s|\Z)" % (depth, depth), bp, re.M | re.S
         )
     if not oq:
-        print(f"\n{CYAN}[11] Open questions{NC}")
+        section("[11] Open questions")
         record(
             "warn",
             "no Open Questions section",
@@ -1324,13 +1545,14 @@ def main() -> int:
             rows = re.findall(r"^#+\s*(OQ-\d+[^\n]*)", body, re.M)
             blocking = [r for r in rows if re.search(r"blocking|blocks|차단", r, re.I)
                         and not re.search(r"non-?blocking|미차단", r, re.I)]
-        print(f"\n{CYAN}[11] Open questions{NC}")
+        section("[11] Open questions")
         record(
             "warn" if blocking else "pass",
             f"{len(rows)} open question(s), {len(blocking)} blocking",
             "blocking items must be answered before the tasks they block can be typed" if blocking else "",
         )
 
+    flush_passes()
     print(f"\n{CYAN}=== Summary ==={NC}")
     counts = {k: sum(1 for r in results if r[0] == k) for k in ("pass", "warn", "fail")}
     print(f"  {GREEN}PASS{NC}: {counts['pass']}  {YELLOW}WARN{NC}: {counts['warn']}  {RED}FAIL{NC}: {counts['fail']}")

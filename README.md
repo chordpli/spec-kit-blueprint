@@ -2,7 +2,7 @@
 
 Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` covering every task before `/speckit.implement` runs — either the complete code (`doc-only`, `scaffold`), or the signatures, the reasons and the pitfalls with the bodies left for you to write (`guide`).
 
-**If you are here to type the code yourself and learn from it**, the short version: run `/speckit.blueprint.generate guide scaffold`, read 3a-G's first four bullets, 3b and 3c of the generate command and stop — about 30 lines; the rest of that document is the generator's checklist, and the validators enforce it so you do not have to, run `/speckit.blueprint.validate` once, then implement from `blueprint.md` without reopening `spec.md`. When a design decision looks wrong while you type, `/speckit.blueprint.review upstream` is where that doubt goes. The rest of this README is the full picture.
+**If you are here to type the code yourself and learn from it**, the short version: run `/speckit.blueprint.generate guide scaffold`, read 3a-G's first four bullets, 3b and 3c of the generate command and stop — 30 lines, but long ones: about 700 words, five minutes, not thirty seconds. The rest of that document is the generator's checklist, and the validators enforce it so you do not have to. Run `/speckit.blueprint.validate` once, then implement from `blueprint.md` without reopening `spec.md`. When a design decision looks wrong while you type, `/speckit.blueprint.review upstream` is where that doubt goes. The rest of this README is the full picture.
 
 ![Spec Kit >= 0.2.0](https://img.shields.io/badge/spec--kit-%3E%3D0.2.0-blue)
 ![Version 1.2.0](https://img.shields.io/badge/version-1.2.0-green)
@@ -117,6 +117,12 @@ Runs three scripts: a validator over `blueprint.md` itself (task coverage, a Why
 The document validator runs in every mode — a doc-only or guide blueprint has nothing on disk, but its own contents still have to hold up.
 
 Exit code `0` = pass. Exit code `1` = failure. The Python scripts exit `2` when the feature directory cannot be resolved at all.
+
+Read the applier's `coverage:` line before you read its exit code. Exit `0` means what ran, ran —
+not that the document was tested. Once implementation has started most tasks are already in the
+tree, the applier says `AHEAD` and prints how many it could not test, and `coverage: 3 of 14 (21%)`
+is the number that says how much the green is worth. `--require-anchors` turns that into a failure;
+see below for why it is not a standing gate.
 
 ### Clean up after implementation
 
@@ -238,10 +244,38 @@ Every flag the three scripts take, since until now they were documented only in 
 | `--keep` | apply | Leave the copy on disk and print its path |
 | `--scaffold` | apply | After a clean apply, copy the declared-new files into your tree — only files the blueprint declares new and only where nothing is already there |
 | `--require-anchors` | apply | Exit non-zero when a task anchors nothing, or when tasks were skipped as already-applied. Useful on the commit that has a blueprint and no code yet; from the first implemented task onward it is red on every commit, so it is not a standing CI gate |
+| `--verify` | apply | After a clean apply, run each applied task's `**Verification**` command inside the copy and report which passed. Only backticked commands that begin with a runner (`python3`, `bash`, `mvn`, `npm`, …) are run; anything else in the line is left to you. A failure exits non-zero |
+| `--verbose` | apply | Print the per-task line for every task. Without it only failures print, and the state of the rest is the summary |
 | `--strict-guide` | validate | Turn the guide-mode body findings into failures rather than warnings |
+| `--verbose` | validate | Print a line for every check that passed. Without it a section with nothing to report is one line |
 | `--strict` | scaffold | Check files on disk even when the mode says none were written — for scaffolding done after the blueprint was generated |
 | `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note |
 | `--markers` | scaffold | List every marker left in the declared files as `path:line: text` and exit. This is what cleanup starts from |
+
+### What these scripts do not check
+
+A green run is worth exactly what it covers, and the three scripts cover less than their output
+suggests. This table is the honest half.
+
+| The green says | It does not say |
+|---|---|
+| `Blueprint applied and built` | that your working tree compiles. The build runs in a copy that holds the blueprint's code, not yours |
+| `applied: 3 skipped: 11`, exit 0 | that the document is sound. A skipped task never reached the compiler; the `coverage:` line in the summary is the fraction that did, and 21% coverage still exits 0 |
+| `all N declared symbol(s) are present` | that the file behaves. It checks that each name is *declared* there — not that its body is right, and not that anything calls it |
+| `no guide-mode block carries body logic` | that the bodies were left to you. It reads code blocks, marker messages, `TODO(blueprint):` comments and implementation notes for pasteable expressions; prose that describes an algorithm in sentences passes, and should |
+| document validator `FAIL: 0` | that the blueprint is true. Its failures are structural — a Before that is not in the file, a hunk with no After, an unlabelled block in a multi-file task. Whether a Key Decision is still true of today's code is not among them |
+| `N declared skeleton(s) carry no marker` | anything about over-implementation, unless you passed `--fresh`. Without it, a file with no marker is a file someone finished |
+
+### The document gets old, and nothing here stops that
+
+A blueprint describes the tree at the commit it stamps. From the first task you type, the distance
+between the two grows, and the tools say so rather than pretending otherwise: the applier prints
+`AHEAD — this tree is past the blueprint's stamp` with the count of tasks it therefore could not
+test, plus a `coverage:` fraction; the document validator stops reporting line numbers in files that
+have changed since the stamp and says how many it skipped. Neither of them repairs the document, and
+there is no command that measures how much of a merged blueprint is still true. Decide at merge
+whether the blueprint is deleted or kept — a six-month-old one is a confident, wrong document, and
+the `coverage:` line falling toward zero over a feature's life is the signal that it has become one.
 
 Every edit lands in the copy, never in your tree: a declared path that resolves outside it is a
 reported defect, and symlinks are not followed into it. The one thing that is not sandboxed is the
@@ -273,6 +307,15 @@ guessing — which is safe, and also means a shallow job verifies much less than
 
 Why a document validator: rules that live only in prose get followed inconsistently. Running this against two independently generated blueprints for the same feature caught the same defect in both — multi-file tasks that never said which code block belonged to which file — which no amount of reading had surfaced.
 
+That check was half dead for most of this extension's life, and the way it died is worth knowing.
+It counted *authored* code blocks, and Before/After hunks are quotations, so a task made only of
+hunks collapsed to one block and the check never ran on it — which is the shape guide mode produces
+almost everywhere. A reviewer found a sixteen-task blueprint whose two largest tasks (nine files and
+three) were invisible to it while the applier failed one of them for exactly this defect. It now
+asks the applier's question too: a hunk that follows no `**`path`**` label, in a task with more than
+one file to modify, is a hunk nobody can place. Which is the general lesson — a check that has
+never once been right is not evidence of a clean document.
+
 ## Troubleshooting
 
 | Error | Solution |
@@ -282,7 +325,8 @@ Why a document validator: rules that live only in prose get followed inconsisten
 | "Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY…" from `check-prerequisites.sh` | Newer spec-kit resolves the feature from `.specify/feature.json`; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file |
 | "Before cites a line past the end of the file on disk, in a file an earlier task changes" | Not a defect the document can settle: an earlier task changes that file first. The applier checks the Before text itself. The same warning appears once you start implementing, because your files no longer match the skeleton lengths — that is expected |
 | "File MISSING" | Find the work before you create the file. If the scaffold never ran, `apply_blueprint.py {feature} --build --scaffold` writes it; if the developer built that work elsewhere under another name, scaffolding turns the failure green by adding code nobody calls |
-| "No TODO markers found" | Core file may have been generated outside scaffold mode |
+| "N of M declared skeleton(s) carry no marker" | Not a finding without `--fresh` — a file with no marker is a file someone implemented. Pass `--fresh` right after scaffolding, when it *is* one |
+| "N task(s) could not be tested" / "AHEAD" | The tree is past the blueprint's stamp, so the applier's copy could not test those tasks. Expected once implementation starts; `--verbose` names the reason per task |
 | Command not available | Check `specify extension list`, restart agent session, reinstall |
 
 ## License

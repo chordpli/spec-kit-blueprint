@@ -157,7 +157,23 @@ def changed_since(root: str, head: str, rel_path: str):
     return {0: False, 1: True}.get(proc.returncode)
 
 
-_FENCE_LINE = re.compile(r"^[ \t]*(`{3,}|~{3,})([^\n]*)$")
+def fenced_blocks(section: str) -> list:
+    """(opening line index, index after the closing fence, content) for every fenced block.
+
+    Read with the same scanner every other reader uses, so a label that sits *inside* a
+    block is never mistaken for structure.
+    """
+    out, open_at = [], None
+    for i, line, in_fence, block in scan(section):
+        if block is not None:
+            out.append((open_at if open_at is not None else i, i + 1, block))
+            open_at = None
+        elif in_fence and open_at is None:
+            open_at = i
+    if open_at is not None:  # a fence that never closes: everything after it is its body
+        lines = section.split(chr(10))
+        out.append((open_at, len(lines), chr(10).join(lines[open_at + 1:]) + chr(10)))
+    return out
 
 
 def before_after_pairs(section: str) -> list:
@@ -169,39 +185,54 @@ def before_after_pairs(section: str) -> list:
     which tracks fence length properly, applied the same document without complaint. Two
     of the three bundled scripts disagreed about the same file and no notation satisfied
     both. Fence handling lives here now, once.
+
+    Fence-aware on BOTH halves. Reading the labels with a plain line test while reading
+    the blocks with the scanner left the same divergence in a second shape: a task that
+    quotes a shell example, and so carries a stray fence line, hid its **After** inside a
+    block — the applier walked the blocks and reported "a Before with no After", and this
+    function, which only looked at the line, paired them and reported the task clean.
     """
     lines = section.split(chr(10))
     offs, pos = [], 0
     for ln in lines:
         offs.append(pos)
         pos += len(ln) + 1
+    blocks = fenced_blocks(section)
+    inside = set()
+    for a, b, _c in blocks:
+        inside.update(range(a, b))
+
+    def label_at_line(i: int) -> str:
+        if i in inside:
+            return ""
+        t = lines[i].strip()
+        if t.startswith("**Before**"):
+            return "before"
+        if t.startswith("**After**"):
+            return "after"
+        return ""
 
     def block_at(start: int):
-        """(content, index after the closing fence) for the first fence at or after start."""
-        i = start
-        while i < len(lines):
-            m = _FENCE_LINE.match(lines[i])
-            if m:
-                mark = m.group(1)
-                body, j = [], i + 1
-                while j < len(lines):
-                    c = _FENCE_LINE.match(lines[j])
-                    if c and c.group(1)[0] == mark[0] and len(c.group(1)) >= len(mark) and not c.group(2).strip():
-                        return chr(10).join(body) + (chr(10) if body else ""), j + 1
-                    body.append(lines[j])
-                    j += 1
-                return chr(10).join(body) + (chr(10) if body else ""), j
-            # A label's block is the next fence; prose may sit between them, but another
-            # label means this one never had one.
-            if lines[i].strip().startswith(("**Before**", "**After**")) and i != start:
+        """(content, index after the closing fence) for the first block at or after start.
+
+        None when another label comes first: prose may sit between a label and its block,
+        but a second label means this one never had one.
+        """
+        for a, b, content in blocks:
+            if a < start:
+                continue
+            for i in range(start, a):
+                if label_at_line(i):
+                    return None, i
+            return content, b
+        for i in range(start, len(lines)):
+            if label_at_line(i):
                 return None, i
-            i += 1
-        return None, i
+        return None, len(lines)
 
     out, i = [], 0
     while i < len(lines):
-        t = lines[i].strip()
-        if t.startswith("**Before**"):
+        if label_at_line(i) == "before":
             label_at = offs[i]
             before, j = block_at(i + 1)
             if before is None:
@@ -211,10 +242,10 @@ def before_after_pairs(section: str) -> list:
             k = j
             after = None
             while k < len(lines):
-                tt = lines[k].strip()
-                if tt.startswith("**Before**"):
+                kind = label_at_line(k)
+                if kind == "before":
                     break
-                if tt.startswith("**After**"):
+                if kind == "after":
                     after, k = block_at(k + 1)
                     break
                 k += 1
@@ -226,6 +257,11 @@ def before_after_pairs(section: str) -> list:
             continue
         i += 1
     return out
+
+
+def before_labels(section: str) -> int:
+    """How many **Before** labels a section carries outside its code blocks."""
+    return len(re.findall(r"^\*\*Before\*\*", outside_fences(section), re.M))
 
 
 class _PairShim:
@@ -266,6 +302,58 @@ MARKER_CALL = re.compile(
 )
 
 
+# The same forms as MARKER_CALL, but recognised at the OPENING PAREN rather than at the
+# first character of the message. A long message is written as `NotImplementedError(` and
+# a newline, so MARKER_CALL — which requires the quote on the same line — sees no marker
+# at all on the line that opens one.
+MARKER_OPEN = re.compile(
+    r"TODO\(blueprint\)"
+    r"|(?<!class )(?<!extends )(?:NotImplementedError|UnsupportedOperationException"
+    r"|NotImplementedException|fatalError|todo!|unimplemented!|panic)\s*\("
+    r"|throw\s+new\s+Error\s*\(\s*(?:[\"'`]\s*T\d{2,}\s*:)?"
+)
+
+
+def marker_line_span(lines: list) -> set:
+    """Indices of the lines a not-implemented marker call occupies, continuations included.
+
+    A marker call is one expression, not one line. 3a-G asks its message to be a
+    self-contained work instruction, which in Python means implicit string concatenation
+    across several lines and in Java a text block — and every reader that tested one line
+    at a time saw the first line as a marker and the rest as code. The check that reads a
+    Before for "working code being deleted" then counted a marker's own message as the
+    working code, and failed a document written exactly the way the spec teaches.
+    """
+    span: set = set()
+    depth = 0
+    for i, ln in enumerate(lines):
+        if depth == 0:
+            m = MARKER_OPEN.search(ln)
+            if not m:
+                continue
+            for ch in ln[m.start():]:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+            # A `TODO(blueprint):` comment is the whole line and balances at once.
+            if depth <= 0:
+                span.add(i)
+                depth = 0
+                continue
+            span.add(i)
+            continue
+        span.add(i)
+        for ch in ln:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+        if depth <= 0:
+            depth = 0
+    return span
+
+
 def body_replaced_by_marker(section: str) -> list:
     """(first line deleted, how many) for every hunk that trades working code for a marker.
 
@@ -284,12 +372,14 @@ def body_replaced_by_marker(section: str) -> list:
         # exactly the shape the document teaches: a Before with one `TODO(blueprint):`
         # line above twenty lines of tested code passed silently.
         kept = {ln.strip() for ln in after.split(chr(10))}
+        b_lines = before.split(chr(10))
+        marker_lines = marker_line_span(b_lines)
         gone = [
-            ln.strip() for ln in before.split(chr(10))
+            ln.strip() for i, ln in enumerate(b_lines)
             if ln.strip() and ln.strip() not in kept
             and not ln.strip().startswith(("#", "//", "*", "/*", '"""'))
             and re.search(r"[A-Za-z]", ln)
-            and not MARKER_CALL.search(ln)
+            and i not in marker_lines
             and ln.strip() not in ("{", "}", "};", ")", ");", "else {", "try {")
         ]
         if len(gone) >= 2:

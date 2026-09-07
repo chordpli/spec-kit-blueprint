@@ -67,6 +67,57 @@ count_matches() {
     printf '%s' "${n:-0}"
 }
 
+# One reading of "what does this line declare", used on both sides of check 5: on the
+# blueprint's code blocks to learn what the document promises, and on the file on disk to
+# learn what it actually holds. They used to be different — extraction here, a word grep
+# there — and the grep was the weaker half by far: a deleted method whose name survives in
+# the line that CALLS it passed, which is most names. Measured on one corpus, 101 of 146
+# declared symbols could be deleted without this check moving.
+DECL_AWK=$(cat <<'AWK'
+function declname(t,   n, w, i, nm, head2, before) {
+    if (match(t, /^(export[ \t]+)?(default[ \t]+)?(async[ \t]+)?(public|private|protected|internal|open|final|static|abstract|suspend)?[ \t]*(class|interface|struct|enum|object|record|trait)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+        n = split(t, w, /[ \t]+/)
+        for (i = 1; i <= n; i++)
+            if (w[i] ~ /^(class|interface|struct|enum|object|record|trait)$/ && (i + 1) <= n) {
+                nm = w[i+1]; gsub(/[^A-Za-z0-9_].*$/, "", nm); return nm
+            }
+        return ""
+    }
+    if (match(t, /^(export[ \t]+)?(async[ \t]+)?(def|fun|func|function|sub)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
+        n = split(t, w, /[ \t]+/)
+        for (i = 1; i <= n; i++)
+            if (w[i] ~ /^(def|fun|func|function|sub)$/ && (i + 1) <= n) {
+                nm = w[i+1]; gsub(/[^A-Za-z0-9_].*$/, "", nm); return nm
+            }
+        return ""
+    }
+    # Not a statement. `throw new UnsupportedOperationException("T0NN: ...");` ends in a
+    # paren-and-semicolon like a declaration does, and its last word before the paren was
+    # reported as a symbol the file must contain.
+    if (t ~ /^(throw|return|new|assert|super|this|import|package|@)[^A-Za-z0-9_]/) return ""
+    if (t ~ /^[A-Za-z_@<][^=;]*\(/ && (t ~ /\{[ \t]*$/ || t ~ /;[ \t]*$/)) {
+        head2 = t; sub(/\(.*$/, "", head2); sub(/[ \t]+$/, "", head2)
+        nm = head2; sub(/^.*[^A-Za-z0-9_]/, "", nm)
+        if (nm == "" || nm ~ /^(if|for|while|switch|catch|return|new|do|else|synchronized|throw|assert|super|this)$/) return ""
+        before = substr(head2, 1, length(head2) - length(nm))
+        # A dotted receiver in front of the name makes it a CALL, not a declaration.
+        # `System.out.println("PayoutHoldTest");` and `Objects.requireNonNull(id, "id");`
+        # were both read as declarations the file had to contain, so the tool told a
+        # developer the blueprint "declares `println`". It does not; saying so is worse
+        # than saying nothing.
+        if (before ~ /\.[ \t]*$/) return ""
+        # Nothing at all in front of the name and a semicolon after it is a bare call
+        # statement — `heldMerchantGetsNoPayout();`. A declaration carries a type, a
+        # modifier or a keyword; only a body-opening `{` excuses having none (JS and
+        # Kotlin method shorthand).
+        if (before ~ /^[ \t]*$/ && t !~ /\{[ \t]*$/) return ""
+        return nm
+    }
+    return ""
+}
+AWK
+)
+
 # === Resolve feature directory ===
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -354,6 +405,8 @@ elif [[ "$SCAFFOLD_EXPECTED" == false ]]; then
 else
     CHECKED_ANY=false
     SKIPPED_PLACEHOLDERS=()
+    MISSING_FILES=()
+    PRESENT_FILES=0
     for f in "${NEW_FILES[@]}"; do
         # Skip placeholder/glob paths (e.g. docs/2026-MM-DD-*.md) — not real targets
         if [[ "$f" == *"*"* ]] || [[ "$f" == *"MM-DD"* ]] || [[ "$f" == *"{"* ]]; then
@@ -363,11 +416,24 @@ else
         CHECKED_ANY=true
         FULL_PATH="$REPO_ROOT/$f"
         if [[ -f "$FULL_PATH" ]]; then
-            pass "$f exists"
+            PRESENT_FILES=$((PRESENT_FILES + 1))
         else
-            fail "$f MISSING — the blueprint declares it and it is not on disk. Before scaffolding it: is the work somewhere else under another name?"
+            MISSING_FILES+=("$f")
         fi
     done
+    # One fact, one finding. Eight absent files used to be eight failures with the same
+    # sentence repeated after each — the largest single block of output this script
+    # produced, and every line of it said the same thing.
+    if [[ ${#MISSING_FILES[@]} -gt 0 ]]; then
+        SHOWN=("${MISSING_FILES[@]:0:8}")
+        MORE=""
+        [[ ${#MISSING_FILES[@]} -gt 8 ]] && MORE=" (+$(( ${#MISSING_FILES[@]} - 8 )) more)"
+        fail "${#MISSING_FILES[@]} declared file(s) are not on disk: $(printf '%s, ' "${SHOWN[@]}" | sed 's/, $//')${MORE}"
+        echo "      Before scaffolding them: is the work somewhere else under another name?"
+    fi
+    if [[ "$PRESENT_FILES" -gt 0 ]]; then
+        pass "$PRESENT_FILES declared file(s) exist"
+    fi
     # A blueprint whose only declarations are placeholders printed nothing here at all —
     # no pass, no warn, no fail — which reads as a clean check.
     if [[ "$CHECKED_ANY" == false ]] && [[ ${#SKIPPED_PLACEHOLDERS[@]} -gt 0 ]]; then
@@ -434,7 +500,7 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
     while IFS= read -r line; do
         [[ -n "$line" ]] && DECLARED_SYMBOLS+=("$line")
     done < <(PATHS_FILE=$(mktemp); printf '%s\n' "${NEW_FILES[@]}" > "$PATHS_FILE"; \
-             awk -v pathsfile="$PATHS_FILE" '
+             awk -v pathsfile="$PATHS_FILE" "$DECL_AWK"'
         BEGIN { while ((getline line < pathsfile) > 0) if (line != "") want[line] = 1; close(pathsfile) }
         {
             t = $0; sub(/^[ \t]+/, "", t)
@@ -445,43 +511,8 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
                 # missing a class neither was supposed to declare.
                 if (fence) { in_fence = 0; armed = ""; next }
                 if (armed == "") next
-                # A declaration, in the shapes the guide skeletons use. The name is the
-                # word before the parameter list, or after class/interface/struct.
-                if (match(t, /^(export[ \t]+)?(default[ \t]+)?(async[ \t]+)?(public|private|protected|internal|open|final|static|abstract|suspend)?[ \t]*(class|interface|struct|enum|object|record|trait)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
-                    n = split(t, w, /[ \t]+/)
-                    for (i = 1; i <= n; i++)
-                        if (w[i] ~ /^(class|interface|struct|enum|object|record|trait)$/ && (i + 1) <= n) {
-                            nm = w[i+1]; gsub(/[^A-Za-z0-9_].*$/, "", nm)
-                            if (nm != "") print armed "\t" nm
-                            break
-                        }
-                    next
-                }
-                if (match(t, /^(export[ \t]+)?(async[ \t]+)?(def|fun|func|function|sub)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
-                    n = split(t, w, /[ \t]+/)
-                    for (i = 1; i <= n; i++)
-                        if (w[i] ~ /^(def|fun|func|function|sub)$/ && (i + 1) <= n) {
-                            nm = w[i+1]; gsub(/[^A-Za-z0-9_].*$/, "", nm)
-                            if (nm != "") print armed "\t" nm
-                            break
-                        }
-                    next
-                }
-                # A C-family method: a parameter list, an identifier in front of it, no
-                # assignment before it, and a body or a semicolon after. Without this a
-                # Java skeleton contributed only its type names, so the file could be
-                # missing every method it declares and still pass.
-                # Not a statement. `throw new UnsupportedOperationException("T0NN: ...");`
-                # ends in a paren-and-semicolon like a declaration does, and its last word
-                # before the paren was reported as a symbol the file must contain.
-                if (t ~ /^(throw|return|new|assert|super|this|import|package|@)[^A-Za-z0-9_]/) next
-                if (t ~ /^[A-Za-z_@<][^=;]*\(/ && (t ~ /\{[ \t]*$/ || t ~ /;[ \t]*$/)) {
-                    head2 = t; sub(/\(.*$/, "", head2)
-                    nm = head2; sub(/^.*[^A-Za-z0-9_]/, "", nm)
-                    if (nm != "" && nm !~ /^(if|for|while|switch|catch|return|new|do|else|synchronized|throw|assert|super|this)$/)
-                        print armed "\t" nm
-                    next
-                }
+                nm = declname(t)
+                if (nm != "") print armed "\t" nm
                 next
             }
             if (fence) { in_fence = 1; next }
@@ -526,6 +557,13 @@ for f in "${NEW_FILES[@]}"; do
     SCAFFOLD_FILES+=("$FULL_PATH")
 done
 
+# Files that carry no marker and are not being judged, because without --fresh a file with
+# no marker is an implemented file. This used to be one warning per file, and it was 34 of
+# the 45 findings this script produced over one corpus — the single loudest thing it said,
+# and it said it about work that was finished.
+IMPLEMENTED_FILES=()
+MARKED_FILES=0
+
 check_todo_in_file() {
     local file="$1"
     local label="$2"
@@ -541,6 +579,7 @@ check_todo_in_file() {
     has_not_impl=$(count_matches -ci "$NOT_IMPL_RE" "$file")
 
     if [[ "$has_todo" -gt 0 ]] || [[ "$has_not_impl" -gt 0 ]]; then
+        MARKED_FILES=$((MARKED_FILES + 1))
         pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
     elif [[ "$FRESH" == true ]]; then
         local m_count l_count
@@ -558,7 +597,7 @@ check_todo_in_file() {
             warn "$rel_path — no markers, but only ${m_count} method(s)/${l_count} lines, too small to call. If implementation has started, run without --fresh; if this is a type or config file whose name matched by accident, ignore it [$label]"
         fi
     else
-        warn "$rel_path — NO TODO markers found (fully implemented or boilerplate?) [$label]"
+        IMPLEMENTED_FILES+=("$rel_path")
     fi
 }
 
@@ -590,6 +629,14 @@ else
     for f in "${SKELETON_FILES[@]}"; do
         check_todo_in_file "$f" "Skeleton"
     done
+fi
+
+# The count, once, instead of one warning per file. `--fresh` is how a caller says the
+# scaffold was just written; without it a file with no marker is a file someone finished,
+# which is the point of the exercise and not a finding.
+if [[ ${#IMPLEMENTED_FILES[@]} -gt 0 ]]; then
+    echo ""
+    pass "${#IMPLEMENTED_FILES[@]} of $(( ${#IMPLEMENTED_FILES[@]} + MARKED_FILES )) declared skeleton(s) carry no marker — implemented, or written complete on purpose. Pass --fresh to judge a scaffold nobody has touched yet"
 fi
 
 # =============================================
@@ -637,12 +684,11 @@ check_over_implementation() {
             # the first one finished is 3/4 still marked, and the developer who had just
             # implemented it honestly was told it "was written complete instead of
             # stubbed". Only the caller knows which it is, and --fresh is how they say so.
-            # Check 3 already warned about this file having no markers; a second warning
-            # here says the same thing about the same file, and a feature under
-            # implementation collected two per file until nothing in the output was signal.
-            OVER_IMPL_FOUND=true
-            return
-            OVER_IMPL_FOUND=true
+            # Check 3 already accounts for this file; a second finding here says the same
+            # thing about the same file, and a feature under implementation collected two
+            # per file until nothing in the output was signal. Counted, not reported — the
+            # section says once, below, what it can and cannot judge.
+            OVER_IMPL_COMPLETE=$((OVER_IMPL_COMPLETE + 1))
         fi
     fi
 }
@@ -669,6 +715,7 @@ for f in "${MARKER_POPULATION[@]}"; do
 done
 
 OVER_IMPL_FOUND=false
+OVER_IMPL_COMPLETE=0
 ALL_CHECK_FILES=()
 [[ ${#SERVICE_FILES[@]} -gt 0 ]] && ALL_CHECK_FILES+=("${SERVICE_FILES[@]}")
 [[ ${#TEST_FILES[@]} -gt 0 ]] && ALL_CHECK_FILES+=("${TEST_FILES[@]}")
@@ -687,13 +734,56 @@ if [[ ${#ALL_CHECK_FILES[@]} -gt 0 ]]; then
     done
 fi
 
-if [[ "$OVER_IMPL_FOUND" == false ]]; then
+# A section that prints a heading and then nothing reads as "something was found and the
+# tool will not say what". This one did exactly that on every run where implementation had
+# started, because the only branch that fired set a flag and returned without printing.
+if [[ "$OVER_IMPL_FOUND" == true ]]; then
+    :
+elif [[ "$OVER_IMPL_COMPLETE" -gt 0 ]]; then
+    pass "$OVER_IMPL_COMPLETE file(s) are written complete with no marker — over-implementation is only a verdict on a fresh scaffold; pass --fresh to make it one"
+else
     pass "No over-implemented scaffold files detected"
 fi
 
 # =============================================
 # CHECK 5: does each declared file hold what the blueprint says it declares?
 # =============================================
+# Names this file DECLARES, cached per file. The old test asked whether the name appeared
+# anywhere in the file, which the line that calls a deleted method satisfies; deleting
+# `usedToday` from a 90-line policy left `Money used = usedToday(accountId);` behind, and
+# the check answered "all 19 declared symbol(s) are present" over a tree that would not
+# compile.
+DISK_SYMBOL_CACHE_KEY=""
+DISK_SYMBOL_CACHE=""
+file_declares() {
+    local file="$1" name="$2"
+    if [[ "$DISK_SYMBOL_CACHE_KEY" != "$file" ]]; then
+        DISK_SYMBOL_CACHE_KEY="$file"
+        DISK_SYMBOL_CACHE=$(awk "$DECL_AWK"'
+            {
+                t = $0; sub(/^[ \t]+/, "", t)
+                nm = declname(t)
+                if (nm != "") { print nm; next }
+                # A signature wrapped over several lines ends in neither `{` nor `;`, so
+                # declname cannot see it. A name immediately in front of "(" still counts
+                # unless what precedes it makes the line a call: a dot, an operator, an
+                # open paren or comma, one of the call keywords, or nothing at all.
+                s = $0
+                while (match(s, /[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+                    nm = substr(s, RSTART, RLENGTH)
+                    sub(/[ \t]*\(?$/, "", nm)
+                    before = substr(s, 1, RSTART - 1); sub(/[ \t]+$/, "", before)
+                    if (before != "" && before !~ /[.]$/ \
+                        && before !~ /[=,(+*\/!&|?:<>[-]$/ \
+                        && before !~ /(^|[^A-Za-z0-9_])(return|new|throw|await|yield|not|and|or)$/)
+                        print nm
+                    s = substr(s, RSTART + RLENGTH)
+                }
+            }' "$file" 2>/dev/null | sort -u)
+    fi
+    printf '%s\n' "$DISK_SYMBOL_CACHE" | grep -qx -- "$name"
+}
+
 if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
     echo ""
     echo -e "${CYAN}=== Declared symbols ===${NC}"
@@ -705,15 +795,15 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
         [[ -n "$sym_path" && -n "$sym_name" ]] || continue
         [[ -f "$REPO_ROOT/$sym_path" ]] || continue
         CHECKED_SYMBOLS=$((CHECKED_SYMBOLS + 1))
-        if ! grep -q "[^A-Za-z0-9_]${sym_name}[^A-Za-z0-9_]\|^${sym_name}[^A-Za-z0-9_]" "$REPO_ROOT/$sym_path" 2>/dev/null; then
+        if ! file_declares "$REPO_ROOT/$sym_path" "$sym_name"; then
             # A failure only for a scaffold just written. Once implementation starts a
             # developer may rename what the blueprint called something else, and that is
             # their call to make; before then, a missing declaration is a task that never
             # landed on disk.
             if [[ "$FRESH" == true ]]; then
-                fail "$sym_path — the blueprint declares \`$sym_name\` and the file does not have it"
+                fail "$sym_path — the blueprint declares \`$sym_name\` and the file does not declare it"
             else
-                warn "$sym_path — the blueprint declares \`$sym_name\` and the file does not have it (renamed, or the task never landed)"
+                warn "$sym_path — the blueprint declares \`$sym_name\` and the file does not declare it (renamed, or the task never landed)"
             fi
             MISSING_SYMBOLS=$((MISSING_SYMBOLS + 1))
         fi
