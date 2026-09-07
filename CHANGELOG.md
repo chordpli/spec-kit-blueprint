@@ -119,6 +119,15 @@ because a check that had never once been correct was standing in for one.
   marker messages, TODO comments and implementation notes in the corpus before being kept:
   twelve new hits, all of them pasteable code, none on the prose shapes that trip a careless
   rule — a path, a requirement id, `and/or`, a `*` used for emphasis
+- **The rule about feature-numbered identifiers has a checker.** It was added to the generate
+  spec last release as prose, and the next blueprint written against it used `plan D…` 34
+  times with a feature number 0 times — after which one `cli.py` carried two `(plan D9)`
+  comments meaning different decisions of different features, both typed straight from the
+  document. Text inside a code block is text that ends up in the tree. One finding per
+  document with the count and four examples, not one per site; it fires on 24 of the 43
+  blueprints in the corpus, and on every one of them the rule is genuinely broken. This is
+  the only check added here that no reviewer asked for, and it exists because "the rule went
+  in as prose and nothing enforced it" is the pattern this release is about
 - README: a table of what the three scripts do **not** check, beside each green they print
 - `cleanup` reads decision records and prose docs for its `FALSIFIED` verdict. The category
   existed and the scope excluded the only files it applies to: an ADR is in no diff, so code

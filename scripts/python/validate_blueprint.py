@@ -887,6 +887,32 @@ def main() -> int:
     else:
         record("pass", "multi-file tasks label each code block")
 
+    # 4b. An identifier that is unique inside this document and not outside it. `plan D5`
+    #     and `OQ-1` collide across a repository, and text inside a code block is text that
+    #     ends up in the tree: one `cli.py` came to hold two `(plan D9)` comments meaning
+    #     different decisions of different features, both typed straight from a blueprint
+    #     that wrote the id 34 times and never once with its feature number. The rule was
+    #     added to the generate spec a round earlier and nothing checked it.
+    #
+    #     One finding per document, not one per site. There were 34 sites in that one.
+    LOCAL_ID = re.compile(r"\b(plan\s+D\d+|OQ-\d+)\b")
+    bare_ids: list[str] = []
+    for tid, sec in sections.items():
+        for _i, blk in code_blocks(strip_quoted(sec), content_only=True):
+            for ln in blk.split("\n"):
+                for m in LOCAL_ID.finditer(ln):
+                    if re.search(r"\d{3}\s$", ln[max(0, m.start() - 4):m.start()]):
+                        continue
+                    bare_ids.append(f"{tid}: {m.group(1)} — {ln.strip()[:60]}")
+    if bare_ids:
+        record(
+            "warn",
+            f"{len(bare_ids)} identifier(s) inside code blocks carry no feature number",
+            listing(bare_ids, 4)
+            + "\nthis text becomes a comment in the tree, where `plan D5` and `OQ-1` belong to"
+              f"\nwhatever feature wrote them; write `{os.path.basename(feature_dir)[:3]} plan D5`",
+        )
+
     # 5. Placeholders — full-code modes forbid them; guide mode expects markers in bodies only
     section("[5] Placeholder content")
     ellipsis = []
