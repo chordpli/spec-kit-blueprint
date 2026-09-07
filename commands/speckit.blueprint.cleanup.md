@@ -60,6 +60,25 @@ It prints every blueprint marker and not-implemented call left in the files the 
 `path:line: text`. The judgment below — which of them is honest debt and which is residue — is yours;
 the enumeration is not.
 
+**Read the ownership label on each line before you judge it.** There are three, and the middle one is
+the one to be careful with:
+
+- no label — the marker's task id is one of this feature's and its wording is the blueprint's. Yours.
+- `[T0NN is this feature's task; the wording is not the blueprint's]` — a task id this feature owns,
+  carrying a message the document does not contain. Almost always the developer's own debt, reworded
+  or shortened while half-implementing; occasionally an earlier feature that also had a T0NN. Treat
+  it as this feature's unless you can point at the earlier feature that wrote it.
+- `[not this feature's]` — neither the id nor the wording matches. Leave it, and say so in the report.
+
+At the end of the sweep, `--done` is the mechanical check that the sweep finished:
+
+```bash
+bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
+```
+
+It fails if any declared file still carries a marker, if a declaration the blueprint promised is not
+in its file, or if a task is ticked `[X]` in the Checklist while its own marker is still on disk.
+
 For each in-scope file that exists on disk, collect every finding in these categories:
 
 | Category | Pattern | Examples |

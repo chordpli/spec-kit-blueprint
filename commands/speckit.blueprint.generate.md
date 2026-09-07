@@ -147,6 +147,7 @@ whether files are expected on disk.
 > run reports the blueprint as out of date against its own work. Cite such a file in the
 > Why that depends on it instead.
 **Build**: {the command that compiles or tests this project, from plan.md or the build files — omit the line if there is none}
+**Test**: {optional — the command that runs this project's own tests, for `--verify` to run once the bodies are written; omit unless Build is a compile check}
 
 ## Key Decisions
 
@@ -223,6 +224,14 @@ what should be independently functional/testable at this point}
 ...
 ````
 
+**`[X]` means the code is already in the tree, and nothing else.** A task that has a section below
+is a task nobody has written yet, so its row is `- [ ]` — even when you are confident about it, even
+when the whole feature is fifteen tasks and it feels like paperwork. A generated blueprint went out
+with all thirteen rows ticked at the commit that created it, with no line of the feature written,
+and the first thing its reader saw on opening the document was a checklist saying the work was done.
+Ticking a box later is `/speckit.blueprint.cleanup`'s job, once the marker is gone from the file.
+The scaffold validator now reports a `[X]` whose own marker is still sitting in the file.
+
 ### Step 3-Sources: Stamp what this blueprint was built from
 
 A blueprint describes an intention, and it starts lying the moment its inputs move. Record what it
@@ -234,6 +243,14 @@ was generated from so that staleness is detectable instead of assumed:
 - `**Build**`: the single command that checks this project's code, taken from `plan.md` or the build
   files you read in Step 1 — the applier uses it to confirm that this document's code actually works.
   Omit the line if the project genuinely has none.
+
+- `**Test**`: optional, and only useful in a guide mode — the command that exercises behaviour, which
+  `**Build**` deliberately is not. `apply_blueprint.py --verify` runs it last, against your tree, when
+  the bodies are written. It exists because of a measured hole: a feature was typed to completion,
+  passed the document validator, the applier's build, every task's `**Verification**` and the scaffold
+  validator, and left the project's own suite red — no task in the document wrote the golden file its
+  tests diff against, and nothing that stamps a compile check could have noticed. Omit it if
+  `**Build**` already runs the tests.
 
   **In `guide` mode, stamp a compile or syntax check, never a test run.** Guide skeletons are
   not-implemented markers by design, so a test command fails by construction and tells you nothing.
@@ -392,8 +409,6 @@ a read-through passed a blueprint the scripts then failed.
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build
-# and run what each task's **Verification** line claims, in the same copy
-python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build --verify
 # scaffold modes: write the declared-new files from the document rather than by hand —
 # the copy the build just verified holds exactly what the blueprint says
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build --scaffold
@@ -402,11 +417,11 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 ```
 
 The first checks the document; the second applies it to a throwaway copy of the tree and runs the
-project's build, which is the only way to know that the code in here works. `--verify` goes one step
-further and runs what each task's `**Verification**` line claims — those lines were required of every
-task for five rounds while nothing executed them, and a task whose verification says "the suite runs
-and every new class prints its header" over a suite that throws is a false statement the document
-makes about itself. **Fix every failure and
+project's build, which is the only way to know that the code in here works. `--verify` is deliberately
+not in this list: it runs each task's `**Verification**` line against the *working tree*, so at
+generation time — before a body exists — it is red by construction and says nothing about the
+document. It is the developer's flag, run once the bodies are typed. What you owe it here is that
+every `**Verification**` line name a real command rather than describe one. **Fix every failure and
 run them again** — do not report a blueprint that its own validators reject. If the applier reports a
 task it could not apply, that task's Before block does not match the file it claims to edit, which is
 a defect in this document and not in the applier.
@@ -423,7 +438,7 @@ format; what remains is content.
 - `**Before** (lines N-M):` for a hunk, with the file in the label when the task declares more than one — `**Before** (`path`, lines N-M):` — or a `**`path`**:` label on the line above
 - `**`path`**:` above every code block in a task that declares more than one file
 - every id on a `**Requirements**:` line stated somewhere in the document, usually a Requirements Reference section
-- `**Verification**:` before a block of commands, so the block is not read as file content. **Write the command, not a description of it**: a backticked span that starts with a runner (`python3 -m unittest …`, `bash tools/test.sh`, `npm test`) is what `apply_blueprint.py --verify` runs in the copy; "check by eye that the help text matches" is fine prose but nothing settles it. A task whose verification genuinely needs a human says so and is counted, not failed
+- `**Verification**:` before a block of commands, so the block is not read as file content. **Write the command, not a description of it**: a backticked span that starts with a runner (`python3 -m unittest …`, `bash tools/test.sh`, `npm test`) is what `apply_blueprint.py --verify` runs against the developer's tree once the bodies are written; "check by eye that the help text matches" is fine prose but nothing settles it. A task whose verification genuinely needs a human says so and is counted, not failed. Do not write a command inside a sentence that predicts its own failure ("`bash tools/build.sh` fails until T003 supplies an implementation") — say it in the Why. Such a command is skipped rather than run, and a line whose only command is skipped verifies nothing
 - `**Sources**:` and `**Build**:` in the header (Step 3-Sources)
 - in guide modes: every skeleton for a file with behavior carries a marker whose message begins with the task id, and no control flow beside it
 

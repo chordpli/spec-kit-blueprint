@@ -60,19 +60,34 @@ not test, and `coverage: 3 of 14 task(s) (21%)` says how much of the document th
 is deliberate: an old blueprint is a fact, not a defect, and a run that failed on it would be red
 for ever. `--require-anchors` is how a caller asks for the failure instead.
 
-`apply_blueprint.py --verify` runs each applied task's `**Verification**` line inside the copy. Only
-a backticked command that begins with a runner (`python3`, `bash`, `mvn`, `npm`, `go`, `./gradlew` …)
-is run; the rest of the line is prose for you. It is opt-in for the same reason `--build` is a flag:
-these are shell commands out of a generated document, and running them is a decision the caller
-makes. A failing verification exits non-zero — the line is a claim the document makes about itself,
-and until now nothing settled it.
+`apply_blueprint.py --verify` runs every task's `**Verification**` line against a copy of **your
+working tree** — your code, with nothing applied to it and nothing removed from it. This is the one
+thing in the set that answers "does what I typed do what the document asked". Only a backticked
+command that begins with a runner (`python3`, `bash`, `mvn`, `npm`, `go`, `./gradlew` …) is run; the
+rest of the line is prose for you, and a sentence that predicts its own failure ("`bash tools/build.sh`
+fails until T003 supplies an implementation") is not run at all, because running it and counting the
+failure is the tool disagreeing with a sentence it just read. Identical commands run once and the
+report says so: `ran 2 distinct command(s) covering 13 task(s)`. It is opt-in for the same reason
+`--build` is a flag: these are shell commands out of a generated document, and running them is a
+decision the caller makes. A failing verification exits non-zero.
+
+It reads the tree rather than the applier's copy because of what that copy is. The applier deletes
+every file the blueprint declares new and rewrites them from the document — that is what makes its
+build a test of the document — so the copy is the developer's modify-hunks over the document's
+skeletons, and running verification there tested neither one. Before the bodies are written this
+flag is red and should be; when they are right it is green.
+
+The header may carry an optional `**Test**: <command>`, run last. Guide mode's rules stamp `**Build**`
+as a compile check by design, so a feature can compile, pass every task's verification and still
+leave the project's own suite red; `**Test**` is where the document names the command that catches
+that.
 
 Both Python scripts take `--verbose`. Without it the validator prints one line per section that had
 nothing to report, and the applier prints only the tasks that failed; with it, every check and every
 task gets its own line. The default exists because the alternative buries three warnings among
 twenty-one ticks.
 
-`--markers` turns the scaffold validator into a listing: every blueprint marker and not-implemented call left in the files the blueprint declares, as `path:line: text`, and nothing else on stdout. It is the mechanical half of `/speckit.blueprint.cleanup`, so two runs of that command start from the same list.
+`--markers` turns the scaffold validator into a listing: every blueprint marker and not-implemented call left in the files the blueprint declares, as `path:line: text`, and nothing else on stdout. It is the mechanical half of `/speckit.blueprint.cleanup`, so two runs of that command start from the same list. Each line says who owns the marker, and there are three answers rather than two, because task ids restart at T001 in every feature: no label when the id is one of this feature's tasks and the wording is the blueprint's; `[T0NN is this feature's task; the wording is not the blueprint's]` when the developer has reworded their own marker or an earlier feature also had that id; and `[not this feature's]` when neither half matches. The middle case used to be reported as the third, which handed cleanup a list that called the developer's own debt somebody else's.
 
 A hunk the applier can neither place nor recognise, in a file that has changed since the blueprint's commit, is reported as "cannot tell" and is not counted among the tasks already in the tree: it may be implemented differently, or an earlier task may have moved its anchor, and claiming either would be a guess.
 
@@ -90,11 +105,29 @@ When the header carries `**Base**: specs/{slice}/blueprint.md`, the tools read t
 
 Both Python scripts take `--help`, and refuse an option they do not recognise rather than running as though it had not been typed.
 
-Two flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when
+Three flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when
 the blueprint records a file-less mode — for scaffolding done after generation. `--fresh` says the
 scaffold has only just been written, so a file with no not-implemented marker is the mode being
 broken rather than a task someone has since finished; run the validator with it immediately after
 scaffolding, and without it once implementation is under way.
+
+`--done` is the opposite claim, and the one the script had no way to make. Its check 3 passes a file
+*because* it still carries a marker, so the greenest output it can produce is the output of a feature
+nobody implemented — one repository crossed five features that way and left fourteen markers in
+production code, with `All checks passed` on every run. With `--done`, a declared file that still
+carries a not-implemented marker is a failure, and so is a declaration the blueprint promised that
+the file does not have. Run it on the commit that closes the feature; the two flags contradict each
+other and passing both is an error.
+
+The declared-symbol check reads `(modify)` hooks as well as new files: what a hook introduces is what
+its `**After**` has and its `**Before**` does not. The two have different lifecycles, so a hook's
+declarations are not judged under `--fresh` (the developer has not typed them yet) and are judged
+under `--done`. Misses are reported as one finding with names and a count, not one line per symbol.
+
+The Checklist is read too. A task ticked `- [X]` whose own marker is still sitting in the file is a
+claim the tree contradicts — reported as a warning, and a failure under `--done`. Both halves have to
+match before it fires: the task id must be one of this feature's, and the marker's wording must be
+this blueprint's. The id alone fires on a `T014:` an earlier feature left behind.
 
 Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided by the user, resolve it automatically:
 
@@ -137,7 +170,9 @@ Format-level, so they hold for any language. Eleven numbered sections, in the or
 10. **Forward references**: every task id a task's prose points at — "defined in T019", "see T019", a `**Dependencies**` entry — has a section or a pre-completed row. A promise pointing at a task that never delivers is worse than an open question, because the reader stops looking
 11. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
 
-Before/After blocks are stripped before the placeholder and multi-file checks: they quote existing code, not content the blueprint authored. The abbreviation check in section 3 is the one check that reads them.
+**Every check that reads code goes through one function**, `_blueprint_parse.authored_blocks()`, and that function decides what this document wrote: a fenced block that is neither a hunk nor an illustrative example, the lines each `**After**` adds that its `**Before**` did not have, and a `**Replace entire file**` block — tagged `reprint`, because most of a reprinted file was written by whoever wrote the file. Getting this wrong is the mistake this repository has made most often and in both directions, so it lives in one place and `tests/fixtures/` holds a fixture that fails the moment a check stops using it. Two exceptions, each with its own reason written beside it: the abbreviation check in section 3 reads `**Before**` blocks deliberately, and the JavaScript invented-type check needs the fence's language, which an After's added lines have nowhere to carry.
+
+The feature-number check uses the `reprint` tag to split its advice. An identifier the document authored gets "write `004 plan D5`"; one sitting inside a file this task reprints whole gets a different finding saying it is not this document's to renumber. Telling an author to stamp this feature's number onto an identifier an earlier feature wrote makes the tree more wrong, not less.
 
 ### Applying the blueprint (`apply_blueprint.py`)
 
