@@ -111,6 +111,7 @@ because a check that had never once been correct was standing in for one.
   existing body — a `// TODO(blueprint):` comment — was the one form nothing examined, and the
   string "Implementation notes" did not appear in any of the three scripts. Both are now read,
   and one reviewer's `WARN 0` blueprint has three notes that are whole Java statements
+- The same check reads a message split across string literals. `"…findById(id)" + ".orElseThrow()…"` is one sentence at runtime and two literals in the source, and every pattern reads one line; a reviewer wrote the same expression three ways and only the single-literal one was seen. The seams are removed before scanning
 - **The check knows what a Python body looks like.** Its rules were written against Java and
   Kotlin, where a body is a chain of calls; six of the seven expressions in one reviewer's
   Python marker — four formulas and two constructor calls with eight keyword arguments — passed.

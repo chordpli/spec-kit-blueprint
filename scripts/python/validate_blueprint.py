@@ -1080,11 +1080,18 @@ def main() -> int:
         MSG_COMMENT = re.compile(r"""(?://|#|--)\s*TODO\(blueprint\)\s*:?\s*([^\n]+)""")
         NOTES = re.compile(r"^\*\*Implementation [Nn]otes?\*\*:?(.*?)(?=^\*\*|\Z)", re.M | re.S)
 
+        # `"…findById(id)" + ".orElseThrow()…"` is one sentence at runtime and two string
+        # literals in the source, and every pattern below reads one line. A reviewer wrote
+        # the same expression three ways and only the single-literal one was seen. The seams
+        # are removed before scanning, so what the check reads is the message the developer
+        # reads.
+        SEAM = re.compile(r"""["'`]\s*\+?\s*\n?\s*["'`]""")
+
         def dictation_sources(sec: str, blocks: list):
             """(what kind of text, the text) for everything that can spell out a body."""
             for blk in blocks:
                 for m in MSG_CALL.finditer(blk):
-                    yield "a marker message", m.group(1)
+                    yield "a marker message", SEAM.sub("", m.group(1))
                 for m in MSG_COMMENT.finditer(blk):
                     yield "a TODO(blueprint) comment", m.group(1)
             for m in NOTES.finditer(outside_fences(sec)):
