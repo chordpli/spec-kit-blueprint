@@ -710,7 +710,15 @@ def after_additions(section: str) -> list:
     return out
 
 
-def authored_blocks(section: str, on_disk=None) -> list:
+# What a chunk of code in a task section IS, which decides whether the task wrote it.
+#   "block"    a fenced block the task authors outright — a skeleton, a new file
+#   "after"    the lines an **After** adds that its **Before** did not have
+#   "reprint"  a **Replace entire file** block for a file that already exists: mostly a
+#              quotation of code some earlier feature wrote, with this task's edits in it
+AUTHORED_ROLES = ("block", "after", "reprint")
+
+
+def authored_blocks(section: str, roles: bool = False) -> list:
     """THE separation of what a task wrote from what it quotes. Every code check uses it.
 
     A blueprint is half quotation: a `**Before**` shows the file as it is, an `**After**`
@@ -720,18 +728,19 @@ def authored_blocks(section: str, on_disk=None) -> list:
     — a check that read the raw section reported a quoted marker as a third author, and a
     check that dropped every hunk went blind in guide mode, where the developer types
     almost entirely inside hunks. Both shipped in the same release, ten lines apart, after
-    the release notes had described the bug and claimed it fixed.
+    the release notes had described the bug and called it fixed.
 
-    So there is one function, and checks that read code call it and nothing else:
+    So there is one function, and a check that reads code calls it and nothing else. It
+    returns the chunks a task is answerable for: the fenced blocks that are neither a hunk
+    nor an illustrative example, and the lines each **After** adds. A **Replace entire
+    file** block is included too, because its text does reach the tree — but it is tagged
+    `reprint`, because most of it was written by whoever wrote the file. Pass
+    ``roles=True`` for ``(role, text)`` pairs and a check that assigns blame can tell the
+    difference; a check that only looks for defects does not need to.
 
-      * a fenced block that is neither a hunk nor an illustrative example — authored;
-      * the lines an **After** adds that its **Before** did not have — authored;
-      * a **Replace entire file** block, minus the lines the file on disk already holds
-        when `on_disk` can supply them — the rest is a quotation of somebody else's file.
-
-    `on_disk` is a callable taking a repo-relative path and returning the file's text, or
-    None. Without it a replace block is kept whole, which is the safe direction for a
-    check that looks for defects and the wrong one for a check that assigns blame.
+    Deciding this from the document alone is deliberate. An earlier attempt subtracted the
+    file as it stands on disk, and on an implemented tree that made the document's own new
+    lines look like quotations and silenced a real finding.
     """
     kinds = {}
     for _p, _k in file_kinds(section):
@@ -751,19 +760,12 @@ def authored_blocks(section: str, on_disk=None) -> list:
                 continue  # after_additions() below reads the pair
             if pending == "replace":
                 pending = None
-                out.append(_authored_in_replace(text, current, on_disk))
+                # A replace of a file this task DECLARES NEW is authored outright; there
+                # is no earlier version of it for anyone else to have written.
+                new_file = current is not None and kinds.get(current) == "new"
+                out.append(("block" if new_file else "reprint", text))
                 continue
-            out.append(text)
-    out += after_additions(section)
-    return [b for b in out if b.strip()]
-
-
-def _authored_in_replace(text: str, path, on_disk) -> str:
-    """A Replace-entire-file block with the lines the file already holds taken out."""
-    if not (path and on_disk):
-        return text
-    existing = on_disk(path)
-    if not existing:
-        return text
-    held = {ln.strip() for ln in existing.split("\n") if ln.strip()}
-    return "\n".join(ln for ln in text.split("\n") if ln.strip() and ln.strip() not in held)
+            out.append(("block", text))
+    out += [("after", t) for t in after_additions(section)]
+    out = [(r, t) for r, t in out if t.strip()]
+    return out if roles else [t for _r, t in out]

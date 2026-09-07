@@ -209,24 +209,9 @@ def main() -> int:
             sections[_tid] += chr(10) + _sec
         else:
             sections[_tid] = _sec
-    # What `authored_blocks` needs to tell a **Replace entire file** block's own new lines
-    # from the file it reprints. Cached: a 400-line controller quoted by one task is read
-    # once, not once per check.
-    _disk_cache: dict[str, str | None] = {}
-
-    def on_disk(relpath: str):
-        if relpath not in _disk_cache:
-            full = os.path.join(root, relpath)
-            try:
-                with open(full, encoding="utf-8", errors="replace") as fh:
-                    _disk_cache[relpath] = fh.read()
-            except OSError:
-                _disk_cache[relpath] = None
-        return _disk_cache[relpath]
-
     def authored(sec: str) -> list[str]:
         """The code this task wrote. The one reading; see _blueprint_parse.authored_blocks."""
-        return authored_blocks(sec, on_disk)
+        return authored_blocks(sec)
 
     mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(bp.splitlines())} lines | {len(sections)} task sections\n")
@@ -907,15 +892,20 @@ def main() -> int:
     #     The same run reported four identifiers inside a **Replace entire file** block
     #     that quotes a controller a PREVIOUS feature wrote, and prescribed stamping this
     #     feature's number onto them — following it would have made the tree more wrong.
+    #     And the prescription is split by that role. Telling an author to stamp THIS
+    #     feature's number onto an id inside a reprinted file is advice that makes the
+    #     tree more wrong, not less: the id belongs to whichever feature wrote that code.
     LOCAL_ID = re.compile(r"\b(plan\s+D\d+|OQ-\d+)\b")
     bare_ids: list[str] = []
+    reprinted_ids: list[str] = []
     for tid, sec in sections.items():
-        for blk in authored(sec):
+        for role, blk in authored_blocks(sec, roles=True):
             for ln in blk.split("\n"):
                 for m in LOCAL_ID.finditer(ln):
                     if re.search(r"\d{3}\s$", ln[max(0, m.start() - 4):m.start()]):
                         continue
-                    bare_ids.append(f"{tid}: {m.group(1)} — {ln.strip()[:60]}")
+                    row = f"{tid}: {m.group(1)} — {ln.strip()[:60]}"
+                    (reprinted_ids if role == "reprint" else bare_ids).append(row)
     if bare_ids:
         record(
             "warn",
@@ -923,6 +913,14 @@ def main() -> int:
             listing(bare_ids, 4)
             + "\nthis text becomes a comment in the tree, where `plan D5` and `OQ-1` belong to"
               f"\nwhatever feature wrote them; write `{os.path.basename(feature_dir)[:3]} plan D5`",
+        )
+    if reprinted_ids:
+        record(
+            "warn",
+            f"{len(reprinted_ids)} bare identifier(s) sit in a file this task reprints whole",
+            listing(reprinted_ids, 4)
+            + "\na **Replace entire file** block quotes code an earlier feature wrote, so these ids are"
+              "\nnot this document's to renumber — fix them where they were written, or leave them alone",
         )
 
     # 5. Placeholders — full-code modes forbid them; guide mode expects markers in bodies only
