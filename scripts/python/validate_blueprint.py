@@ -1062,10 +1062,29 @@ def main() -> int:
             r"|\b\w+\s*=\s*[^=\s][^\n,]{0,40},\s*\w{3,}\s*=\s*[^=\s]"
             # A call subscripted: `calendar.monthrange(year, month)[1]`.
             r"|\w\s*\([^()\n]{0,60}\)\s*\["
-            # An identifier compared against a number: `elapsed_days > 0`.
-            r"|\b[a-z_][A-Za-z0-9_]{2,}\s*[<>]\s*-?\d"
+            # An identifier compared against a number: `elapsed_days > 0`, `amount <= 0`.
+            # `<=` and `>=` were missing, and a bound guard is written with them more
+            # often than not — a reviewer's `amount <= 0` went unread while `amount < 0`
+            # would have fired. One hit across the corpus's 7,964 messages (`months >= 1`,
+            # an expression handed to the reader inside a sentence), no prose collisions.
+            r"|\b[a-z_][A-Za-z0-9_]{2,}\s*(?:<=|>=|<|>)\s*-?\d"
+            # A call whose ARGUMENT is subscripted: `int(row[2])`. The rule above reads a
+            # call that is itself subscripted, `monthrange(y, m)[1]`, and a reviewer
+            # reasonably read the release note as covering both. Zero hits over the same
+            # 7,964 texts — recorded here because zero is the measurement, not an excuse
+            # to skip it — and no shape of English prose can produce it.
+            r"|\b[a-z_]\w*\s*\(\s*[a-z_]\w*\s*\[[^\]\n]{1,12}\]\s*\)"
             # Arithmetic between identifiers, where one side is unmistakably an
             # identifier (it carries a `_` or a digit) rather than an English word.
+            #
+            # Two reviewers asked for this to lose that qualifier and read plain
+            # `spent + projected` and `spent / budget` too. Measured over the corpus's
+            # 7,964 marker messages before agreeing: `+`/`-` between two bare words hits
+            # 1,137 times and is hyphenated English every time — "zero-length",
+            # "half-open", "non-empty", "package-private". `/` between two bare words
+            # hits 98 times: "text/csv", "name/value", "lockA/lockB". Refused, with the
+            # numbers, rather than shipped and withdrawn next round. `*` and `/` stay
+            # behind the underscore-or-digit test for the same reason.
             r"|(?<![*\w])[a-z_][A-Za-z0-9_]*[_0-9][A-Za-z0-9_]*\s*\*\s*[a-z_][A-Za-z0-9_]{2,}(?![*\w])"
             r"|(?<![*\w])[a-z_][A-Za-z0-9_]{2,}\s*\*\s*[a-z_][A-Za-z0-9_]*[_0-9][A-Za-z0-9_]*(?![*\w])"
             r"|(?<![/\w.])[a-z_][A-Za-z0-9_]*_[A-Za-z0-9_]*\s*/\s*[a-z_][A-Za-z0-9_]{2,}(?![/.\w])"

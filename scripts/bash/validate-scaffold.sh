@@ -735,6 +735,69 @@ if [[ ${#IMPLEMENTED_FILES[@]} -gt 0 ]]; then
 fi
 
 # =============================================
+# CHECK 3a: the Checklist against the markers on disk
+# =============================================
+# `- [X] T003` is the document saying that task is complete. Nothing read it. A generator
+# produced a blueprint whose thirteen rows were all [X] at the commit that created it,
+# with no line of the feature written, and it passed all three tools — the first thing
+# the developer saw on opening the document was a checklist saying the work was done.
+#
+# The test is the same one --markers uses to decide who wrote a marker, and it needs both
+# halves: the id must be a task of this feature AND the wording must be this blueprint's,
+# because task ids restart at T001 in every feature. Measured over 118 blueprints: the id
+# alone fires on 56 of them, almost all on a `T014:` an earlier feature left behind. Both
+# halves together fire on 6, and the ones I read are real — a task ticked complete whose
+# own marker is still sitting in the file, verbatim.
+if [[ ${#DECLARED[@]} -gt 0 ]] && [[ -n "$OWN_IDS" ]]; then
+    CHECKED_ROWS=$(grep -oE '^[[:space:]]*-[[:space:]]*\[[xX]\][[:space:]]*T[0-9]+' "$GUIDE" 2>/dev/null \
+        | grep -oE 'T[0-9]+' | sort -u || true)
+    if [[ -n "$CHECKED_ROWS" ]]; then
+        header "3a. Checklist against the markers on disk"
+        LIVE_TICKED=()
+        for f in "${DECLARED[@]}"; do
+            [[ -f "$REPO_ROOT/$f" ]] || continue
+            while IFS= read -r probe_line; do
+                [[ -n "$probe_line" ]] || continue
+                mk_id="${probe_line%%$'\t'*}"
+                mk_msg="${probe_line#*$'\t'}"
+                printf '%s\n' "$CHECKED_ROWS" | grep -qx -- "$mk_id" || continue
+                [[ ${#mk_msg} -ge 16 ]] || continue
+                grep -qF -- "${mk_msg:0:40}" "$GUIDE" 2>/dev/null || continue
+                dup=false
+                for q in "${LIVE_TICKED[@]}"; do [[ "${q%% *}" == "$mk_id" ]] && dup=true && break; done
+                [[ "$dup" == true ]] || LIVE_TICKED+=("$mk_id ($f)")
+            done < <(awk '
+                match($0, /(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\([[:space:]]*["'"'"'`]?[[:space:]]*T[0-9]+[[:space:]]*:/) {
+                    s = substr($0, RSTART, RLENGTH); rest = substr($0, RSTART + RLENGTH)
+                    if (match(s, /T[0-9]+/)) { id = substr(s, RSTART, RLENGTH) } else next
+                    sub(/^[ \t]+/, "", rest); gsub(/["'"'"'`]/, "", rest)
+                    print id "\t" rest; next
+                }
+                match($0, /TODO\(blueprint\)[^\n]*T[0-9]+[[:space:]]*:/) {
+                    s = substr($0, RSTART, RLENGTH); rest = substr($0, RSTART + RLENGTH)
+                    if (match(s, /T[0-9]+/)) { id = substr(s, RSTART, RLENGTH) } else next
+                    sub(/^[ \t]+/, "", rest)
+                    print id "\t" rest
+                }' "$REPO_ROOT/$f")
+        done
+        if [[ ${#LIVE_TICKED[@]} -gt 0 ]]; then
+            SHOWN=("${LIVE_TICKED[@]:0:6}")
+            MORE=""
+            [[ ${#LIVE_TICKED[@]} -gt 6 ]] && MORE=" (+$(( ${#LIVE_TICKED[@]} - 6 )) more)"
+            MSG="${#LIVE_TICKED[@]} task(s) are ticked [X] and their own marker is still in the file: $(printf '%s, ' "${SHOWN[@]}" | sed 's/, $//')${MORE}"
+            if [[ "$DONE" == true ]]; then
+                fail "$MSG"
+            else
+                warn "$MSG"
+            fi
+            echo "      The Checklist is a claim the document makes; untick them or finish the bodies."
+        else
+            pass "no task ticked [X] still has its marker in the file"
+        fi
+    fi
+fi
+
+# =============================================
 # CHECK 3b: --done — nothing declared still carries a marker
 # =============================================
 # The opposite claim to --fresh, and the one nobody could make. Without --fresh a file
