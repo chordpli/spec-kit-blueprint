@@ -122,6 +122,18 @@ def listing(rows, limit: int = 6, sep: str = "\n") -> str:
     return out
 
 
+def feature_number(feature_dir: str) -> str:
+    """`004` out of `specs/004-daily-cap` — and out of `specs/004-daily-cap/` too.
+
+    `os.path.basename` of a path with a trailing slash is the empty string, and a trailing
+    slash is what a shell's tab completion puts there. The whole value of the identifier
+    check is in the remedy it prints, and on the argument form the shell hands you by
+    default that remedy read ``write ` plan D5` `` — a prescription with the number
+    missing, which is the defect it is reporting.
+    """
+    return os.path.basename(feature_dir.rstrip("/\\"))[:3]
+
+
 
 def code_lines(block: str) -> list[str]:
     """Lines of a code block that are code — comments and doc comments dropped.
@@ -775,6 +787,13 @@ def main() -> int:
         for p, k in file_kinds(sec) if k != "new"
     }
     for tid, sec in sections.items():
+        # The THIRD check exempt from authored_blocks(), and the reason belongs beside it
+        # rather than in a count somewhere else: this one compares a block to a file on
+        # disk BYTE FOR BYTE, so it needs the block as the document literally wrote it —
+        # its own indentation, its own blank lines, nothing merged and nothing dropped.
+        # `authored_blocks` returns the lines an After ADDS, which is a different string
+        # from the block and would never equal the file. A hunk cannot be the whole of a
+        # declared-new file anyway, so dropping hunks here loses nothing this check wants.
         blocks = code_blocks(strip_quoted(sec), content_only=True)
         for relp, kind in file_kinds(sec):
             if kind != "new" or relp in grown_later:
@@ -912,7 +931,7 @@ def main() -> int:
             f"{len(bare_ids)} identifier(s) inside code blocks carry no feature number",
             listing(bare_ids, 4)
             + "\nthis text becomes a comment in the tree, where `plan D5` and `OQ-1` belong to"
-              f"\nwhatever feature wrote them; write `{os.path.basename(feature_dir)[:3]} plan D5`",
+              f"\nwhatever feature wrote them; write `{feature_number(feature_dir)} plan D5`",
         )
     if reprinted_ids:
         record(
