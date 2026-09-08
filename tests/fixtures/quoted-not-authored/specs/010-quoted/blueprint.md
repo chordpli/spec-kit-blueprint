@@ -2,7 +2,7 @@
 
 **Branch**: `010-quoted` | **Date**: 2026-01-01
 **Mode**: guide scaffold — signatures, Why, implementation notes and pitfalls; every body with behavior is a not-implemented marker; declared-new files are written to disk as skeletons
-**Total Tasks**: 3 | **Files**: 1 new, 1 modified, 0 deleted
+**Total Tasks**: 4 | **Files**: 1 new, 1 modified, 0 deleted
 **Build**: `python3 -c "pass"`
 
 ## Key Decisions
@@ -20,7 +20,7 @@
 ## Implementation Order
 
 ```
-T001 -> T002 -> T003
+T001 -> T002 -> T003 -> T004
 ```
 
 ## Phase 1
@@ -87,7 +87,49 @@ for, and it must not read as a second author of that message.
 
 ---
 
-### T003: Modify `pkg/report.py` — reprint the handler unchanged apart from the new call
+### T003: Modify `pkg/thing.py` to add a third seam
+
+**File**: `pkg/thing.py` (modify)
+
+**Requirements**: FR-002
+
+**Why**: A third seam, quoting T001's marker one more time. Three is the number that
+matters: the repetition check fires at three tasks, so with only two quoting tasks the
+fixture could not tell a correct attribution from a wrong one — the check stayed silent
+either way, and the table in `tests/fixtures/README.md` claimed a protection the fixture
+did not provide.
+
+**Before** (lines 2-6):
+
+```python
+    def compute(self, a, b):
+        raise NotImplementedError(
+            "T001: add a and b, and refuse a negative result — the caller treats a "
+            "negative as a programming error rather than a value (010 FR-001)."
+        )
+```
+
+**After**:
+
+```python
+    def compute(self, a, b):
+        raise NotImplementedError(
+            "T001: add a and b, and refuse a negative result — the caller treats a "
+            "negative as a programming error rather than a value (010 FR-001)."
+        )
+
+    def summarise(self):
+        raise NotImplementedError(
+            "T003: one line for a log, and decide there whether it names the operands "
+            "or only the outcome (010 FR-002)."
+        )
+```
+
+**Verification**: `python3 -c "pass"`.
+
+---
+
+### T004: Modify `pkg/report.py` — reprint the handler unchanged apart from the new call
 
 **File**: `pkg/report.py` (modify)
 
@@ -118,4 +160,5 @@ def handle(request):
 
 - [ ] T001: create `pkg/thing.py`
 - [ ] T002: add `describe`
-- [ ] T003: reprint `pkg/report.py`
+- [ ] T003: add `summarise`
+- [ ] T004: reprint `pkg/report.py`

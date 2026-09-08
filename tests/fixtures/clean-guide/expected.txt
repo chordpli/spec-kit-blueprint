@@ -1,4 +1,25 @@
-validate: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
 validate: exit 0
+validate --strict-guide: exit 0
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
 apply: exit 0
+apply --verify: exit 0
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
 scaffold: exit 0
+scaffold --fresh: exit 0
+scaffold --done: ✗ 1 declared file(s) still carry a not-implemented marker: pkg/store.py (1)
+scaffold --done: exit 1
+scaffold --strict: exit 0
+scaffold --markers: pkg/store.py:3: raise NotImplementedError( "T001: store the record under key, and when the key is already present " "honour overwrite rather than deciding for the caller; the two callers " "disagree about which is right, which is why it is a parameter " "(012 FR-001)." )
+scaffold --markers:   (1 marker line(s) in 2 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ✗ 1 declared file(s) still carry a not-implemented marker: pkg/store.py (1)
+scaffold --done --all: ✗ 1 of 1 feature(s) did not pass: specs/012-clean
+scaffold --done --all: exit 1
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2

@@ -4,6 +4,7 @@
 **Mode**: guide scaffold — signatures, Why, implementation notes and pitfalls; every body with behavior is a not-implemented marker; declared-new files are written to disk as skeletons
 **Total Tasks**: 2 | **Files**: 1 new, 1 modified, 0 deleted
 **Build**: `python3 -c "import pkg.store"`
+**Sources**: tasks.md@0be5b01267fc
 
 ## Key Decisions
 
