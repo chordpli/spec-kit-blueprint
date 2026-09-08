@@ -699,11 +699,36 @@ def test_command(blueprint: str) -> str | None:
     return None
 
 
+def verify_excerpt(stdout: str, stderr: str) -> list:
+    """The part of a verification run a reader needs, from each stream separately.
+
+    `(stdout + stderr)[-8:]` was the whole rule, and it is the bug this release's notes
+    describe fixing in `--build` — shipped again, ten functions away, in the flag the
+    same release put on the front page. A test runner writes its failures to stdout and
+    a compiler writes its warnings to stderr; concatenating them puts the warnings last,
+    so the tail is always the warnings. Measured by a reviewer: a tree with an emptied
+    policy body and a tree with a Key Decision implemented backwards produced
+    byte-identical `--verify` output, and neither showed one character of the twelve and
+    three failures the runner had printed.
+
+    So the streams are excerpted apart and labelled when both spoke.
+    """
+    out, err = stdout.rstrip(), stderr.rstrip()
+    if out and err:
+        rows = ["stdout:"] + build_excerpt(out, 8, FAILURE_LINE)
+        return rows + ["stderr:"] + build_excerpt(err, 4, FAILURE_LINE)
+    if out:
+        return build_excerpt(out, 12, FAILURE_LINE)
+    if err:
+        return build_excerpt(err, 12, FAILURE_LINE)
+    return ["(the command printed nothing)"]
+
+
 def _run_one(cmd: str, cwd: str):
     try:
         proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
                               text=True, timeout=VERIFY_TIMEOUT)
-        return proc.returncode, (proc.stdout + proc.stderr).rstrip().split("\n")[-8:]
+        return proc.returncode, verify_excerpt(proc.stdout, proc.stderr)
     except subprocess.TimeoutExpired:
         return 124, [f"did not finish within {VERIFY_TIMEOUT}s"]
     except OSError as exc:
@@ -783,8 +808,15 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool) -> int:
             print(f"  {GREEN}{len(green)} task(s) verify against your tree{NC}: "
                   + ", ".join(green[:10]) + (f" (+{len(green) - 10} more)" if len(green) > 10 else ""))
         if failed_tasks:
-            print(f"  {YELLOW}{len(sorted(failed_tasks))} task(s) do not{NC}: "
-                  + ", ".join(sorted(failed_tasks)[:10]))
+            red = sorted(failed_tasks)
+            # The sentence has to stand on its own, and name what it counts. It read
+            # "14 task(s) do not:" — borrowing its verb from the green line above, which
+            # is not printed when nothing is green, and nothing is green the first time
+            # anybody runs this. It then listed ten of the fourteen and said nothing
+            # about the other four, while the green line one row up already had the
+            # `(+N more)` this one needed.
+            print(f"  {YELLOW}{len(red)} task(s) do not verify against your tree{NC}: "
+                  + ", ".join(red[:10]) + (f" (+{len(red) - 10} more)" if len(red) > 10 else ""))
             print("  These ran against YOUR code, not the blueprint's. Before the bodies are written")
             print("  a guide-mode blueprint is red here by design; after they are, this is the failure.")
     finally:
@@ -818,10 +850,30 @@ def run_build(tree: str, cmd: str) -> int:
     return proc.returncode
 
 
+# Suffixes whose files are usually compared byte for byte — golden outputs, snapshots,
+# recorded fixtures. A markdown code block states text, not bytes, so --scaffold says so
+# when it writes one rather than leaving the difference to a diff of identical-looking
+# lines. Not a refusal: many of these are plain LF text and perfectly fine.
+BYTE_EXACT_SUFFIXES = {
+    ".csv", ".tsv", ".golden", ".snap", ".approved", ".expected", ".out", ".bin",
+    ".pem", ".der", ".png", ".jpg", ".gif", ".pdf", ".zip", ".gz",
+}
+
 ERROR_LINE = re.compile(r"\berror\b|\bERROR\b|\bError:|\bFAILED\b|\bFAIL:|Traceback|cannot find symbol")
 
+# What a *test* runner calls a failure. The compiler vocabulary above misses all of it:
+# `ran 157 checks, 12 failures`, `FAILED (failures=3)`, `AssertionError`, `expected:` —
+# none of them say "error". A verification excerpt that cannot find the first failure
+# falls back to the tail, and for a runner that prints a summary last the tail is right;
+# for one that prints failures and then a banner it is not.
+FAILURE_LINE = re.compile(
+    r"\berror\b|\bError:|Traceback|cannot find symbol"
+    r"|\bfail(?:s|ed|ure|ures)?\b|\bassert\w*\b|\bexpected\b|\bnot ok\b|\b✗",
+    re.I,
+)
 
-def build_excerpt(out: str, limit: int = 20) -> list:
+
+def build_excerpt(out: str, limit: int = 20, pattern=None) -> list:
     """The part of a build log a reader needs: the first error, then the tail.
 
     The last twenty lines was the whole rule, and `javac -Xlint:all` prints errors first
@@ -829,30 +881,38 @@ def build_excerpt(out: str, limit: int = 20) -> list:
     — so a build with one error showed twenty lines of warnings, the words `1 error`, and
     not one character saying what the error was. Measured there: a reader had to keep the
     copy with --keep and build it by hand to find out.
+
+    `pattern` is what counts as the first bad line; it defaults to the compiler's
+    vocabulary. A test runner's is different enough that `--verify` passes its own (see
+    FAILURE_LINE), and the split between head and tail follows `limit` so a stream given
+    four lines does not spend eight of them on the head.
     """
     lines = out.rstrip().split("\n")
     if len(lines) <= limit:
         return lines
     tail = lines[-limit:]
-    first = next((i for i, ln in enumerate(lines) if ERROR_LINE.search(ln)), None)
+    rx = pattern or ERROR_LINE
+    first = next((i for i, ln in enumerate(lines) if rx.search(ln)), None)
     if first is None or first >= len(lines) - limit:
         return tail
-    head = lines[first:first + 8]
-    return head + [f"      ... ({len(lines) - len(head) - (limit - 8) - first} line(s) not shown)"] \
-        + lines[-(limit - 8):]
+    head_n = max(1, min(8, limit // 2))
+    head = lines[first:first + head_n]
+    return head + [f"      ... ({len(lines) - len(head) - (limit - head_n) - first} line(s) not shown)"] \
+        + lines[-(limit - head_n):]
 
 
 def main() -> int:
     global _tree, _root, _stamped_head
     argv = sys.argv[1:]
     if "--help" in argv or "-h" in argv:
-        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
         print("\n  --build            run the project's build in the copy after applying")
         print("  --keep             print the copy's path instead of deleting it")
         print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
         print("  --scaffold         after a clean apply, copy the declared-new files into your tree")
         print("  --verify           run every task's **Verification** command against YOUR tree")
         print("  --verbose          print the per-task line for every task, not just the failures")
+        print("  --through T0NN     apply only as far as that task — a bisector for a build that fails")
         print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved,")
         print("     3 the tree has moved past the stamp so the build failure says nothing about the document.")
         return 0
@@ -862,20 +922,40 @@ def main() -> int:
     do_scaffold = "--scaffold" in argv
     do_verify = "--verify" in argv
     VERBOSE = "--verbose" in argv
-    KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold", "--verify", "--verbose"}
-    unknown = [a for a in argv if a.startswith("-") and a not in KNOWN]
+    # --through T0NN: apply the document only as far as one task.
+    #
+    # Asked for in four consecutive rounds of review and never answered, not even with a
+    # refusal. It is a bisector: when a twenty-task blueprint fails to build, the question
+    # is which task broke it, and the alternative was deleting sections by hand. The
+    # coverage line below is told the FULL task count, so a truncated run reports the
+    # fraction of the document it actually tested rather than 100% of what was left.
+    through = None
+    for i, a in enumerate(argv):
+        if a.startswith("--through="):
+            through = a.split("=", 1)[1].strip()
+        elif a == "--through" and i + 1 < len(argv):
+            through = argv[i + 1].strip()
+    KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold", "--verify", "--verbose",
+             "--through"}
+    unknown = [a for a in argv
+               if a.startswith("-") and a not in KNOWN and not a.startswith("--through=")]
     if unknown:
         # A typo in --build looked like a run that simply chose not to build.
         print(f"{RED}ERROR: unknown option(s): {' '.join(unknown)}{NC}")
-        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
         return 2
     args = [a for a in argv if not a.startswith("--")]
+    if through is not None:
+        args = [a for a in args if a != through]
+        if not re.fullmatch(r"T\d+", through):
+            print(f"{RED}ERROR: --through takes a task id like T005, not {through!r}.{NC}")
+            return 2
 
     root = repo_root()
     feature_dir = resolve_feature_dir(root, args[0] if args else None)
     if not feature_dir or not os.path.isdir(feature_dir):
         print(f"{RED}ERROR: feature directory not found.{NC}")
-        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
         return 2
 
     bp_path = os.path.join(feature_dir, "blueprint.md")
@@ -888,6 +968,18 @@ def main() -> int:
     chain = base_chain(bp, feature_dir, root)
     base_tasks = [(tid, sec) for _p, text in chain for tid, sec in split_tasks(text)]
     tasks = split_tasks(bp)
+    full_task_count = len(tasks)
+    dropped_through = 0
+    if through is not None:
+        order = [t for t, _s in tasks]
+        if through not in order:
+            print(f"{RED}ERROR: --through {through}: this blueprint has no such task.{NC}")
+            print("  its tasks are: " + ", ".join(order[:12])
+                  + (f" (+{len(order) - 12} more)" if len(order) > 12 else ""))
+            return 2
+        cut = len(order) - 1 - order[::-1].index(through)
+        dropped_through = len(tasks) - (cut + 1)
+        tasks = tasks[: cut + 1]
     _stamped_head = stamped_head(bp)
     _root = root
 
@@ -1024,6 +1116,9 @@ def main() -> int:
     # summary reading `skipped: 8`, and listed eight.
     skipped_ids: list[str] = []
     applied_sections: list = []
+    # Kept apart from `rc` on purpose — see the --verify branch below.
+    verify_failures = 0
+    _ahead_moved: list[str] = []
     try:
         for tid, section in tasks:
             try:
@@ -1118,12 +1213,19 @@ def main() -> int:
         # exit 0 is honest in the body and a lie to a CI job reading only the code; the
         # fraction is the number a reader needs to know what the green covers, and it goes
         # in the summary rather than a paragraph underneath it.
-        total_tasks = len(tasks) + len(base_tasks)
+        # The denominator is the WHOLE document, including the tasks --through cut off.
+        # Measuring the truncated run against itself would print `coverage: 5 of 5 (100%)`
+        # for a run that never looked at fifteen tasks, which is the exact shape of false
+        # green this line exists to prevent.
+        total_tasks = full_task_count + len(base_tasks)
         if total_tasks:
             pct = round(100 * applied_tasks / total_tasks)
             colour = GREEN if pct >= 80 else YELLOW
             print(f"  {colour}coverage: this run typed and tested {applied_tasks} of {total_tasks}"
                   f" task(s) ({pct}%){NC}")
+        if dropped_through:
+            print(f"  {YELLOW}--through {through}: {dropped_through} later task(s) were not applied,"
+                  f" not tested, and are not evidence of anything.{NC}")
         if unanchored_tasks:
             print(f"  {YELLOW}{len(unanchored_tasks)} task(s) carry code no marker anchors to a"
                   f" position: {', '.join(unanchored_tasks[:10])}"
@@ -1154,6 +1256,7 @@ def main() -> int:
                     moved = sorted({p for p in declared_all
                                     if changed_since(root, _stamped_head, p) is True})
                     if moved:
+                        _ahead_moved = moved
                         print(f"\n      {YELLOW}every task applied and the build still failed. {len(moved)} of the"
                               f" file(s) this blueprint writes have changed since HEAD {_stamped_head}:{NC} "
                               + ", ".join(moved[:6])
@@ -1183,8 +1286,13 @@ def main() -> int:
         if do_verify:
             # Not gated on whether the applier could place anything: --verify asks a
             # question about the working tree, and the applier's copy has no say in it.
-            if run_verifications(root, base_tasks + tasks, bp, keep):
-                rc = 1
+            #
+            # Its result is kept OUT of `rc`. Folding it in made the run print
+            # "Blueprint did NOT apply cleanly" three lines under its own `FAILED: 0`,
+            # which points a developer at the document when the finding is about their
+            # code. The two verdicts are about two different artifacts and get two
+            # different sentences; the exit code is still non-zero for either.
+            verify_failures = run_verifications(root, base_tasks + tasks, bp, keep)
         if do_scaffold and not failed:
             # The generator writing forty skeletons by hand is where drift comes from;
             # the copy already holds exactly what the document says, verified by the
@@ -1207,6 +1315,24 @@ def main() -> int:
                     written.append(relp)
             print(f"\n{CYAN}=== Scaffold ==={NC}")
             print(f"  wrote {len(written)} new file(s) into {root}")
+            # A markdown code block can carry text. It cannot carry bytes: there is no way
+            # to write CRLF in one, no trailing-newline rule, no encoding. A reviewer's
+            # blueprint declared a golden CSV whose real file ends its records with CRLF
+            # per RFC 4180; --scaffold wrote it with LF, all three document tools passed,
+            # and the diff that finally caught it showed three lines that looked identical.
+            # These files still get written — refusing would leave the developer writing
+            # the same wrong bytes by hand — but never silently.
+            byte_exact = [p for p in written
+                          if os.path.splitext(p)[1].lower() in BYTE_EXACT_SUFFIXES]
+            if byte_exact:
+                print(f"  {YELLOW}{len(byte_exact)} of them are files whose bytes a code block cannot"
+                      f" state — line endings, a trailing newline, an encoding:{NC} "
+                      + ", ".join(byte_exact[:6])
+                      + (f" (+{len(byte_exact) - 6} more)" if len(byte_exact) > 6 else ""))
+                print("      What is on disk is the document's TEXT. If the real artifact is compared"
+                      " byte for byte,")
+                print("      regenerate it with the command that produces it and let the document name"
+                      " that command.")
             if skipped:
                 print(f"  {YELLOW}left {len(skipped)} file(s) alone — already on disk{NC}: " + ", ".join(skipped[:6])
                   + (f" (+{len(skipped) - 6} more)" if len(skipped) > 6 else ""))
@@ -1221,6 +1347,16 @@ def main() -> int:
     if rc == 3:
         print(f"\n{YELLOW}Could not test this blueprint — the tree has moved past its stamp"
               f" (exit 3, not 1: nothing here says the document is wrong).{NC}")
+        if _ahead_moved:
+            # "Nothing here says the document is wrong" is true and is not the whole
+            # sentence. A build did fail, in a copy of the developer's own tree, and the
+            # errors named files — a reviewer's tree that would not compile at all was
+            # summarised by this line as a distance problem. Exit 3 means this run cannot
+            # judge the DOCUMENT; it says nothing either way about the tree.
+            print(f"      The build above did fail. It ran over your files, and {len(_ahead_moved)} of the ones"
+                  f" this blueprint writes have moved: " + ", ".join(_ahead_moved[:3])
+                  + (f" (+{len(_ahead_moved) - 3} more)" if len(_ahead_moved) > 3 else ""))
+            print("      Read the compiler's own lines above before concluding the distance explains them.")
     elif rc:
         print(f"\n{RED}Blueprint did NOT apply cleanly{NC}")
     elif applied_tasks == 0:
@@ -1250,7 +1386,14 @@ def main() -> int:
             print("      if they were scaffolds, this is the run you wanted.")
     else:
         print(f"\n{GREEN}Blueprint applied{' and built' if do_build else ''} cleanly{NC}")
-    return rc
+    if verify_failures:
+        # A second sentence, about a second artifact. The line above judged the document;
+        # this one judges the tree, and saying so is the whole educational value of the
+        # flag — a developer who reads "did NOT apply cleanly" goes and regenerates a
+        # blueprint that was fine.
+        print(f"\n{RED}{verify_failures} **Verification** command(s) failed against your tree{NC}"
+              " — your code, not this document.")
+    return rc or (1 if verify_failures else 0)
 
 
 if __name__ == "__main__":

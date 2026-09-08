@@ -44,6 +44,14 @@ provides:
       description: "Applies the blueprint to a throwaway copy of the tree and builds it, so 'this compiles' is evidence rather than a claim"
       runtimes:
         - python
+    # Not a tool for a feature — the regression corpus for the three above. It was
+    # installed into every tree for a release with no command, hook or manifest entry
+    # naming it, which made it the author's habit rather than the extension's gate.
+    - name: "blueprint-self-test"
+      file: "scripts/python/self_test.py"
+      description: "Runs the fixture corpus in tests/fixtures and fails on any change to what the three scripts say — run it when changing the extension, not when using it"
+      runtimes:
+        - python
 
 hooks:
   after_tasks:

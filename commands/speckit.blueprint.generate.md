@@ -86,6 +86,8 @@ Run the prerequisites check from the repository root:
 
 If that script reports `Feature directory not found … .specify/feature.json`, do not stop: the extension does not need it. Every script here resolves the feature from the branch prefix, or from a path given as the first argument, so `specs/NNN-name` on the command line is enough. To make the spec-kit script itself work, set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session or run the specify command that writes `.specify/feature.json`.
 
+**Check that it answered about the feature you are on.** That file is written by whichever specify command ran last and is not updated by switching branches, so on branch `007-refund-window` it answers `specs/004-daily-debit-cap` with exit 0 and no error when it is stale — and this command would then generate a blueprint over the wrong feature's artifacts. Compare the directory it returned against the branch's own numeric prefix; if they disagree, **stop and ask** which feature is meant.
+
 Parse `FEATURE_DIR` from the output. Then load the following spec artifacts from that directory:
 
 - **Required**: `tasks.md`, `spec.md`, `plan.md`
@@ -332,6 +334,7 @@ In `guide` mode, Step 3a's completeness rule applies to **guidance, not code**: 
 - **Test skeletons carry their framework**: in guide mode, test-file skeletons must include the project's real test imports and annotations (`@Test`, class-level framework annotations, fixtures wiring) exactly as the project's existing tests do — a test skeleton without its framework does not compile and fails the skeleton rule. Only the method bodies are not-implemented markers.
 - **Test tasks**: name the scenarios, the fixtures/preconditions, and *what each assertion must establish* — never write the given/when/then bodies. Designing assertions is the developer's work.
 - **Structural files** (schemas, config, wiring, DTO/type declarations with no logic): complete content is allowed even in guide mode — there is no design learning in transcribing a config file. Mark the boundary honestly: anything with behavior gets a skeleton, not content.
+- **Byte-exact artifacts** (golden files, snapshots, recorded fixtures, anything a test compares byte for byte — `.csv`, `.golden`, `.snap`, binaries): a code block states **text**, not bytes. It cannot say CRLF, it cannot say "no trailing newline", it cannot say an encoding. Do not declare such a file as `(new)` with its content in a block and expect the bytes to be right — one blueprint did, `--scaffold` wrote LF where the writer emits CRLF per RFC 4180, all three document tools passed, and the `diff` that finally caught it showed three lines that looked identical. Instead, give the task the **command that produces the artifact** (`BLESS_GOLDEN=1 bash tools/test.sh`, `npm run snapshot -- -u`) in its `**Verification**` line, and say in the task's prose that the file is generated rather than typed. `--scaffold` names any file it writes whose suffix is in that family, but naming it after the fact is the second-best outcome.
 - The Why rules (Step 3b) and comment rules (Step 3c) apply unchanged — guide mode leans on them hardest.
 
 **Guide mode and files that change.** Step 3a's Before/After form still says *where* an edit goes; in guide mode the After never carries a body. Two cases come up in every feature and both use the ordinary markers, so the applier and the validators read them without special handling:
@@ -408,6 +411,9 @@ a read-through passed a blueprint the scripts then failed.
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
+# guide and guide scaffold: make the body findings failures rather than notes.
+# This is the mode's one promise, and generation is where it is still cheap to keep.
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR" --strict-guide
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --build
 # scaffold modes: write the declared-new files from the document rather than by hand —
 # the copy the build just verified holds exactly what the blueprint says
@@ -416,15 +422,17 @@ python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATUR
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --fresh
 ```
 
-The first checks the document; the second applies it to a throwaway copy of the tree and runs the
-project's build, which is the only way to know that the code in here works. `--verify` is deliberately
-not in this list: it runs each task's `**Verification**` line against the *working tree*, so at
-generation time — before a body exists — it is red by construction and says nothing about the
-document. It is the developer's flag, run once the bodies are typed. What you owe it here is that
-every `**Verification**` line name a real command rather than describe one. **Fix every failure and
-run them again** — do not report a blueprint that its own validators reject. If the applier reports a
-task it could not apply, that task's Before block does not match the file it claims to edit, which is
-a defect in this document and not in the applier.
+The first two check the document; the third applies it to a throwaway copy of the tree and runs the
+project's build, which is the only way to know that the code in here works. `--verify` and `--done`
+are deliberately not in this list, and their absence here is the *only* place that absence is
+correct: `--verify` runs each task's `**Verification**` line against the *working tree*, so at
+generation time — before a body exists — it is red by construction, and `--done` asks whether a
+feature nobody has started is finished. Both belong to `/speckit.blueprint.validate`, block B, on the
+commit that closes the feature. What you owe them here is that every `**Verification**` line name a
+real command rather than describe one. **Fix every failure and run them again** — do not report a
+blueprint that its own validators reject. If the applier reports a task it could not apply, that
+task's Before block does not match the file it claims to edit, which is a defect in this document and
+not in the applier.
 
 These are machine-checked, so they are not repeated as prose rules elsewhere: task coverage, a Why per
 task, Before line references and edge anchors, multi-file labels, placeholder content, source freshness,

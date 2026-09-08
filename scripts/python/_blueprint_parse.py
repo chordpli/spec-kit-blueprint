@@ -12,6 +12,7 @@ and a plain regex over the document reads those as structure.
 """
 from __future__ import annotations
 
+import difflib
 import os
 import re
 import subprocess
@@ -700,11 +701,27 @@ def after_additions(section: str) -> list:
     A modify hunk's After repeats the lines around the change; those are quotations of
     existing code, and scanning them reported an untouched `if` in the context as body
     logic. Only what the After adds was authored here.
+
+    This is a POSITIONAL diff, not a set difference. A set difference deletes an added
+    line whenever some quoted context line happens to have the same characters, and the
+    lines that collide are the commonest lines there are: `raise NotImplementedError(`,
+    a bare `)`, a bare `}`. 3a-G recommends quoting the previous task's marker as the
+    context above a new one, so the shape that lost its own marker was the shape the
+    rules ask for — the task-id check went silent on it, and the body-logic finding then
+    said "a block with no marker" about a block whose marker it had just removed.
     """
     out = []
     for before, after in BEFORE_AFTER_RE.findall(section):
-        kept = {ln.strip() for ln in before.split("\n") if ln.strip()}
-        added = [ln for ln in after.split("\n") if ln.strip() and ln.strip() not in kept]
+        b_lines, a_lines = before.split("\n"), after.split("\n")
+        matcher = difflib.SequenceMatcher(
+            a=[ln.strip() for ln in b_lines],
+            b=[ln.strip() for ln in a_lines],
+            autojunk=False,
+        )
+        added = []
+        for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+            if tag in ("replace", "insert"):
+                added += [ln for ln in a_lines[j1:j2] if ln.strip()]
         if added:
             out.append("\n".join(added))
     return out

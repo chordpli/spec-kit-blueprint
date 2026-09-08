@@ -121,23 +121,28 @@ AWK
 # === Resolve feature directory ===
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+USAGE="Usage: $0 [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]"
 STRICT=false
 FRESH=false
 MARKERS=false
 DONE=false
+ALL=false
 ARGS=()
+PASSTHROUGH=()
 for arg in "$@"; do
     case "$arg" in
-        --strict) STRICT=true ;;
-        --fresh)  FRESH=true ;;
-        --markers) MARKERS=true ;;
-        --done)   DONE=true ;;
+        --strict) STRICT=true; PASSTHROUGH+=("$arg") ;;
+        --fresh)  FRESH=true; PASSTHROUGH+=("$arg") ;;
+        --markers) MARKERS=true; PASSTHROUGH+=("$arg") ;;
+        --done)   DONE=true; PASSTHROUGH+=("$arg") ;;
+        --all)    ALL=true ;;
         --help|-h)
-            echo "Usage: $0 [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers]"
+            echo "$USAGE"
             echo "  --fresh    the scaffold was just written; a declared file with no marker is a defect"
             echo "  --done     the feature is finished; a declared file that still has a marker is a defect"
             echo "  --markers  list the markers left in the declared files, and exit"
             echo "  --strict   check files on disk even in a mode that writes none"
+            echo "  --all      run over every specs/*/ that has a blueprint, and fail if any does"
             exit 0 ;;
         # A typo swallowed silently is a gate that quietly stops being one. `--frsh`
         # turned two failures into a warning and exit 1 into exit 0, and nothing said so;
@@ -145,7 +150,7 @@ for arg in "$@"; do
         # flags are the ones that decide FAIL from WARN.
         -*)
             echo -e "${RED}ERROR: unknown option: $arg${NC}" >&2
-            echo "Usage: $0 [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers]" >&2
+            echo "$USAGE" >&2
             exit 2 ;;
         *)        ARGS+=("$arg") ;;
     esac
@@ -154,6 +159,48 @@ done
 if [[ "$FRESH" == true ]] && [[ "$DONE" == true ]]; then
     echo -e "${RED}ERROR: --fresh and --done are opposite claims about the same tree.${NC}" >&2
     exit 2
+fi
+
+# --all sweeps the repository instead of one feature.
+#
+# Every check here is scoped to the files ONE blueprint declares, which means the
+# question "is anything in this repository still unfinished" needs one run per feature —
+# and to know which feature to ask about you have to already know the answer. A reviewer
+# carried twenty-two markers across five finished features and only found them by typing
+# --done against a blueprint they had guessed at. This is the sweep that makes --done a
+# gate a repository can run rather than a question a person has to think of.
+if [[ "$ALL" == true ]]; then
+    if [[ ${#ARGS[@]} -gt 0 ]]; then
+        echo -e "${RED}ERROR: --all runs over every feature; do not also name one.${NC}" >&2
+        exit 2
+    fi
+    SWEEP_RC=0
+    SWEEP_BAD=()
+    SWEEP_N=0
+    for d in "$REPO_ROOT"/specs/*/; do
+        [[ -f "$d/blueprint.md" ]] || continue
+        SWEEP_N=$((SWEEP_N + 1))
+        rel="${d#$REPO_ROOT/}"; rel="${rel%/}"
+        [[ "$MARKERS" == true ]] || echo -e "\n${CYAN}########## $rel ##########${NC}"
+        # `|| true` under `set -e`: a red feature must not stop the sweep at the first one.
+        bash "$0" "$rel" "${PASSTHROUGH[@]}" || {
+            SWEEP_RC=1
+            SWEEP_BAD+=("$rel")
+        }
+    done
+    if [[ "$SWEEP_N" -eq 0 ]]; then
+        echo -e "${YELLOW}no specs/*/blueprint.md found — nothing to sweep${NC}" >&2
+        exit 0
+    fi
+    if [[ "$MARKERS" != true ]]; then
+        echo -e "\n${CYAN}########## sweep ##########${NC}"
+        if [[ ${#SWEEP_BAD[@]} -gt 0 ]]; then
+            echo -e "  ${RED}✗ ${#SWEEP_BAD[@]} of $SWEEP_N feature(s) did not pass: $(printf '%s, ' "${SWEEP_BAD[@]}" | sed 's/, $//')${NC}"
+        else
+            echo -e "  ${GREEN}✓ all $SWEEP_N feature(s) passed${NC}"
+        fi
+    fi
+    exit "$SWEEP_RC"
 fi
 
 # --markers is a listing, so stdout carries only the list; the banner and the check
@@ -368,6 +415,95 @@ if [[ -z "$OWN_IDS" ]]; then
     OWN_IDS=$(grep -oE '^###[[:space:]]+T[0-9]+' "$GUIDE" 2>/dev/null | grep -oE 'T[0-9]+' | sort -u || true)
 fi
 
+# The blueprint as one line, every run of whitespace collapsed to a single space.
+#
+# A marker's message wraps twice and in two unrelated places: once in the document, where
+# the generator wrapped its prose, and once in the file, where the language wrapped the
+# string literal. Reading a run of characters out of one and searching the other for it
+# verbatim therefore fails whenever the run crosses either wrap — and the run is taken
+# from the START of the message, which is exactly where a long message is still on its
+# first physical line in one place and already on its second in the other. Measured on a
+# tree this extension had just scaffolded: four of five markers written out of the
+# blueprint byte-for-byte were labelled "the wording is not the blueprint's".
+#
+# Flattening both sides removes the question. It costs one pass over the document.
+GUIDE_FLAT=$(tr '\n' ' ' < "$GUIDE" 2>/dev/null | tr -s '[:space:]' ' ' || true)
+
+# Is this marker message the blueprint's own wording? Both sides flattened; a message too
+# short to be distinctive is not evidence either way and counts as the document's.
+bp_has_wording() {
+    local msg flat
+    msg="$1"
+    flat=$(printf '%s' "$msg" | tr '\n' ' ' | tr -s '[:space:]' ' ')
+    flat="${flat# }"
+    flat="${flat:0:48}"
+    [[ ${#flat} -lt 16 ]] && return 0
+    case "$GUIDE_FLAT" in
+        *"$flat"*) return 0 ;;
+    esac
+    return 1
+}
+
+# One extractor for every reader of a marker on disk.
+#
+# A marker's message wraps: Python's `raise NotImplementedError(` puts its string on the
+# next line, and that is the shape this extension's own --scaffold writes. Anything that
+# reads a marker one physical line at a time sees the call and never the task id. The
+# --markers listing learned to join those lines; check 3a below was written afterwards
+# and did not, so on a tree holding thirty-three wrapped markers it found none of them
+# and printed "no task ticked [X] still has its marker in the file" in the same run in
+# which check 3b reported all thirty-three. Both now read the same joined text.
+#
+# Emits `<line number>: <joined text>` for every line that carries a marker.
+MARKER_JOIN_AWK='
+    { lines[NR] = $0 }
+    END {
+        for (i = 1; i <= NR; i++) {
+            if (lines[i] !~ re) continue
+            out = lines[i]; sub(/^[ \t]+/, "", out)
+            # How far the message has already been consumed. Without this the
+            # continuation loop below started again at i and appended line i+1 a
+            # second time, so every wrapped marker printed its first string
+            # literal twice — reported on a marker copied verbatim out of the
+            # blueprint, which is the commonest shape there is.
+            last = i
+            if (out !~ /T[0-9]+:/ && i < NR) {
+                nxt = lines[i + 1]; sub(/^[ \t]+/, "", nxt)
+                if (nxt ~ /T[0-9]+:/) { out = out " " nxt; last = i + 1 }
+            }
+            # A message split across concatenated string literals showed only
+            # its first physical line. Executable markers only: a comment marker
+            # has no closing paren to stop at, so this ran on and pulled the code
+            # under it into the listing cleanup is supposed to read.
+            if (out ~ /(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\(/) {
+                j = last
+                while (out !~ /\)[[:space:]]*;?[[:space:]]*$/ && j < NR && j - i < 6) {
+                    j++; cont = lines[j]; sub(/^[ \t]+/, "", cont)
+                    if (cont == "") break
+                    out = out " " cont
+                }
+            }
+            print i ": " out
+        }
+    }'
+
+# The task id a joined marker line claims, and the message after it — or nothing when the
+# line carries a marker whose message does not begin with a task id. Sets MK_ID / MK_MSG.
+MK_OWNER_RE='(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\([[:space:]]*["'"'"'`]?[[:space:]]*T[0-9]+[[:space:]]*:'
+MK_TODO_RE='TODO\(blueprint\)[^T]*T[0-9]+[[:space:]]*:'
+marker_owner() {
+    local joined="$1"
+    MK_ID=""; MK_MSG=""
+    if [[ "$joined" =~ $MK_OWNER_RE ]] || [[ "$joined" =~ $MK_TODO_RE ]]; then
+        MK_ID=$(printf '%s' "${BASH_REMATCH[0]}" | grep -oE 'T[0-9]+' | head -1 || true)
+        [[ -n "$MK_ID" ]] || return 1
+        MK_MSG="${joined#*$MK_ID:}"
+        MK_MSG=$(printf '%s' "$MK_MSG" | sed -e 's/^[[:space:]]*//' -e 's/["'"'"'`]//g')
+        return 0
+    fi
+    return 1
+}
+
 if [[ "$MARKERS" == true ]]; then
     found=0
     for f in "${DECLARED[@]}"; do
@@ -387,11 +523,17 @@ if [[ "$MARKERS" == true ]]; then
             # The task id decides who COULD own it; the wording decides whether this
             # document wrote it. Neither alone is enough — ids restart at T001 in every
             # feature — so both are read and the uncertain case says it is uncertain.
-            mk_id="$(printf '%s' "$hit" | grep -oE 'T[0-9]+' | head -1)"
-            probe="${hit#*T}"; probe="${probe#*: }"; probe="${probe:0:48}"
+            # `|| true`, and it is load-bearing. `set -eo pipefail` is on, grep exits 1
+            # when it matches nothing, and a command substitution in an assignment hands
+            # that status to the shell — so the listing DIED on the first marker whose
+            # message carries no task id, printed nothing further, and exited 1. That is
+            # exactly the `[not this feature's]` case the three-way label exists for, and
+            # /speckit.blueprint.cleanup starts from this listing: its mechanical half was
+            # being silently truncated at the one marker it most needed to show.
+            mk_id="$(printf '%s' "$hit" | grep -oE 'T[0-9]+' | head -1 || true)"
+            probe="${hit#*T}"; probe="${probe#*: }"
             verbatim=false
-            [[ ${#probe} -lt 16 ]] && verbatim=true
-            grep -qF -- "$probe" "$GUIDE" 2>/dev/null && verbatim=true
+            bp_has_wording "$probe" && verbatim=true
             id_is_ours=false
             if [[ -n "$mk_id" ]] && printf '%s\n' "$OWN_IDS" | grep -qx -- "$mk_id"; then
                 id_is_ours=true
@@ -404,37 +546,7 @@ if [[ "$MARKERS" == true ]]; then
                 echo "$f:$hit   [not this feature's — no task $mk_id here, and the wording is not the blueprint's]" >&3
             fi
             found=$((found + 1))
-        done < <(awk -v re="TODO[(]blueprint[)]|$MARKER_ERE" '
-            { lines[NR] = $0 }
-            END {
-                for (i = 1; i <= NR; i++) {
-                    if (lines[i] !~ re) continue
-                    out = lines[i]; sub(/^[ \t]+/, "", out)
-                    # How far the message has already been consumed. Without this the
-                    # continuation loop below started again at i and appended line i+1 a
-                    # second time, so every wrapped marker printed its first string
-                    # literal twice — reported on a marker copied verbatim out of the
-                    # blueprint, which is the commonest shape there is.
-                    last = i
-                    if (out !~ /T[0-9]+:/ && i < NR) {
-                        nxt = lines[i + 1]; sub(/^[ \t]+/, "", nxt)
-                        if (nxt ~ /T[0-9]+:/) { out = out " " nxt; last = i + 1 }
-                    }
-                    # A message split across concatenated string literals showed only
-                    # its first physical line. Executable markers only: a comment marker
-                    # has no closing paren to stop at, so this ran on and pulled the code
-                    # under it into the listing cleanup is supposed to read.
-                    if (out ~ /(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\(/) {
-                        j = last
-                        while (out !~ /\)[[:space:]]*;?[[:space:]]*$/ && j < NR && j - i < 6) {
-                            j++; cont = lines[j]; sub(/^[ \t]+/, "", cont)
-                            if (cont == "") break
-                            out = out " " cont
-                        }
-                    }
-                    print i ": " out
-                }
-            }' "$REPO_ROOT/$f")
+        done < <(awk -v re="TODO[(]blueprint[)]|$MARKER_ERE" "$MARKER_JOIN_AWK" "$REPO_ROOT/$f")
     done
     echo "  ($found marker line(s) in ${#DECLARED[@]} declared file(s))" >&2
     exit 0
@@ -756,29 +868,26 @@ if [[ ${#DECLARED[@]} -gt 0 ]] && [[ -n "$OWN_IDS" ]]; then
         LIVE_TICKED=()
         for f in "${DECLARED[@]}"; do
             [[ -f "$REPO_ROOT/$f" ]] || continue
-            while IFS= read -r probe_line; do
-                [[ -n "$probe_line" ]] || continue
-                mk_id="${probe_line%%$'\t'*}"
-                mk_msg="${probe_line#*$'\t'}"
-                printf '%s\n' "$CHECKED_ROWS" | grep -qx -- "$mk_id" || continue
-                [[ ${#mk_msg} -ge 16 ]] || continue
-                grep -qF -- "${mk_msg:0:40}" "$GUIDE" 2>/dev/null || continue
+            while IFS= read -r hit; do
+                [[ -n "$hit" ]] || continue
+                # The same joined text --markers reads, and the same two-halves test.
+                # This block used to run its own awk that required the marker call and
+                # the `T0NN:` to be on one physical LINE. Python wraps them onto two, and
+                # so does this extension's own --scaffold, so on a tree of thirty-three
+                # markers written by this tool the check matched none of them: it printed
+                # "no task ticked [X] still has its marker in the file" in the same run in
+                # which check 3b named the files carrying them. Folding the marker onto
+                # one line — changing not a character of its wording — made it fire at
+                # once. The count this check was measured at (6 of 118 blueprints) was a
+                # parser's blind spot as much as a rule's precision.
+                marker_owner "$hit" || continue
+                printf '%s\n' "$CHECKED_ROWS" | grep -qx -- "$MK_ID" || continue
+                bp_has_wording "$MK_MSG" || continue
+                [[ ${#MK_MSG} -ge 16 ]] || continue
                 dup=false
-                for q in "${LIVE_TICKED[@]}"; do [[ "${q%% *}" == "$mk_id" ]] && dup=true && break; done
-                [[ "$dup" == true ]] || LIVE_TICKED+=("$mk_id ($f)")
-            done < <(awk '
-                match($0, /(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\([[:space:]]*["'"'"'`]?[[:space:]]*T[0-9]+[[:space:]]*:/) {
-                    s = substr($0, RSTART, RLENGTH); rest = substr($0, RSTART + RLENGTH)
-                    if (match(s, /T[0-9]+/)) { id = substr(s, RSTART, RLENGTH) } else next
-                    sub(/^[ \t]+/, "", rest); gsub(/["'"'"'`]/, "", rest)
-                    print id "\t" rest; next
-                }
-                match($0, /TODO\(blueprint\)[^\n]*T[0-9]+[[:space:]]*:/) {
-                    s = substr($0, RSTART, RLENGTH); rest = substr($0, RSTART + RLENGTH)
-                    if (match(s, /T[0-9]+/)) { id = substr(s, RSTART, RLENGTH) } else next
-                    sub(/^[ \t]+/, "", rest)
-                    print id "\t" rest
-                }' "$REPO_ROOT/$f")
+                for q in "${LIVE_TICKED[@]}"; do [[ "${q%% *}" == "$MK_ID" ]] && dup=true && break; done
+                [[ "$dup" == true ]] || LIVE_TICKED+=("$MK_ID ($f)")
+            done < <(awk -v re="TODO[(]blueprint[)]|$MARKER_ERE" "$MARKER_JOIN_AWK" "$REPO_ROOT/$f")
         done
         if [[ ${#LIVE_TICKED[@]} -gt 0 ]]; then
             SHOWN=("${LIVE_TICKED[@]:0:6}")
@@ -1016,8 +1125,20 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
                 MISSING_HOOKS+=("$sym_path \`$sym_name\`")
                 continue
             fi
+            # A third state between the two flags, read off the tree instead of asked for.
+            # "Mid-flight" is the reason this is a warning by default — but a file with no
+            # not-implemented marker anywhere in it is a file nobody is mid-flight on.
+            # Either the symbol was renamed (the blueprint is stale and the document is
+            # the fix) or it is gone. A reviewer deleted a declared function outright,
+            # leaving a tree whose application would not start, and the default run said
+            # `PASSED with warnings` and exit 0; --done caught it, and --done is a flag
+            # you have to know to type. This costs no false positives on a half-typed
+            # file, because a half-typed file still has its marker.
             if [[ "$FRESH" == true ]] || [[ "$DONE" == true ]]; then
                 fail "$sym_path — the blueprint declares \`$sym_name\` and the file does not declare it"
+            elif ! grep -q "$NOT_IMPL_RE" "$REPO_ROOT/$sym_path" 2>/dev/null \
+                 && ! grep -qE 'TODO\(blueprint\)' "$REPO_ROOT/$sym_path" 2>/dev/null; then
+                fail "$sym_path — the blueprint declares \`$sym_name\`, the file does not declare it, and the file carries no marker: nothing here is unfinished, so the name was renamed or removed"
             else
                 warn "$sym_path — the blueprint declares \`$sym_name\` and the file does not declare it (renamed, or the task never landed)"
             fi

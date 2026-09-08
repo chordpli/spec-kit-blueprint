@@ -7,6 +7,190 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The previous entry was audited by reproduction, and the three reviewers converged on one line
+of one file. `speckit.blueprint.validate.md` told its reader to run four commands, and neither
+`--verify` nor `--done` — the two features that entry is about — was among them. Measured
+independently on three repositories: a tree with a declared function deleted, so the
+application would not import; a tree with twenty-two not-implemented markers across five
+"finished" features and two test classes no runner calls; and a tree with a checklist claiming
+work nobody had started. **All four commands exited 0 on every one of them.** Typing
+`--verify` or `--done` by hand caught all three. The features existed and were not delivered;
+from where a first-year developer stands, that is indistinguishable from not having built them.
+
+That is fixed first, in all four command documents and the README, as a second copyable block
+rather than a paragraph a reader has to reach.
+
+The second half of this entry is about the corpus the previous entry introduced. A reviewer
+planted 46 regressions into a copy of the extension and asked it about each one: **it caught
+14 (30.4%)**, including **0 of the 9 defects the previous entry itself announced fixing**, and
+0 of 5 checks downgraded from failure to warning. The diagnosis is exact and is now written
+into `tests/fixtures/README.md`: the corpus ran each tool once with no flags, over three
+documents that were all clean, and a check that never speaks cannot be observed to have been
+switched off. Pinning more detail about a silent check does nothing — the reviewer measured
+that too, and the number did not move. The corpus now runs thirteen command lines per fixture
+and three of its six fixtures are red on purpose. Re-measured with the reviewer's own harness
+against the same 46 regressions: **14 → 39 (30.4% → 84.8%)**, and the harness's control — a
+change that alters no behaviour — is still correctly not flagged. By category: the
+authored/quoted judgment 7/14 → **14/14**, checks switched off 2/8 → **8/8**, checks
+downgraded 0/5 → **5/5**, this cycle's own announced fixes 0/9 → **6/9**. Three of the three
+cases whose anchor text these fixes moved were re-pointed at the same regression in the new
+code rather than dropped; none is weakened.
+
+It also carries a `--coverage` mode that names every finding the three scripts can print which
+no fixture has ever produced. That number is 18 of 56 today. It is printed rather than
+estimated because the mistake this repository keeps making is building an instrument and not
+measuring it — the previous entry did it to the checks, and then did it again to the corpus
+built to stop it.
+
+### Added
+
+- **Block A / block B in `speckit.blueprint.validate.md`.** The commands that read the document
+  and the commands that read your tree are now two lists with the commit each belongs to named
+  above it, and the reason block B is not optional is stated with the three measurements above
+  it. `README.md` carries the same split, and a table saying which gate belongs on which commit
+- **`validate-scaffold.sh --all`** runs over every `specs/*/` that has a blueprint and fails if
+  any does. Every check in that script is scoped to the files one blueprint declares, so "is
+  anything in this repository unfinished" needed one run per feature — and to know which feature
+  to ask about you had to already know the answer. A reviewer's twenty-two markers were spread
+  over five features and found by guessing which blueprint to name. Combines with `--done` and
+  with `--markers`
+- **`apply_blueprint.py --through T0NN`** applies the document only as far as one task — a
+  bisector for a blueprint whose build fails, where the alternative was deleting sections by
+  hand. Asked for in four consecutive rounds and never answered, not even with a refusal. The
+  `coverage:` denominator stays the whole document, so a truncated run reports the fraction it
+  actually tested instead of 100% of what was left, and it names the tasks it did not reach
+- **A declared name missing from a file that carries no marker is a failure on a plain run.**
+  "The developer has not typed it yet" is why this is normally a warning, and a file with no
+  marker is a file nobody is part-way through. This is the case a reviewer built by deleting a
+  declared function outright: the tree would not import and the plain run said `PASSED with
+  warnings`
+- **`self_test.py --coverage`**, and `self_test.py` in `extension.yml` and in the validate
+  command. It was installed into every tree for a release with no command, hook or manifest
+  entry naming it — a habit of the author's rather than a gate anyone else could run
+- **Three fixtures, two of them red.** `dirty-guide` (a document that trips fourteen checks a
+  clean one silences), `broken-hunks` (the six hunk failures in section 3, one per task — none
+  had ever fired inside the corpus), `quoting-only` (every checkable shape appears **only**
+  inside quotations, so a check that starts reading raw sections speaks up). The corpus also
+  runs `--strict-guide`, `--verify`, `--fresh`, `--done`, `--strict`, `--markers`, `--all` and a
+  mistyped flag on every fixture
+- **`--scaffold` names the files whose bytes a code block cannot state** — `.csv`, `.golden`,
+  `.snap`, binaries. It still writes them; it no longer writes them silently
+
+### Fixed
+
+- **`--verify` shipped the bug this cycle's notes describe fixing in `--build`.** `build_excerpt`
+  ("first error, then the tail") is used by `run_build`; `_run_one`, ten functions away, returned
+  `(stdout + stderr)[-8:]`. A test runner writes failures to stdout and a compiler writes
+  warnings to stderr, so the tail is always the warnings: a reviewer's tree with an emptied
+  policy body and a tree with a Key Decision implemented backwards produced **byte-identical**
+  `--verify` output, neither showing one character of the twelve and three failures the runner
+  had printed. The streams are now excerpted separately and labelled, with a failure vocabulary
+  a test runner actually uses — the compiler's `error`/`cannot find symbol` matches none of
+  `ran 157 checks, 12 failures`
+- **A failed verification no longer prints `Blueprint did NOT apply cleanly`.** It went into the
+  same `rc` as an apply failure, so the run said the document was wrong three lines under its
+  own `FAILED: 0`. The document's verdict and the tree's verdict are two sentences about two
+  artifacts; the exit code is still non-zero for either
+- **`14 task(s) do not:` listed ten of them and borrowed its verb.** The `(+N more)` the green
+  line one row above already had was missing, and the sentence took "verify against your tree"
+  from a line that is not printed when nothing is green — which is the state of the first run
+  anybody makes
+- **The Checklist check could not read the markers this extension writes.** It required the
+  not-implemented call and its `T0NN:` on one physical line; Python wraps them onto two, and so
+  does `--scaffold`. On a tree holding thirty-three such markers it matched **none**, printing
+  `no task ticked [X] still has its marker in the file` in the same run in which the next check
+  named the files holding them. Folding one marker onto a single line, changing not a character
+  of its wording, made it fire at once. It now uses the same joined-line extractor as
+  `--markers`. **The "6 of 118 blueprints" figure above was measured with that parser and is a
+  lower bound; it has not been re-measured, because that corpus is not in this repository**
+- **`--markers` labelled markers copied out of the blueprint verbatim as reworded.** Ownership
+  compared a 48-character run of the message against the raw document. A message wraps twice, in
+  two unrelated places — where the generator wrapped its prose, where the language wrapped the
+  string literal — so a run taken from the start of the message crosses a break on one side and
+  not the other. Four of five markers this extension had just scaffolded were labelled `the
+  wording is not the blueprint's`. Both sides are now compared with whitespace flattened
+- **`--markers` stopped at the first marker with no task id, and exited 1.** `set -eo pipefail`
+  is on and `grep` exits 1 when it matches nothing, so the command substitution that reads the
+  id killed the script. That is precisely the `[not this feature's]` case the three-way label
+  was built for, and `/speckit.blueprint.cleanup` starts from this listing — its mechanical half
+  was being truncated at the one line it most needed to show. Found while building a fixture,
+  reproduced against the released script
+- **`after_additions` deleted lines the task had authored.** It computed what an `**After**`
+  adds as a *set difference* against its `**Before**`, so any added line whose characters match
+  some quoted context line vanished — and the colliding lines are the commonest in any language:
+  `raise NotImplementedError(`, a bare `)`, a bare `}`. Because 3a-G recommends quoting the
+  previous task's marker as the context above a new one, the shape that lost its own marker was
+  the shape the rules ask for: the task-id check went silent on it, and the body-logic finding
+  then reported "a block with no marker" about a block whose marker it had just removed. It is a
+  positional diff now
+- **`os.path.basename('specs/004-x/')` is the empty string**, and a trailing slash is what shell
+  completion puts there. The identifier check's entire value is its remedy, and on that argument
+  form the remedy read ``write ` plan D5` `` — the number missing, which is the defect being
+  reported
+- **Exit 3 said "nothing here says the document is wrong" over a tree that would not compile.**
+  True about the document, and not the whole sentence: a build did fail, over the developer's own
+  files. It now names the moved files and says to read the compiler's lines before concluding the
+  distance explains them
+- **The count of checks exempt from `authored_blocks()` was 1 in `tests/fixtures/README.md`, 2 in
+  `speckit.blueprint.validate.md`, and 3 in the code.** All three say three, and the third
+  exemption — the skeleton-drift check, which compares a block to a file byte for byte and so
+  needs the block as written — now carries its reason beside it like the other two
+- **`self_test.py --update` blessed regressions in silence.** Plant one, run it, and the corpus
+  adopted it as the new truth; the docstring said "read the diff first", which is a request. It
+  prints the diff whether you want it or not and refuses to write without `--i-read-the-diff`
+- **The `clean-guide` fixture was not clean.** `tests/fixtures/README.md` introduced it as "the
+  shape the rules recommend produces no findings at all" and its `expected.txt` carried
+  `⚠ no **Sources** stamp` — a header the generate rules **require**. It has a current stamp now,
+  which also makes it the one fixture that exercises the freshness check's passing path
+- **`quoted-not-authored` did not pin what its own row claimed.** The table said it fixes "a
+  marker authored once and quoted twice is one author"; the check that reads that fires at three
+  tasks, and the fixture had two, so it stayed silent whether the attribution was right or wrong.
+  It has a third quoting task
+- **`apply_blueprint.py`'s usage line listed three of its six flags**, so the error a mistyped
+  flag prints advertised neither `--verify` nor `--scaffold` nor `--verbose`
+- **The `check-prerequisites.sh` mismatch guard is now in all four command documents.** On branch
+  `007-…` a stale `.specify/feature.json` answers `specs/004-…` with exit 0 and no error —
+  reproduced in three consecutive rounds. `cleanup` and `review` told the reader to stop and ask;
+  `generate` and `validate` did not, and `validate`'s execution block is the one that passes that
+  answer to every script
+- **`cleanup`'s FALSIFIED scope contradicted guide mode.** It asked for "any file the blueprint's
+  Why sections cite", which includes `spec.md` and `plan.md` — the two documents guide mode
+  promises the developer need not reopen. Those three artifacts are `review upstream`'s subject
+  and are out of cleanup's scope; `docs/**` and root `*.md` stay in
+- **`.extensionignore` matched `.omc/` only at the root.** A reviewer found two session-state
+  files under `scripts/python/.omc/` in an installed copy. They are not in this repository's
+  history — `.gitignore` has always caught them — but the packaging filter and the git filter are
+  different filters and only one had been hardened
+
+### Not done, and why
+
+- **Portable `review ask` — questions from "a diff and the artifacts it cites" rather than from a
+  blueprint** (a reviewer's narrowed re-submission after two rounds of reserving judgment).
+  **Declined, recorded here rather than left open.** The reviewer's own audit of the feature in
+  the same round found that its grading is meaningless in the way this extension is actually used
+  — the agent that wrote the blueprint is the agent that grades the answers — and the questions'
+  quality comes from precisely the input the proposal removes: the Key Decisions, the delegated
+  decisions, the resolved Open Questions. Replacing that with a heuristic over a diff is a new
+  question-source with no measurement behind it, and this repository's own rule is not to ship a
+  rule it has not measured. If the grading problem is solved first, the input question becomes
+  worth reopening
+- **The seven of the reviewer's 46 still not caught, named rather than absorbed into the
+  headline.** `REG3`, `REG4` and `RX1` all fail for one reason: what they break is printed by the
+  applier *outside* a `⚠`/`✗` finding — the untracked-file sweep line, the build excerpt, the
+  marker-line span — and the corpus pins findings. `REG9` needs a fixture that quotes a markdown
+  template carrying `**Before**` inside a fence. `RX3`, `RX5` and `RX7` remove one alternative
+  from a regex whose finding already fires for another reason, so catching them means a fixture
+  whose *only* hit of that class is the shape being tested: one fixture per rule, linear, and
+  `--coverage` now prices that per check instead of leaving it to be guessed at
+- **A fourth ownership label for a marker whose message carries no task id.** `--markers` prints
+  it unlabelled, which reads as "yours". Observed while fixing the crash above; changing it
+  widens a contract three documents describe, and it was not measured
+- Everything already listed under this heading later in this file still stands
+
+---
+
+## Earlier in this unreleased cycle — the round that built `--verify`, `--done` and the corpus
+
 Three reviewers each planted deliberate defects in a working tree and measured what the tools
 said. Together they planted 25 and the tools caught 7 — and of the eight that broke behaviour
 outright, including one that stopped the application importing at all, the count was zero. In

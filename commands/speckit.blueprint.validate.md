@@ -17,12 +17,23 @@ If arguments contain a directory path, use it as the feature directory. Otherwis
 ## Prerequisites
 
 - `blueprint.md` must exist (run `/speckit.blueprint.generate` first)
-- The applier is a **pre-implementation** tool — run it before the tasks are typed, not after
+- `apply_blueprint.py --build` is a **pre-implementation** check — run it before the tasks are typed, not after. `--verify` is the opposite: it needs the bodies to exist
 - The scaffold validator needs scaffold mode to have been used, or `--strict`
 
 ## Execution
 
-Run all three from the repository root, in this order:
+**First decide which commit you are on**, because the two lists below answer different
+questions and running the wrong one is how this command stayed green over a tree that
+would not start.
+
+- **The blueprint commit** — the document exists, the bodies do not. Run block A.
+- **The commit that closes the feature** — the bodies are typed and you are claiming the
+  work is done. Run block A **and** block B.
+
+If you cannot tell, run both: block B on an unfinished feature is red by construction and
+says so in its own output, which is a cheaper mistake than the other one.
+
+### Block A — is the document sound? (any commit)
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
@@ -32,7 +43,26 @@ python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATUR
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR"
 ```
 
-Each answers a different question:
+### Block B — is the tree finished, and does it do what the document asked?
+
+```bash
+# every task's **Verification** line, against YOUR working tree
+python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
+# no declared file still carries a marker, no declared name is missing, no ticked row lies
+bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
+# and the same question about the whole repository, not just this feature
+bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
+```
+
+**Block B is not optional prose.** Everything block A runs is a question about the
+document, and a document can be perfect over a tree whose application does not start.
+Measured by three reviewers on this release, independently: a tree with a declared
+function deleted outright, a tree with twenty-two not-implemented markers across five
+"finished" features, and a tree with two test classes no runner calls — all four commands
+in block A exited 0 on every one of them, and `--verify` and `--done` caught all three.
+The features existed; the list did not name them, so nobody ran them.
+
+Each script answers a different question:
 
 | Script | Question it answers |
 |--------|---------------------|
@@ -67,9 +97,17 @@ command that begins with a runner (`python3`, `bash`, `mvn`, `npm`, `go`, `./gra
 rest of the line is prose for you, and a sentence that predicts its own failure ("`bash tools/build.sh`
 fails until T003 supplies an implementation") is not run at all, because running it and counting the
 failure is the tool disagreeing with a sentence it just read. Identical commands run once and the
-report says so: `ran 2 distinct command(s) covering 13 task(s)`. It is opt-in for the same reason
-`--build` is a flag: these are shell commands out of a generated document, and running them is a
-decision the caller makes. A failing verification exits non-zero.
+report says so: `ran 2 distinct command(s) covering 13 task(s)`. It is a flag for the same reason
+`--build` is: these are shell commands out of a generated document, and running them is a decision
+the caller makes — which is why block B above makes the decision explicitly rather than leaving it
+to whether the reader got this far. A failing verification exits non-zero.
+
+A failed verification is reported as a fact about **your tree**, on its own line, and never as
+`Blueprint did NOT apply cleanly`: the document placed and compiled, and telling a developer
+otherwise sends them to regenerate a blueprint that was fine. The failure excerpt is taken from
+stdout and stderr separately, because a test runner writes failures to one and a compiler writes
+warnings to the other, and concatenating them means the tail is always the warnings — two entirely
+different defects produced byte-identical `--verify` output that way.
 
 It reads the tree rather than the applier's copy because of what that copy is. The applier deletes
 every file the blueprint declares new and rewrites them from the document — that is what makes its
@@ -95,7 +133,9 @@ A missing or unreadable `**Mode**:` line is a warning from all three tools rathe
 
 The applier refuses a code block whose `**`path`**` label names a file the task does not declare — following the label wrote the block to that path anyway, which put a skeleton back after the sweep below had removed it. It removes from its copy any file that no task declares and that was not in the commit the blueprint stamps, and any file that carries a blueprint marker but that no task declares — the residue of a deleted or renamed task — and says so, so that file cannot stand in for the task the document no longer has. It also warns when a task id has more than one section, since it applies both.
 
-If `check-prerequisites.sh` is missing or reports `Feature directory not found`, do not stop: none of the three scripts need it. Each resolves the feature from the branch prefix, or from a path given as the first argument, so `specs/NNN-name` on the command line is enough.
+If `check-prerequisites.sh` is missing or reports `Feature directory not found`, do not stop: none of these scripts need it. Each resolves the feature from the branch prefix, or from a path given as the first argument, so `specs/NNN-name` on the command line is enough.
+
+**Check that it answered about the feature you are on.** `check-prerequisites.sh` resolves the feature from `.specify/feature.json`, which is written by whichever specify command ran last and is not updated by switching branches. On branch `007-refund-window` it answers `specs/004-daily-debit-cap` with **exit 0 and no error** when that file is stale — reproduced on three separate rounds of review — and the blocks above then validate the wrong feature and report it green. Compare the directory it returned against the branch's own numeric prefix; if they disagree, **stop and ask** which feature is meant. The extension cannot fix that script, but it can refuse to build on its answer without looking.
 
 `--scaffold` copies the declared-new files out of the verified copy into your tree, after a clean apply. In a later slice of a split feature, those skeletons compile against the base slice's `(modify)` hunks, so scaffolding the second slice before the first's hunks are typed leaves the tree red on files the developer has not touched — type the base's hunks first. It writes only files the blueprint declares new and only ones not already there, so nothing existing is touched; it is how a scaffold mode should put files on disk, because the copy holds exactly what the document says and a generator writing forty skeletons by hand is where drift comes from.
 
@@ -104,6 +144,14 @@ When the header carries `**Base**: specs/{slice}/blueprint.md`, the tools read t
 **While you are implementing, this set is the wrong tool.** The applier's report is about a tree the blueprint has not been typed into; once you have started, it correctly says tasks are already there and cannot judge others, and none of that tells you whether your code works. Run the project's own tests instead, and come back to these when you regenerate.
 
 Both Python scripts take `--help`, and refuse an option they do not recognise rather than running as though it had not been typed.
+
+**If you are changing the extension itself rather than using it**, one more command, and it is the only one on this page that is not about your feature:
+
+```bash
+python3 .specify/extensions/blueprint/scripts/python/self_test.py
+```
+
+It runs the fixture corpus in `tests/fixtures/` — small trees with the exact findings the tools must produce for them — and fails on any difference. It was installed into every tree for a release without a single command, hook or document naming it, which made it a habit of the author's rather than a gate. Read `tests/fixtures/README.md` before adding a check; the corpus measures itself, and the number it reports is how much of the extension it actually covers.
 
 Three flags say what the scaffold validator cannot see for itself. `--strict` validates files on disk even when
 the blueprint records a file-less mode — for scaffolding done after generation. `--fresh` says the
@@ -119,6 +167,20 @@ carries a not-implemented marker is a failure, and so is a declaration the bluep
 the file does not have. Run it on the commit that closes the feature; the two flags contradict each
 other and passing both is an error.
 
+`--all` asks the same question of every `specs/*/` that has a blueprint, and fails if any of them
+does. Every check here is scoped to the files one blueprint declares, so "is anything in this
+repository still unfinished" needed one run per feature — and to know which feature to ask about you
+had to already know the answer. A reviewer carried twenty-two markers across five features that had
+each been called finished, and only found them by guessing which blueprint to type `--done` against.
+`--markers --all` is the same sweep as a listing.
+
+One severity is decided by the tree rather than by a flag. A declared name missing from a file that
+carries **no marker at all** is a failure on a plain run, not a warning: "the developer has not typed
+it yet" is the reason this is normally a warning, and a file with no marker is a file nobody is
+part-way through. Either the name was renamed — and then the blueprint is stale and the document is
+the fix — or the work is gone. A reviewer deleted a declared function outright, leaving a tree whose
+application would not import, and the plain run said `PASSED with warnings`.
+
 The declared-symbol check reads `(modify)` hooks as well as new files: what a hook introduces is what
 its `**After**` has and its `**Before**` does not. The two have different lifecycles, so a hook's
 declarations are not judged under `--fresh` (the developer has not typed them yet) and are judged
@@ -128,6 +190,18 @@ The Checklist is read too. A task ticked `- [X]` whose own marker is still sitti
 claim the tree contradicts — reported as a warning, and a failure under `--done`. Both halves have to
 match before it fires: the task id must be one of this feature's, and the marker's wording must be
 this blueprint's. The id alone fires on a `T014:` an earlier feature left behind.
+
+Both halves read the marker as **one joined line**, and both compare wordings with the whitespace
+flattened out. A marker's message wraps twice, in two unrelated places — once where the generator
+wrapped the document's prose, once where the language wrapped the string literal — and anything that
+reads a marker one physical line at a time sees the call and never the task id. The first version of
+this check did read it that way: on a tree holding thirty-three markers this extension's own
+`--scaffold` had written, it matched none of them and printed `no task ticked [X] still has its
+marker in the file` in the same run in which the next check named the files holding them. Folding one
+marker onto a single line, changing not a character of its wording, made it fire at once. `--markers`
+had the same defect in the other direction: four of five markers copied out of the blueprint
+byte-for-byte were labelled `the wording is not the blueprint's`, because the run of characters it
+compared crossed a line break on one side and not the other.
 
 Where `$FEATURE_DIR` is the `specs/{feature}/` directory path. If not provided by the user, resolve it automatically:
 
@@ -170,7 +244,9 @@ Format-level, so they hold for any language. Eleven numbered sections, in the or
 10. **Forward references**: every task id a task's prose points at — "defined in T019", "see T019", a `**Dependencies**` entry — has a section or a pre-completed row. A promise pointing at a task that never delivers is worse than an open question, because the reader stops looking
 11. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
 
-**Every check that reads code goes through one function**, `_blueprint_parse.authored_blocks()`, and that function decides what this document wrote: a fenced block that is neither a hunk nor an illustrative example, the lines each `**After**` adds that its `**Before**` did not have, and a `**Replace entire file**` block — tagged `reprint`, because most of a reprinted file was written by whoever wrote the file. Getting this wrong is the mistake this repository has made most often and in both directions, so it lives in one place and `tests/fixtures/` holds a fixture that fails the moment a check stops using it. Two exceptions, each with its own reason written beside it: the abbreviation check in section 3 reads `**Before**` blocks deliberately, and the JavaScript invented-type check needs the fence's language, which an After's added lines have nowhere to carry.
+**Every check that reads code goes through one function**, `_blueprint_parse.authored_blocks()`, and that function decides what this document wrote: a fenced block that is neither a hunk nor an illustrative example, the lines each `**After**` adds that its `**Before**` did not have, and a `**Replace entire file**` block — tagged `reprint`, because most of a reprinted file was written by whoever wrote the file. Getting this wrong is the mistake this repository has made most often and in both directions, so it lives in one place and `tests/fixtures/` holds fixtures that fail the moment a check stops using it. **Three** exceptions, each with its own reason written beside it in the code: the abbreviation check in section 3 reads `**Before**` blocks deliberately; the JavaScript invented-type check needs the fence's language, which an After's added lines have nowhere to carry; and the skeleton-drift check in section 3 compares a block to a file on disk byte for byte, so it needs the block as written rather than the lines an After adds. This paragraph said "two" and `tests/fixtures/README.md` said "one" while the code had three — the count is now the same in all three places, which is the least a document about mechanisms owes its own reader.
+
+What each `**After**` adds is computed as a **positional** diff against its `**Before**`, not a set difference. A set difference deletes an added line whenever some quoted context line happens to have the same characters, and the colliding lines are the commonest ones in any language: `raise NotImplementedError(`, a bare `)`, a bare `}`. Since 3a-G recommends quoting the previous task's marker as the context above a new one, the shape that lost its own marker was the shape the rules ask for — the task-id check went silent on it, and the body-logic finding then said "a block with no marker" about a block whose marker it had just deleted.
 
 The feature-number check uses the `reprint` tag to split its advice. An identifier the document authored gets "write `004 plan D5`"; one sitting inside a file this task reprints whole gets a different finding saying it is not this document's to renumber. Telling an author to stamp this feature's number onto an identifier an earlier feature wrote makes the tree more wrong, not less.
 
