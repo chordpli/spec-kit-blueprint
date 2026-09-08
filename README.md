@@ -1,3 +1,5 @@
+
+
 # Blueprint
 
 Pre-implementation blueprint generator. Reads spec artifacts and produces a single `blueprint.md` covering every task before `/speckit.implement` runs — either the complete code (`doc-only`, `scaffold`), or the signatures, the reasons and the pitfalls with the bodies left for you to write (`guide`).
@@ -158,7 +160,7 @@ Two things worth deciding up front on a team:
 | `guide` | Design-guidance blueprint — contracts and notes, no body code |
 | `guide scaffold` | Guide blueprint + compilable skeleton files on disk |
 
-**Requires**: `tasks.md` in the feature directory.
+**Requires**: `tasks.md`, `spec.md`, and `plan.md` in the feature directory.
 
 **Produces**: `specs/{feature}/blueprint.md` — structured by phase and task, with full content blocks, before/after diffs, key decisions, implementation order, and checklist.
 
