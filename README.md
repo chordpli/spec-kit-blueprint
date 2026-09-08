@@ -224,15 +224,32 @@ Disable hook: `specify extension disable blueprint`
 
 ## Validation Scripts
 
-The validate command runs three bundled scripts:
+The validate command runs two lists, and which one you want depends on the commit you are on.
+
+**On the blueprint commit** — the document exists, the bodies do not:
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature}
+# guide and guide scaffold only
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature} --strict-guide
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py specs/{feature} --build
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh specs/{feature}
 ```
 
-The middle one is the important one. It copies the working tree aside, types every task's code
+**On the commit that closes the feature**, add these two. They are the ones that read your code:
+
+```bash
+python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py specs/{feature} --verify
+bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
+```
+
+Do not skip the second list because the first one is green. Every command in the first list asks a
+question about the *document*, and a document can be sound over a tree whose application does not
+start. Three reviewers measured this independently on the previous release: a deleted declared
+function, twenty-two markers across five "finished" features, and two test classes no runner calls —
+the first list exited 0 on all three trees, and the second list caught all three.
+
+The `--build` line is the important one in the first list. It copies the working tree aside, types every task's code
 into that copy the way a developer would, and runs the project's build — so "this blueprint
 compiles" stops being a claim the generator makes about itself. Applying is deterministic: a
 `**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect
@@ -254,6 +271,7 @@ Every flag the three scripts take, since until now they were documented only in 
 | `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note. Declarations a `(modify)` hook introduces are not judged — the developer has not typed them yet |
 | `--done` | scaffold | The opposite claim: this feature is finished. A declared file that still carries a not-implemented marker is a failure, and so is a declaration the blueprint promised that the file does not have. Without either flag a marker is a green tick, which is how a repository can cross five features and leave fourteen markers in production code while this script prints `All checks passed` |
 | `--markers` | scaffold | List every marker left in the declared files as `path:line: text` and exit. This is what cleanup starts from |
+| `--all` | scaffold | Run over every `specs/*/` that has a blueprint and fail if any does. Combines with `--done` or `--markers`. Everything else here is scoped to one feature's declared files, so "is anything in this repository unfinished" required knowing which feature to ask about — which is the thing you do not know |
 
 An unknown flag on any of the three is an error, not a silently ignored word. `--frsh` used to
 turn two failures into a warning and exit 1 into exit 0.
@@ -321,6 +339,14 @@ not have that commit cannot answer, and they now report what they could not chec
 guessing — which is safe, and also means a shallow job verifies much less than it appears to. Set
 `fetch-depth: 0`. Run `validate_blueprint.py` and `apply_blueprint.py --build`; leave
 `--require-anchors` off unless you are gating the pre-implementation commit specifically.
+
+Gate the two commits differently, because they are two different claims:
+
+| Commit | Gate | Why |
+|---|---|---|
+| blueprint, no code yet | `validate_blueprint.py` + `apply_blueprint.py --build --require-anchors` | the document holds together and every hunk lands and compiles |
+| the one that closes the feature | `apply_blueprint.py --verify` + `validate-scaffold.sh --done` | the bodies do what the document asked, and nothing is left unfinished |
+| any commit, repository-wide | `validate-scaffold.sh --done --all` | a feature nobody is thinking about is exactly the one still carrying markers |
 
 Why a document validator: rules that live only in prose get followed inconsistently. Running this against two independently generated blueprints for the same feature caught the same defect in both — multi-file tasks that never said which code block belonged to which file — which no amount of reading had surfaced.
 

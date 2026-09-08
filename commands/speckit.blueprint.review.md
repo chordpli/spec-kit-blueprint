@@ -126,6 +126,8 @@ Rules for a question:
 
 Output the questions numbered, then **stop and wait**. Do not answer them yourself, do not guess what the developer would say, and do not proceed to Step 5 on invented answers. If the command is running with no human to answer — a scripted or agent-driven run — print the questions, say that grading needs a person, and end there. A quiz you both write and grade is not evidence of anything.
 
+**This mode needs a blueprint, and that is a boundary rather than an omission.** A reviewer proposed re-sourcing the questions from "a diff and the artifacts that diff cites", so that a team which never wrote a blueprint would get the same quiz — the most portable idea in this extension, tied to the least portable input. It is declined. The questions are good *because* of that input: Step 3 draws them from the decisions the document explicitly delegated, the alternatives it recorded as rejected, and the Open Questions it resolved. None of those exist in a diff, and inventing a substitute heuristic over one is a new question source with nothing measured behind it. There is also a prior problem: in the way this extension is most often used the agent that wrote the blueprint is the agent that would grade the answers, which is the situation the paragraph above refuses. Solve the grader before widening the input.
+
 ### Step 5: Grade Against the Blueprint and the Code
 
 When the answers come back, judge each one against what the blueprint says and what the code does. Three verdicts:

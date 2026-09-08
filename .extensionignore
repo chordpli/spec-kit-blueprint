@@ -1,5 +1,11 @@
 .github/
 .omc/
+# At any depth, not only the root. A reviewer found two session-state JSON files under
+# scripts/python/.omc/state/sessions/ in an installed copy, carried since the round-6
+# install commit: a root-anchored pattern had let a nested one through. They are not in
+# this repository's history — .gitignore has always caught them — but the packaging
+# filter and the git filter are different filters and only one of them was hardened.
+**/.omc/
 .git/
 *.test.*
 docs/

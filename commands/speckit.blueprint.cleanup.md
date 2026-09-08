@@ -44,7 +44,9 @@ The scan scope is **the files the blueprint touches**: every NEW and MODIFIED fi
 Implementation always drifts from the plan, so extend the scope by two rules:
 
 - Also include files that are **not** named in the blueprint but carry a `TODO(blueprint):` marker or a marker naming one of this feature's task IDs. Report these under a separate "outside the blueprint" heading — a file the plan never mentioned is a signal the blueprint is stale, not just a cleanup target.
-- Also include, **for the FALSIFIED verdict only**, decision records and prose docs that name a symbol this feature changed: `docs/**`, `*.md` at the repository root, and any file the blueprint's Why sections cite. A decision record is not in any diff, so code review does not catch it, and it was outside this command's scope while the verdict that exists for it — FALSIFIED — sat unusable. Read them, report what this feature made untrue, and **never edit them**: the FALSIFIED rule already says rewriting is the developer's call. Two rounds of review found the same ADR sentence made false by two different features with no machine signal of any kind.
+- Also include, **for the FALSIFIED verdict only**, decision records and prose docs that name a symbol this feature changed: `docs/**` and `*.md` at the repository root. A decision record is not in any diff, so code review does not catch it, and it was outside this command's scope while the verdict that exists for it — FALSIFIED — sat unusable. Read them, report what this feature made untrue, and **never edit them**: the FALSIFIED rule already says rewriting is the developer's call. Two rounds of review found the same ADR sentence made false by two different features with no machine signal of any kind.
+
+  **This feature's own `spec.md`, `plan.md` and `tasks.md` are out of scope here**, and that is a boundary rather than an oversight. An earlier wording asked for "any file the blueprint's Why sections cite", which includes exactly those three — and guide mode's whole promise to the developer is that `blueprint.md` is enough and `spec.md` need not be reopened. A reviewer noticed that running this command by the book therefore required breaking the mode's own contract. It does not: those three artifacts are `/speckit.blueprint.review upstream`'s subject, which exists to send what typing revealed back to the document that caused it, and it runs after this one. Cleanup reads what the *tree* made untrue; upstream reads what the *implementation* made untrue about the intention. Keeping them apart is what lets a developer finish a guide-mode feature without ever reopening the spec.
 
 Anything else stays out of scope.
 
@@ -78,6 +80,11 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 
 It fails if any declared file still carries a marker, if a declaration the blueprint promised is not
 in its file, or if a task is ticked `[X]` in the Checklist while its own marker is still on disk.
+
+Add `--all` — `validate-scaffold.sh --done --all`, no feature argument — to ask the same question of
+every feature in the repository. A sweep that only ever looks at the feature you are already thinking
+about cannot find the one you have forgotten, and forgetting is what leaves markers behind: one
+repository carried twenty-two of them across five features that had each been declared finished.
 
 For each in-scope file that exists on disk, collect every finding in these categories:
 
