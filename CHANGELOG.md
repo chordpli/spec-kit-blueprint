@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Three reviewers each planted deliberate defects in a working tree and measured what the tools
+said. Together they planted 25 and the tools caught 7 — and of the eight that broke behaviour
+outright, including one that stopped the application importing at all, the count was zero. In
+every one of those cases the three scripts' output was byte-identical to a clean run. Their
+diagnoses converged: the applier's blind spot is exactly the `(new)` files a guide-mode
+developer types into, the declared-symbol check's population was those same files and nothing
+else, and `--verify` — asked for over five rounds and shipped last release — ran inside a copy
+that had had the developer's code deleted from it.
+
+This release is about that. `--verify` is redesigned to run against the working tree; the
+declared-symbol check reads `(modify)` hooks; a `--done` mode makes "this feature should be
+finished" a thing the scaffold validator can be told; and the Checklist is read for the first
+time.
+
+It also fixes a relapse. Last release diagnosed "a check that counts a quotation as
+authorship", fixed it in one place, and shipped two new checks with the same bug — ten lines
+apart, in the same file, under release notes describing the fix. There is now one function that
+decides what a task wrote, and a fixture corpus in the repository that fails when a check stops
+using it. Both of last release's regressions were re-introduced into a throwaway copy to
+confirm the corpus catches them.
+
+### The measurement discipline, made mechanical
+
+- **`_blueprint_parse.authored_blocks()` is the single place** that separates what a task wrote
+  from what it quotes: fenced blocks that are neither hunks nor illustrative examples, the lines
+  each `**After**` adds beyond its `**Before**`, and `**Replace entire file**` blocks tagged
+  `reprint` so a check that assigns blame can tell them apart. Every code-reading check goes
+  through it; the one documented exception says why in its own comment
+- **`tests/fixtures/` and `scripts/python/self_test.py`.** Three small blueprints and the exact
+  findings the tools must produce for each. `quoted-not-authored` fails the moment a check
+  reads a `**Before**` as this document's writing; `authored-in-a-hunk` fails the moment one
+  stops reading what an `**After**` adds; `clean-guide` fails if the shape the generate rules
+  recommend starts producing findings. `tests/fixtures/README.md` states the rule in the
+  imperative and requires a corpus measurement before a new check is kept
+- **Four candidate prose rules were measured over the corpus's 7,964 marker messages before
+  two were kept.** `amount <= 0` (1 corpus hit) and `int(row[2])` (0) are in. Plain `a + b`
+  between identifiers is out: 1,137 hits, hyphenated English every one — `zero-length`,
+  `half-open`, `non-empty`. Plain `a / b` is out: 98 hits — `text/csv`, `name/value`. Two
+  reviewers asked for those last two by name
+
+### Added
+
+- **`--verify` runs against your tree.** It ran inside the applier's copy, which the applier
+  had just stripped of every file the blueprint declares new and rewritten from the document —
+  so it tested the developer's modify-hunks over the document's skeletons, and nothing else.
+  Measured on one implemented feature: of nineteen runnable commands it ran six, and the number
+  that ran against the developer's own code was zero. Three deliberate defects were planted,
+  one of which stopped the application importing, and all three produced byte-identical output.
+  In the other direction a finished, committed feature reported `3 passed, 2 failed` and exit 1,
+  because the skeletons in the copy throw by design. The same three defects now read
+  10/2, 4/8 and 8/4 against a clean 12/0. It also runs every task rather than only the ones the
+  applier could place — the task whose job is "run the suite" declares no file and was skipped
+  for that reason — deduplicates identical commands (one document ran the same build ten times
+  and reported "12 passed"), and skips a command inside a sentence that predicts its own failure
+- **An optional `**Test**:` header line**, run last by `--verify`. Guide mode's rules stamp
+  `**Build**` as a compile check by design, so a feature was typed to completion, passed every
+  gate including `--verify`, and left the project's own suite red — no task wrote the golden
+  file its tests diff against
+- **`--done` for the scaffold validator.** Its check 3 passes a file *because* it still carries
+  a not-implemented marker, so the greenest output the script can produce is the output of a
+  feature nobody implemented: one repository crossed five features that way, left fourteen
+  markers in production code and two test classes its runner never calls, and got
+  `All checks passed` every time. `--done` makes a leftover marker, a missing declaration and a
+  ticked-but-unfinished Checklist row failures
+- **The declared-symbol check reads `(modify)` hooks.** Its population was new files only, which
+  is where it stopped paying — a feature that sprinkles new files is checked, a feature that
+  edits existing code is not, and the latter is what work in a mature codebase looks like.
+  Symbols read went 6 → 16 and 7 → 24 on two features. A test method deleted from a hook with
+  its caller removed, invisible to every tool before, is now named
+- **The Checklist is checked.** A task ticked `- [X]` whose own marker is still in the file is
+  the document contradicting the tree. Two narrower rules were measured and rejected first: "[X]
+  on a task that still has a section" fires on 84 of 118 blueprints and is simply wrong (that is
+  the normal end state), and "[X] and the id is on disk" fires on 56, almost all a `T014` an
+  earlier feature left. Requiring the id *and* the wording fires on 6
+- **Exit 3 from the applier** when the build fails on a tree that has moved past the stamp. The
+  run already diagnosed the distance in a paragraph and then reported it with the code meaning
+  "the document is wrong" — five features out of five in one repository exited 1 for this reason
+
+### Fixed
+
+- **The relapse, both halves.** The marker-repetition check scanned the raw section, so the next
+  task's `**Before**` — the shape the generate rules ask for — counted as a second and third use
+  of a message one task wrote; it also counted occurrences while its own sentence said "across
+  three or more tasks", so a two-task document with one marker reported `3x`. The feature-number
+  check read only non-hunk blocks, which in guide mode is the half nobody types, and read
+  `**Replace entire file**` blocks whole — reporting four identifiers a previous feature had
+  written and prescribing this feature's number for them, advice that makes the tree more wrong.
+  Corpus effect: repetition findings 37 → 16, feature-number 39 → 42 plus a new finding for
+  reprinted files
+- **An unknown option to `validate-scaffold.sh` is an error.** A mistyped `--frsh` turned two
+  failures into a warning and exit 1 into exit 0, silently. The Python tools got this guard last
+  release and the bash one did not — and its flags are the ones that decide FAIL from WARN
+- **`--markers` printed the first string literal of every wrapped marker twice**, because the
+  continuation loop restarted at the line the task-id join had already consumed. It fires on a
+  marker copied verbatim out of the blueprint, which is the commonest shape there is
+- **`--markers` called the developer's own debt somebody else's.** It decided ownership by
+  comparing wording to the document, so rewording a marker while half-implementing relabelled it
+  `[not written by this blueprint — an earlier feature left it]` — and cleanup's whole job is to
+  tell this feature's debt from residue. The task id says who could own it, the wording says
+  whether this document wrote it, and those give three answers, not two. The feature's own task
+  ids were already being collected for this and thrown away unread
+- **The applier deleted untracked files it had no claim on.** Any file carrying a blueprint
+  marker that no task declared was removed from the copy — including a helper the developer was
+  in the middle of writing and had not staged. One `TODO(blueprint):` line turned a green run red
+  and the tool explained the failure by naming nine unrelated files and calling the blueprint
+  stale. Only a marker naming one of *this* document's task ids justifies the removal now
+- **The applier's build excerpt hid the error.** Twenty trailing lines was the whole rule, and
+  `javac` prints errors first: one repository's seven standing warnings pushed every error off
+  the screen, leaving `1 error` and nothing else. It now shows the first error, then the tail
+- **`skipped: 17` now reads `skipped: 17 (2 partly applied, 3 cannot tell)`.** The code computed
+  that difference and a comment in it explains why it matters — a task with one of three hunks
+  present is half done, and calling that done is the opposite of what review means by implemented
+- **Two `CODE_IN_PROSE` shapes that the last release's notes implied and did not deliver:**
+  `<=`/`>=` against a number, and a call whose argument is subscripted
+
+### Not done, and why
+
+- **Plain arithmetic between identifiers in prose** (`spent + projected`, `spent / budget`),
+  asked for by two reviewers. Measured over 7,964 marker messages: 1,137 and 98 hits, and every
+  one read was English — `zero-length`, `half-open`, `text/csv`, `name/value`. A rule that fires
+  a thousand times on prose trains authors to ignore the check. The narrower forms — one side
+  carrying an underscore or a digit — stay
+- **A checklist rule based on task sections or on task ids alone.** Both were written and
+  measured (84 and 56 of 118 blueprints) before being discarded for the two-part test
+- **Semantic drift** — a Key Decision implemented backwards, a lock order the project's own
+  CLAUDE.md forbids, a prescribed exception type swapped. Three reviewers planted these and no
+  script saw them, which is correct: nothing here can read a design decision. `--done` and the
+  declared-symbol check narrow the gap to "the names are there and the markers are gone"; the
+  rest is `cleanup`'s FALSIFIED pass, which is a reading task for a person and is not a machine
+  signal. Said plainly rather than implied
+
+---
+
+## Earlier in this unreleased cycle
+
 Three reviewers ran the tools over their own repositories and counted what came back. One
 of them classified every finding: over seven runs the three scripts produced 101 — 22
 actionable, 5 informational, 74 noise — averaging 187 lines a run, and three distinct real

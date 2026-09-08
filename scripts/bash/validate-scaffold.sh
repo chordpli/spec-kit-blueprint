@@ -124,15 +124,37 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 STRICT=false
 FRESH=false
 MARKERS=false
+DONE=false
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --strict) STRICT=true ;;
         --fresh)  FRESH=true ;;
         --markers) MARKERS=true ;;
+        --done)   DONE=true ;;
+        --help|-h)
+            echo "Usage: $0 [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers]"
+            echo "  --fresh    the scaffold was just written; a declared file with no marker is a defect"
+            echo "  --done     the feature is finished; a declared file that still has a marker is a defect"
+            echo "  --markers  list the markers left in the declared files, and exit"
+            echo "  --strict   check files on disk even in a mode that writes none"
+            exit 0 ;;
+        # A typo swallowed silently is a gate that quietly stops being one. `--frsh`
+        # turned two failures into a warning and exit 1 into exit 0, and nothing said so;
+        # the two Python tools got this guard a release ago and this one did not, and its
+        # flags are the ones that decide FAIL from WARN.
+        -*)
+            echo -e "${RED}ERROR: unknown option: $arg${NC}" >&2
+            echo "Usage: $0 [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers]" >&2
+            exit 2 ;;
         *)        ARGS+=("$arg") ;;
     esac
 done
+
+if [[ "$FRESH" == true ]] && [[ "$DONE" == true ]]; then
+    echo -e "${RED}ERROR: --fresh and --done are opposite claims about the same tree.${NC}" >&2
+    exit 2
+fi
 
 # --markers is a listing, so stdout carries only the list; the banner and the check
 # headers go nowhere, and the count goes to stderr.
@@ -314,31 +336,39 @@ if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
     NEW_FILES=("${DEDUPED[@]}")
 fi
 
+# Every declared path, not only the new ones: a marker inserted into an existing file by
+# a (modify) task is residue too. Comment-syntax markers and executable not-implemented
+# calls both count; the judgment about each is cleanup's.
+# Deduplicated: a file that several tasks build up is declared once per task, and the
+# first version of this listing printed each of its markers that many times —
+# "19 marker line(s) in 13 declared file(s)" for four markers in four files.
+DECLARED=()
+while IFS= read -r line; do
+    [[ "$line" =~ \*\*File\*\*: ]] || continue
+    rest="${line#*\*\*File\*\*:}"
+    while [[ "$rest" =~ ^[^\`]*\`([^\`]+)\`(.*)$ ]]; do
+        cand="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
+        dup=false
+        for q in "${DECLARED[@]}"; do [[ "$q" == "$cand" ]] && dup=true && break; done
+        [[ "$dup" == true ]] || DECLARED+=("$cand")
+    done
+done <<< "$JOINED"
+
+# This feature's own task ids. A marker is traced to its task by the id its message
+# begins with — the rule the cleanup spec states in prose — and the ids restart at T001
+# in every feature, so the id alone cannot settle a collision. The listing below uses
+# both: the id says whether a task here could own it, the wording says whether this
+# document wrote it, and the three answers that produces are different sentences.
+OWN_IDS=""
+if [[ -f "$FEATURE_DIR/tasks.md" ]]; then
+    OWN_IDS=$(grep -oE '^[[:space:]]*(-[[:space:]]*\[[ xX]\][[:space:]]*)?T[0-9]+' "$FEATURE_DIR/tasks.md" 2>/dev/null \
+        | grep -oE 'T[0-9]+' | sort -u || true)
+fi
+if [[ -z "$OWN_IDS" ]]; then
+    OWN_IDS=$(grep -oE '^###[[:space:]]+T[0-9]+' "$GUIDE" 2>/dev/null | grep -oE 'T[0-9]+' | sort -u || true)
+fi
+
 if [[ "$MARKERS" == true ]]; then
-    # This feature's task ids, so a marker belonging to an earlier feature can be named
-    # as such rather than counted as work left here.
-    IDS_FILE=$(mktemp)
-    if [[ -f "$FEATURE_DIR/tasks.md" ]]; then
-        grep -oE '^[[:space:]]*-[[:space:]]*\[[ xX]\][[:space:]]*T[0-9]+' "$FEATURE_DIR/tasks.md" 2>/dev/null \
-            | grep -oE 'T[0-9]+' > "$IDS_FILE" || true
-    fi
-    # Every declared path, not only the new ones: a marker inserted into an existing
-    # file by a (modify) task is residue too. Comment-syntax markers and executable
-    # not-implemented calls both count; the judgment about each is cleanup's.
-    # Deduplicated: a file that several tasks build up is declared once per task, and
-    # the first version of this listing printed each of its markers that many times —
-    # "19 marker line(s) in 13 declared file(s)" for four markers in four files.
-    DECLARED=()
-    while IFS= read -r line; do
-        [[ "$line" =~ \*\*File\*\*: ]] || continue
-        rest="${line#*\*\*File\*\*:}"
-        while [[ "$rest" =~ ^[^\`]*\`([^\`]+)\`(.*)$ ]]; do
-            cand="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
-            dup=false
-            for q in "${DECLARED[@]}"; do [[ "$q" == "$cand" ]] && dup=true && break; done
-            [[ "$dup" == true ]] || DECLARED+=("$cand")
-        done
-    done <<< "$JOINED"
     found=0
     for f in "${DECLARED[@]}"; do
         [[ -f "$REPO_ROOT/$f" ]] || continue
@@ -347,15 +377,31 @@ if [[ "$MARKERS" == true ]]; then
         # that line joined on, or the listing shows the call and never the task id.
         while IFS= read -r hit; do
             [[ -n "$hit" ]] || continue
-            # Task ids restart at T001 in every feature, so a `T014:` marker left by an
-            # earlier feature was listed as work still owed here — and both features had
-            # a T014. What decides it is whether this blueprint wrote the marker: take a
-            # distinctive run of its message and look for it in the document.
+            # Three states, not two. The old rule was one string comparison: if a
+            # distinctive run of the message is not in the document, say an earlier
+            # feature left it. That labelled a developer's OWN debt as somebody else's
+            # the moment they reworded a marker or shortened it while half-implementing —
+            # and cleanup's whole job is to separate this feature's honest debt from
+            # residue, so its input was wrong in the direction that hides work.
+            #
+            # The task id decides who COULD own it; the wording decides whether this
+            # document wrote it. Neither alone is enough — ids restart at T001 in every
+            # feature — so both are read and the uncertain case says it is uncertain.
+            mk_id="$(printf '%s' "$hit" | grep -oE 'T[0-9]+' | head -1)"
             probe="${hit#*T}"; probe="${probe#*: }"; probe="${probe:0:48}"
-            if [[ ${#probe} -ge 16 ]] && ! grep -qF -- "$probe" "$GUIDE" 2>/dev/null; then
-                echo "$f:$hit   [not written by this blueprint — an earlier feature left it]" >&3
-            else
+            verbatim=false
+            [[ ${#probe} -lt 16 ]] && verbatim=true
+            grep -qF -- "$probe" "$GUIDE" 2>/dev/null && verbatim=true
+            id_is_ours=false
+            if [[ -n "$mk_id" ]] && printf '%s\n' "$OWN_IDS" | grep -qx -- "$mk_id"; then
+                id_is_ours=true
+            fi
+            if [[ "$verbatim" == true ]] || [[ -z "$mk_id" ]]; then
                 echo "$f:$hit" >&3
+            elif [[ "$id_is_ours" == true ]]; then
+                echo "$f:$hit   [$mk_id is this feature's task; the wording is not the blueprint's — reworded here, or an earlier feature also had $mk_id]" >&3
+            else
+                echo "$f:$hit   [not this feature's — no task $mk_id here, and the wording is not the blueprint's]" >&3
             fi
             found=$((found + 1))
         done < <(awk -v re="TODO[(]blueprint[)]|$MARKER_ERE" '
@@ -364,16 +410,22 @@ if [[ "$MARKERS" == true ]]; then
                 for (i = 1; i <= NR; i++) {
                     if (lines[i] !~ re) continue
                     out = lines[i]; sub(/^[ \t]+/, "", out)
+                    # How far the message has already been consumed. Without this the
+                    # continuation loop below started again at i and appended line i+1 a
+                    # second time, so every wrapped marker printed its first string
+                    # literal twice — reported on a marker copied verbatim out of the
+                    # blueprint, which is the commonest shape there is.
+                    last = i
                     if (out !~ /T[0-9]+:/ && i < NR) {
                         nxt = lines[i + 1]; sub(/^[ \t]+/, "", nxt)
-                        if (nxt ~ /T[0-9]+:/) out = out " " nxt
+                        if (nxt ~ /T[0-9]+:/) { out = out " " nxt; last = i + 1 }
                     }
                     # A message split across concatenated string literals showed only
                     # its first physical line. Executable markers only: a comment marker
                     # has no closing paren to stop at, so this ran on and pulled the code
                     # under it into the listing cleanup is supposed to read.
                     if (out ~ /(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\(/) {
-                        j = i
+                        j = last
                         while (out !~ /\)[[:space:]]*;?[[:space:]]*$/ && j < NR && j - i < 6) {
                             j++; cont = lines[j]; sub(/^[ \t]+/, "", cont)
                             if (cont == "") break
@@ -384,7 +436,6 @@ if [[ "$MARKERS" == true ]]; then
                 }
             }' "$REPO_ROOT/$f")
     done
-    rm -f "$IDS_FILE"
     echo "  ($found marker line(s) in ${#DECLARED[@]} declared file(s))" >&2
     exit 0
 fi
@@ -495,29 +546,69 @@ fi
 # exists and that it carries markers; nothing checked that it holds what the blueprint
 # said it would, so a task whose hunks never landed left a file that passes with two
 # functions missing — reported in three rounds running.
+# The population used to be NEW_FILES and nothing else, and that is where the check
+# stopped paying. A feature that sprinkles new files is checked; a feature that edits
+# existing code is not, and editing existing code is what work in a mature codebase looks
+# like. Measured across four features of one repository, declarations introduced by
+# (modify) hooks and therefore unchecked: 4, 3, 21, and 38 — the last against 7 checked.
+#
+# What a hunk introduces is what its **After** has and its **Before** does not: the After
+# repeats the surrounding lines, and reading it whole would demand every neighbour it
+# quotes. Rows are tagged `new` or `hook` because the two have different lifecycles — a
+# skeleton's declarations are on disk the moment it is scaffolded, a hook's arrive only
+# when the developer types them.
 DECLARED_SYMBOLS=()
-if [[ ${#NEW_FILES[@]} -gt 0 ]]; then
+if [[ ${#DECLARED[@]} -gt 0 ]]; then
     while IFS= read -r line; do
         [[ -n "$line" ]] && DECLARED_SYMBOLS+=("$line")
-    done < <(PATHS_FILE=$(mktemp); printf '%s\n' "${NEW_FILES[@]}" > "$PATHS_FILE"; \
-             awk -v pathsfile="$PATHS_FILE" "$DECL_AWK"'
-        BEGIN { while ((getline line < pathsfile) > 0) if (line != "") want[line] = 1; close(pathsfile) }
+    done < <(PATHS_FILE=$(mktemp); NEWF=$(mktemp); \
+             printf '%s\n' "${DECLARED[@]}" > "$PATHS_FILE"; \
+             { [[ ${#NEW_FILES[@]} -gt 0 ]] && printf '%s\n' "${NEW_FILES[@]}"; } > "$NEWF"; \
+             awk -v pathsfile="$PATHS_FILE" -v newfile="$NEWF" "$DECL_AWK"'
+        BEGIN {
+            while ((getline line < pathsfile) > 0) if (line != "") want[line] = 1
+            close(pathsfile)
+            while ((getline line < newfile) > 0) if (line != "") isnew[line] = 1
+            close(newfile)
+        }
         {
             t = $0; sub(/^[ \t]+/, "", t)
             fence = (substr(t, 1, 3) == "```" || substr(t, 1, 3) == "~~~")
             if (in_fence) {
-                # One label, one block. Letting `armed` persist attributed a shared
-                # helper block to two different test files, and both were reported
-                # missing a class neither was supposed to declare.
-                if (fence) { in_fence = 0; armed = ""; next }
+                if (fence) {
+                    in_fence = 0
+                    if (role == "before") { role = "seen_before" } else { role = ""; armed = "" }
+                    next
+                }
                 if (armed == "") next
+                if (role == "before") { before[t] = 1; next }
                 nm = declname(t)
-                if (nm != "") print armed "\t" nm
+                if (nm == "") next
+                # A hook only introduces what its Before did not already show.
+                if (role == "after" && (t in before)) next
+                if (role == "after") print armed "\thook\t" nm
+                else if (isnew[armed]) print armed "\tnew\t" nm
                 next
             }
             if (fence) { in_fence = 1; next }
-            for (p in want) if (index($0, "`" p "`") > 0) armed = p
-        }' "$GUIDE" | sort -u; rm -f "$PATHS_FILE")
+            # One label, one block. Letting `armed` persist attributed a shared helper
+            # block to two different test files, and both were reported missing a class
+            # neither was supposed to declare.
+            # Only a line that DECLARES a path arms one: the task heading, the **File**:
+            # declaration, a **`path`** block label, or a **Before** that names its file —
+            # which is the form the generate rules teach for a multi-file modify task, and
+            # the only thing that says which of nine files a hunk edits. Scanning every
+            # line for a backticked path was survivable while the vocabulary was new files
+            # only; once every declared path is in it, a **Why** paragraph citing
+            # `config/app.properties` re-points the next code block at a properties file
+            # and four real declarations stop being checked. Measured: exactly that, on
+            # the first feature tried.
+            if ($0 ~ /^###/ || $0 ~ /^\*\*File\*\*/ || $0 ~ /^\*\*`/ || $0 ~ /^\*\*Before\*\*/)
+                for (p in want) if (index($0, "`" p "`") > 0) armed = p
+            if ($0 ~ /^\*\*Before\*\*/) { role = "before"; delete before; next }
+            if ($0 ~ /^\*\*After\*\*/) { role = (role == "seen_before" ? "after" : ""); next }
+            if ($0 ~ /^\*\*/ && $0 !~ /^\*\*`/) { if (role != "seen_before") role = "" }
+        }' "$GUIDE" | sort -u; rm -f "$PATHS_FILE" "$NEWF")
 fi
 
 # Collect scaffold files referenced in the blueprint that exist on disk
@@ -580,6 +671,10 @@ check_todo_in_file() {
 
     if [[ "$has_todo" -gt 0 ]] || [[ "$has_not_impl" -gt 0 ]]; then
         MARKED_FILES=$((MARKED_FILES + 1))
+        # This tick is the thing --done exists to answer. The pass condition is "the file
+        # still carries a marker", so the greenest output this script can produce is the
+        # output of a feature nobody implemented. The verdict itself is one section below,
+        # over every declared file rather than only the new ones.
         pass "$rel_path — ${has_todo} TODO(s) (${has_bp_todo} blueprint markers), ${has_not_impl} NotImplemented(s) [$label]"
     elif [[ "$FRESH" == true ]]; then
         local m_count l_count
@@ -637,6 +732,104 @@ fi
 if [[ ${#IMPLEMENTED_FILES[@]} -gt 0 ]]; then
     echo ""
     pass "${#IMPLEMENTED_FILES[@]} of $(( ${#IMPLEMENTED_FILES[@]} + MARKED_FILES )) declared skeleton(s) carry no marker — implemented, or written complete on purpose. Pass --fresh to judge a scaffold nobody has touched yet"
+fi
+
+# =============================================
+# CHECK 3a: the Checklist against the markers on disk
+# =============================================
+# `- [X] T003` is the document saying that task is complete. Nothing read it. A generator
+# produced a blueprint whose thirteen rows were all [X] at the commit that created it,
+# with no line of the feature written, and it passed all three tools — the first thing
+# the developer saw on opening the document was a checklist saying the work was done.
+#
+# The test is the same one --markers uses to decide who wrote a marker, and it needs both
+# halves: the id must be a task of this feature AND the wording must be this blueprint's,
+# because task ids restart at T001 in every feature. Measured over 118 blueprints: the id
+# alone fires on 56 of them, almost all on a `T014:` an earlier feature left behind. Both
+# halves together fire on 6, and the ones I read are real — a task ticked complete whose
+# own marker is still sitting in the file, verbatim.
+if [[ ${#DECLARED[@]} -gt 0 ]] && [[ -n "$OWN_IDS" ]]; then
+    CHECKED_ROWS=$(grep -oE '^[[:space:]]*-[[:space:]]*\[[xX]\][[:space:]]*T[0-9]+' "$GUIDE" 2>/dev/null \
+        | grep -oE 'T[0-9]+' | sort -u || true)
+    if [[ -n "$CHECKED_ROWS" ]]; then
+        header "3a. Checklist against the markers on disk"
+        LIVE_TICKED=()
+        for f in "${DECLARED[@]}"; do
+            [[ -f "$REPO_ROOT/$f" ]] || continue
+            while IFS= read -r probe_line; do
+                [[ -n "$probe_line" ]] || continue
+                mk_id="${probe_line%%$'\t'*}"
+                mk_msg="${probe_line#*$'\t'}"
+                printf '%s\n' "$CHECKED_ROWS" | grep -qx -- "$mk_id" || continue
+                [[ ${#mk_msg} -ge 16 ]] || continue
+                grep -qF -- "${mk_msg:0:40}" "$GUIDE" 2>/dev/null || continue
+                dup=false
+                for q in "${LIVE_TICKED[@]}"; do [[ "${q%% *}" == "$mk_id" ]] && dup=true && break; done
+                [[ "$dup" == true ]] || LIVE_TICKED+=("$mk_id ($f)")
+            done < <(awk '
+                match($0, /(NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)[[:space:]]*\([[:space:]]*["'"'"'`]?[[:space:]]*T[0-9]+[[:space:]]*:/) {
+                    s = substr($0, RSTART, RLENGTH); rest = substr($0, RSTART + RLENGTH)
+                    if (match(s, /T[0-9]+/)) { id = substr(s, RSTART, RLENGTH) } else next
+                    sub(/^[ \t]+/, "", rest); gsub(/["'"'"'`]/, "", rest)
+                    print id "\t" rest; next
+                }
+                match($0, /TODO\(blueprint\)[^\n]*T[0-9]+[[:space:]]*:/) {
+                    s = substr($0, RSTART, RLENGTH); rest = substr($0, RSTART + RLENGTH)
+                    if (match(s, /T[0-9]+/)) { id = substr(s, RSTART, RLENGTH) } else next
+                    sub(/^[ \t]+/, "", rest)
+                    print id "\t" rest
+                }' "$REPO_ROOT/$f")
+        done
+        if [[ ${#LIVE_TICKED[@]} -gt 0 ]]; then
+            SHOWN=("${LIVE_TICKED[@]:0:6}")
+            MORE=""
+            [[ ${#LIVE_TICKED[@]} -gt 6 ]] && MORE=" (+$(( ${#LIVE_TICKED[@]} - 6 )) more)"
+            MSG="${#LIVE_TICKED[@]} task(s) are ticked [X] and their own marker is still in the file: $(printf '%s, ' "${SHOWN[@]}" | sed 's/, $//')${MORE}"
+            if [[ "$DONE" == true ]]; then
+                fail "$MSG"
+            else
+                warn "$MSG"
+            fi
+            echo "      The Checklist is a claim the document makes; untick them or finish the bodies."
+        else
+            pass "no task ticked [X] still has its marker in the file"
+        fi
+    fi
+fi
+
+# =============================================
+# CHECK 3b: --done — nothing declared still carries a marker
+# =============================================
+# The opposite claim to --fresh, and the one nobody could make. Without --fresh a file
+# with a marker is a green tick, and with --fresh a file WITHOUT one is a failure, so a
+# finished feature had no setting that could say "this should be done now". Measured
+# consequence: one repository crossed five features leaving fourteen not-implemented
+# markers in production code and two test classes its runner never calls, and this script
+# printed "All checks passed" over every one of them — the tool's own green being the
+# exact output of the state it exists to prevent.
+#
+# Every DECLARED file, not only the new ones: a (modify) task leaves its marker inside a
+# file that already existed, and those never entered the classification above.
+if [[ "$DONE" == true ]]; then
+    header "3b. Feature declared done"
+    DONE_LEFT=()
+    for f in "${DECLARED[@]}"; do
+        [[ -f "$REPO_ROOT/$f" ]] || continue
+        n_bp=$(count_matches -c "TODO(blueprint)" "$REPO_ROOT/$f")
+        n_impl=$(count_matches -ci "$NOT_IMPL_RE" "$REPO_ROOT/$f")
+        if [[ "$n_bp" -gt 0 ]] || [[ "$n_impl" -gt 0 ]]; then
+            DONE_LEFT+=("$f ($(( n_bp + n_impl )))")
+        fi
+    done
+    if [[ ${#DONE_LEFT[@]} -gt 0 ]]; then
+        SHOWN=("${DONE_LEFT[@]:0:8}")
+        MORE=""
+        [[ ${#DONE_LEFT[@]} -gt 8 ]] && MORE=" (+$(( ${#DONE_LEFT[@]} - 8 )) more)"
+        fail "${#DONE_LEFT[@]} declared file(s) still carry a not-implemented marker: $(printf '%s, ' "${SHOWN[@]}" | sed 's/, $//')${MORE}"
+        echo "      --done says this feature is finished. Run /speckit.blueprint.cleanup, or drop --done."
+    else
+        pass "no declared file carries a not-implemented marker"
+    fi
 fi
 
 # =============================================
@@ -789,29 +982,65 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
     echo -e "${CYAN}=== Declared symbols ===${NC}"
     MISSING_SYMBOLS=0
     CHECKED_SYMBOLS=0
+    HOOK_CHECKED=0
+    HOOK_PENDING=0
+    MISSING_HOOKS=()
     for entry in "${DECLARED_SYMBOLS[@]}"; do
         sym_path="${entry%%$'\t'*}"
-        sym_name="${entry##*$'\t'}"
+        sym_rest="${entry#*$'\t'}"
+        sym_origin="${sym_rest%%$'\t'*}"
+        sym_name="${sym_rest##*$'\t'}"
         [[ -n "$sym_path" && -n "$sym_name" ]] || continue
         [[ -f "$REPO_ROOT/$sym_path" ]] || continue
+        # A declaration a (modify) hook introduces is not on disk until the developer
+        # types the hunk, so on a fresh scaffold its absence is the expected state, not a
+        # defect. --fresh must not fail on it; --done must.
+        if [[ "$sym_origin" == "hook" ]] && [[ "$FRESH" == true ]]; then
+            HOOK_PENDING=$((HOOK_PENDING + 1))
+            continue
+        fi
         CHECKED_SYMBOLS=$((CHECKED_SYMBOLS + 1))
+        [[ "$sym_origin" == "hook" ]] && HOOK_CHECKED=$((HOOK_CHECKED + 1))
         if ! file_declares "$REPO_ROOT/$sym_path" "$sym_name"; then
-            # A failure only for a scaffold just written. Once implementation starts a
+            MISSING_SYMBOLS=$((MISSING_SYMBOLS + 1))
+            # A failure only for a tree whose state the caller has declared. Mid-flight a
             # developer may rename what the blueprint called something else, and that is
-            # their call to make; before then, a missing declaration is a task that never
-            # landed on disk.
-            if [[ "$FRESH" == true ]]; then
+            # their call to make; on a fresh scaffold a missing skeleton declaration is a
+            # task that never landed, and on a finished feature it is work not done.
+            if [[ "$sym_origin" == "hook" ]]; then
+                # One finding, not one per symbol. A hook's declarations arrive as the
+                # developer types, so on a tree where the feature has not been started
+                # every one of them is absent at once: measured, fourteen on one feature,
+                # which is the wall of identical lines this script spent a release
+                # removing. The names are still here, four of them and a count.
+                MISSING_HOOKS+=("$sym_path \`$sym_name\`")
+                continue
+            fi
+            if [[ "$FRESH" == true ]] || [[ "$DONE" == true ]]; then
                 fail "$sym_path — the blueprint declares \`$sym_name\` and the file does not declare it"
             else
                 warn "$sym_path — the blueprint declares \`$sym_name\` and the file does not declare it (renamed, or the task never landed)"
             fi
-            MISSING_SYMBOLS=$((MISSING_SYMBOLS + 1))
         fi
     done
+    if [[ ${#MISSING_HOOKS[@]} -gt 0 ]]; then
+        SHOWN=("${MISSING_HOOKS[@]:0:4}")
+        MORE=""
+        [[ ${#MISSING_HOOKS[@]} -gt 4 ]] && MORE=" (+$(( ${#MISSING_HOOKS[@]} - 4 )) more)"
+        MSG="${#MISSING_HOOKS[@]} declaration(s) a (modify) hook introduces are not in the file: $(printf '%s, ' "${SHOWN[@]}" | sed 's/, $//')${MORE}"
+        if [[ "$DONE" == true ]]; then
+            fail "$MSG"
+        else
+            warn "$MSG — typed under another name, or the hunk was never typed"
+        fi
+    fi
     if [[ "$CHECKED_SYMBOLS" -eq 0 ]]; then
         warn "${#DECLARED_SYMBOLS[@]} declared symbol(s) read from the blueprint, and none of the files that should hold them are on disk yet"
     elif [[ "$MISSING_SYMBOLS" -eq 0 ]]; then
-        pass "all $CHECKED_SYMBOLS declared symbol(s) are present in the files that should hold them"
+        pass "all $CHECKED_SYMBOLS declared symbol(s) are present in the files that should hold them ($HOOK_CHECKED introduced by a (modify) hook)"
+    fi
+    if [[ "$HOOK_PENDING" -gt 0 ]]; then
+        pass "$HOOK_PENDING symbol(s) a (modify) hook introduces are not judged on a fresh scaffold — the developer types those"
     fi
 fi
 

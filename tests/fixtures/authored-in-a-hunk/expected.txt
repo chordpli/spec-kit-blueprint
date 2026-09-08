@@ -1,0 +1,7 @@
+validate: ⚠ 1 identifier(s) inside code blocks carry no feature number
+validate: ⚠ prose in this task spells out the code it is standing in for
+validate: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate: exit 0
+apply: exit 0
+scaffold: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold: exit 0

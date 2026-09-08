@@ -1,0 +1,4 @@
+validate: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate: exit 0
+apply: exit 0
+scaffold: exit 0

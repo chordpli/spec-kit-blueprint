@@ -1,0 +1,6 @@
+validate: ⚠ 1 bare identifier(s) sit in a file this task reprints whole
+validate: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate: exit 0
+apply: exit 0
+scaffold: ⚠ 1 declaration(s) a (modify) hook introduces are not in the file: pkg/thing.py `describe` — typed under another name, or the hunk was never typed
+scaffold: exit 0

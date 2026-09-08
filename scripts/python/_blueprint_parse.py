@@ -684,5 +684,88 @@ def file_paths(section: str) -> list[str]:
 
 
 def strip_quoted(section: str) -> str:
-    """Drop Before/After blocks — they quote existing code, not authored content."""
+    """Drop Before/After blocks from a section's TEXT — a quotation, not authored content.
+
+    For anything that reads CODE, use `authored_blocks` instead. This one is only for the
+    text-level questions ("does this task's own prose declare the type it throws?"), and
+    its regex needs the fence info string to be a bare word — ```` ```c++ ```` slips
+    through it. `authored_blocks` uses the shared scanner and has neither problem.
+    """
     return re.sub(r"\*\*(?:Before|After)\*\*[^\n]*\n+```\w*\n.*?```", "", section, flags=re.S)
+
+
+def after_additions(section: str) -> list:
+    """What each After block ADDS, as a block of lines.
+
+    A modify hunk's After repeats the lines around the change; those are quotations of
+    existing code, and scanning them reported an untouched `if` in the context as body
+    logic. Only what the After adds was authored here.
+    """
+    out = []
+    for before, after in BEFORE_AFTER_RE.findall(section):
+        kept = {ln.strip() for ln in before.split("\n") if ln.strip()}
+        added = [ln for ln in after.split("\n") if ln.strip() and ln.strip() not in kept]
+        if added:
+            out.append("\n".join(added))
+    return out
+
+
+# What a chunk of code in a task section IS, which decides whether the task wrote it.
+#   "block"    a fenced block the task authors outright — a skeleton, a new file
+#   "after"    the lines an **After** adds that its **Before** did not have
+#   "reprint"  a **Replace entire file** block for a file that already exists: mostly a
+#              quotation of code some earlier feature wrote, with this task's edits in it
+AUTHORED_ROLES = ("block", "after", "reprint")
+
+
+def authored_blocks(section: str, roles: bool = False) -> list:
+    """THE separation of what a task wrote from what it quotes. Every code check uses it.
+
+    A blueprint is half quotation: a `**Before**` shows the file as it is, an `**After**`
+    repeats that context around the change, and `**Replace entire file**` reprints a whole
+    existing file to change six lines of it. Counting any of that as this document's own
+    writing is the single mistake this repository has made most often, in both directions
+    — a check that read the raw section reported a quoted marker as a third author, and a
+    check that dropped every hunk went blind in guide mode, where the developer types
+    almost entirely inside hunks. Both shipped in the same release, ten lines apart, after
+    the release notes had described the bug and called it fixed.
+
+    So there is one function, and a check that reads code calls it and nothing else. It
+    returns the chunks a task is answerable for: the fenced blocks that are neither a hunk
+    nor an illustrative example, and the lines each **After** adds. A **Replace entire
+    file** block is included too, because its text does reach the tree — but it is tagged
+    `reprint`, because most of it was written by whoever wrote the file. Pass
+    ``roles=True`` for ``(role, text)`` pairs and a check that assigns blame can tell the
+    difference; a check that only looks for defects does not need to.
+
+    Deciding this from the document alone is deliberate. An earlier attempt subtracted the
+    file as it stands on disk, and on an implemented tree that made the document's own new
+    lines look like quotations and silenced a real finding.
+    """
+    kinds = {}
+    for _p, _k in file_kinds(section):
+        kinds.setdefault(_p, _k)
+    current = next(iter(kinds), None) if len(kinds) == 1 else None
+    pending = None
+    out = []
+    for kind, payload in section_events(section):
+        if kind == "label":
+            current = payload
+        elif kind == "directive":
+            pending = payload
+        elif kind == "block":
+            _info, text = payload
+            if pending in ("before", "after"):
+                pending = None
+                continue  # after_additions() below reads the pair
+            if pending == "replace":
+                pending = None
+                # A replace of a file this task DECLARES NEW is authored outright; there
+                # is no earlier version of it for anyone else to have written.
+                new_file = current is not None and kinds.get(current) == "new"
+                out.append(("block" if new_file else "reprint", text))
+                continue
+            out.append(("block", text))
+    out += [("after", t) for t in after_additions(section)]
+    out = [(r, t) for r, t in out if t.strip()]
+    return out if roles else [t for _r, t in out]

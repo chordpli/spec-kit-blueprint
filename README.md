@@ -116,7 +116,9 @@ Runs three scripts: a validator over `blueprint.md` itself (task coverage, a Why
 
 The document validator runs in every mode — a doc-only or guide blueprint has nothing on disk, but its own contents still have to hold up.
 
-Exit code `0` = pass. Exit code `1` = failure. The Python scripts exit `2` when the feature directory cannot be resolved at all.
+Exit code `0` = pass, `1` = failure, `2` = the tool could not start (feature directory not
+resolved, unknown flag). The applier adds `3`: the build failed on a tree that has moved past the
+blueprint's stamp, which says nothing about the document — see the exit-code table below.
 
 Read the applier's `coverage:` line before you read its exit code. Exit `0` means what ran, ran —
 not that the document was tested. Once implementation has started most tasks are already in the
@@ -244,13 +246,26 @@ Every flag the three scripts take, since until now they were documented only in 
 | `--keep` | apply | Leave the copy on disk and print its path |
 | `--scaffold` | apply | After a clean apply, copy the declared-new files into your tree — only files the blueprint declares new and only where nothing is already there |
 | `--require-anchors` | apply | Exit non-zero when a task anchors nothing, or when tasks were skipped as already-applied. Useful on the commit that has a blueprint and no code yet; from the first implemented task onward it is red on every commit, so it is not a standing CI gate |
-| `--verify` | apply | After a clean apply, run each applied task's `**Verification**` command inside the copy and report which passed. Only backticked commands that begin with a runner (`python3`, `bash`, `mvn`, `npm`, …) are run; anything else in the line is left to you. A failure exits non-zero |
+| `--verify` | apply | Run every task's `**Verification**` command against a copy of **your working tree** — your code, nothing applied, nothing removed. This is the flag that answers "does what I typed do what the document asked". Identical commands run once. Only backticked commands that begin with a runner (`python3`, `bash`, `mvn`, `npm`, …) are run, and a sentence that predicts its own failure ("fails until T003 supplies an implementation") is not run at all. Before the bodies are written a guide blueprint is red here by design; after they are, a failure is the failure. Non-zero on any failure |
 | `--verbose` | apply | Print the per-task line for every task. Without it only failures print, and the state of the rest is the summary |
 | `--strict-guide` | validate | Turn the guide-mode body findings into failures rather than warnings |
 | `--verbose` | validate | Print a line for every check that passed. Without it a section with nothing to report is one line |
 | `--strict` | scaffold | Check files on disk even when the mode says none were written — for scaffolding done after the blueprint was generated |
-| `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note |
+| `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note. Declarations a `(modify)` hook introduces are not judged — the developer has not typed them yet |
+| `--done` | scaffold | The opposite claim: this feature is finished. A declared file that still carries a not-implemented marker is a failure, and so is a declaration the blueprint promised that the file does not have. Without either flag a marker is a green tick, which is how a repository can cross five features and leave fourteen markers in production code while this script prints `All checks passed` |
 | `--markers` | scaffold | List every marker left in the declared files as `path:line: text` and exit. This is what cleanup starts from |
+
+An unknown flag on any of the three is an error, not a silently ignored word. `--frsh` used to
+turn two failures into a warning and exit 1 into exit 0.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | what ran, ran. Read the applier's `coverage:` line to see how much that was |
+| 1 | a real failure: a task did not apply, a check failed, the build broke on a tree that still matches the stamp, a `--verify` command failed |
+| 2 | the tool could not start — feature directory not resolved, unknown flag |
+| 3 | (applier) the build failed on a tree that has moved past the blueprint's stamp, so nothing here says the document is wrong. `--require-anchors` promotes it to 1 |
 
 ### What these scripts do not check
 
@@ -261,7 +276,9 @@ suggests. This table is the honest half.
 |---|---|
 | `Blueprint applied and built` | that your working tree compiles. The build runs in a copy that holds the blueprint's code, not yours |
 | `applied: 3 skipped: 11`, exit 0 | that the document is sound. A skipped task never reached the compiler; the `coverage:` line in the summary is the fraction that did, and 21% coverage still exits 0 |
-| `all N declared symbol(s) are present` | that the file behaves. It checks that each name is *declared* there — not that its body is right, and not that anything calls it |
+| `all N declared symbol(s) are present` | that the file behaves. It checks that each name is *declared* there — not that its body is right, and not that anything calls it. Names introduced by a `(modify)` hook are included; names the blueprint never declares are nobody's business here |
+| `--verify` all green | that the feature is right. It says the commands the document names pass against your tree. What no `**Verification**` line names, nothing ran — and guide mode's rules stamp `**Build**` as a compile check, so a feature can compile, verify and still break the project's own suite. A `**Test**:` line in the header is where you name the command that would catch that |
+| `--done` passing | that the work is complete. It says no declared file still carries a marker and every declared name is there. A body that is present and wrong looks exactly like a body that is present and right |
 | `no guide-mode block carries body logic` | that the bodies were left to you. It reads code blocks, marker messages, `TODO(blueprint):` comments and implementation notes for pasteable expressions; prose that describes an algorithm in sentences passes, and should |
 | document validator `FAIL: 0` | that the blueprint is true. Its failures are structural — a Before that is not in the file, a hunk with no After, an unlabelled block in a multi-file task. Whether a Key Decision is still true of today's code is not among them |
 | `N declared skeleton(s) carry no marker` | anything about over-implementation, unless you passed `--fresh`. Without it, a file with no marker is a file someone finished |

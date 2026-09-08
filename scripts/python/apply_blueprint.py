@@ -297,6 +297,9 @@ def changed_since_stamp(rel_path: str):
     return changed_since(_root, _stamped_head, rel_path)
 # Declared-new files that were already on disk and were removed from the copy before applying.
 _overwritten: list[str] = []
+# Tasks where SOME hunks were already in the file. Kept apart from "already applied"
+# because half done is not done, and the summary says so.
+_partly: list[str] = []
 
 
 def rel(path: str) -> str:
@@ -625,6 +628,17 @@ VERIFY_RUNNER = re.compile(
 )
 
 
+# A sentence that predicts its own failure. Guide mode's whole shape is "this is red
+# until the developer writes the body", and a generator says so in the Verification line:
+# "`bash tools/build.sh` fails until T003 supplies an implementation". Running that and
+# counting the failure is the tool disagreeing with a sentence it just read.
+PREDICTS_FAILURE = re.compile(
+    r"\b(?:fails?|failing|red|errors?|throws?|does not pass|will not pass)\b[^\n]{0,40}"
+    r"\b(?:until|before|till)\b",
+    re.I,
+)
+
+
 def verification_commands(section: str) -> list[str]:
     """Every runnable command a task's **Verification** line names, in order.
 
@@ -636,10 +650,15 @@ def verification_commands(section: str) -> list[str]:
     out: list[str] = []
     for m in re.finditer(r"^\*\*Verification\*\*:?(.*?)(?=^\*\*|^#|\Z)",
                          outside_fences(section), re.M | re.S):
-        for cm in re.finditer(r"`([^`\n]+)`", m.group(1)):
-            cmd = cm.group(1).strip()
-            if VERIFY_RUNNER.match(cmd) and cmd not in out:
-                out.append(cmd)
+        # Per line, so one sentence predicting failure does not silence the rest of a
+        # Verification line that names three commands.
+        for line in m.group(1).split("\n"):
+            if PREDICTS_FAILURE.search(line):
+                continue
+            for cm in re.finditer(r"`([^`\n]+)`", line):
+                cmd = cm.group(1).strip()
+                if VERIFY_RUNNER.match(cmd) and cmd not in out:
+                    out.append(cmd)
     # The template also allows a fenced block under the label; ILLUSTRATIVE_LABELS keeps
     # the applier from writing it to a file, which is why it has to be read here.
     under_label = False
@@ -659,37 +678,120 @@ def verification_commands(section: str) -> list[str]:
     return out
 
 
-def run_verifications(tree: str, tasks_applied: list) -> int:
-    """Run each applied task's verification command in the copy. Returns failures."""
+def test_command(blueprint: str) -> str | None:
+    """The optional `**Test**:` header line — the one command that exercises behaviour.
+
+    Guide mode's rules tell the generator to stamp `**Build**` with a COMPILE check, not a
+    test run, and for a good reason: the applier's copy holds skeletons that throw. The
+    consequence was that a feature could be typed to completion, pass the document
+    validator, the applier's build, the scaffold validator and `--verify`, and still leave
+    the project's own test suite red — measured, on a feature whose blueprint had no task
+    that wrote the golden file its tests diff against. `**Test**` is where a document can
+    name the command that would have caught it; --verify runs it last, against the tree.
+    """
+    for _, line, in_fence, _ in scan(blueprint):
+        if not in_fence and line.startswith("**Test**:"):
+            rest = line.split(":", 1)[1].strip()
+            quoted = re.search(r"`([^`]+)`", rest)
+            if quoted:
+                return quoted.group(1).strip()
+            return re.split(r"\s+[—–]\s+|\s+-{1,2}\s+", rest, maxsplit=1)[0].strip() or None
+    return None
+
+
+def _run_one(cmd: str, cwd: str):
+    try:
+        proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
+                              text=True, timeout=VERIFY_TIMEOUT)
+        return proc.returncode, (proc.stdout + proc.stderr).rstrip().split("\n")[-8:]
+    except subprocess.TimeoutExpired:
+        return 124, [f"did not finish within {VERIFY_TIMEOUT}s"]
+    except OSError as exc:
+        return 127, [str(exc)]
+
+
+def run_verifications(root: str, tasks: list, bp: str, keep: bool) -> int:
+    """Run every task's **Verification** command against the developer's own tree.
+
+    This flag was asked for five rounds running, arrived, and answered a different
+    question than the one asked. It ran the commands inside the applier's working copy —
+    a copy the applier had just stripped of every file the blueprint declares new and
+    rewritten from the document. So the tree it tested was a chimera: the developer's
+    modify-hunks over the document's skeletons. Measured on one implemented feature, of
+    nineteen runnable commands it ran six, and the number that ran against the
+    developer's own code was zero; three deliberate defects, one of which stopped the
+    application importing at all, produced byte-identical output. In the other direction
+    a finished, committed feature reported `3 passed, 2 failed`, because the skeletons in
+    the copy throw by design. An alarm that is on when the work is right and off when it
+    is wrong is worse than no alarm.
+
+    So it runs against a copy of the working tree AS IT STANDS — the developer's code,
+    nothing removed, nothing applied. Before the bodies are written that is red and it
+    should be; when they are right it is green. A copy rather than the tree itself
+    because these are shell commands out of a generated document, and because a test run
+    writes build output.
+
+    Every task, not only the ones the applier could place: the task whose whole job is
+    "run the suite" declares no file, and was skipped for that reason — a flag that runs
+    commands filtered them by whether a file was declared.
+
+    Deduplicated. Twelve commands from one document were ten copies of the same build,
+    and "12 passed" read as twelve things checked.
+    """
     print(f"\n{CYAN}=== Verification ==={NC}")
-    ran = failures = silent = 0
-    for tid, section in tasks_applied:
+    order: list[str] = []
+    owners: dict[str, list] = {}
+    silent = []
+    for tid, section in tasks:
         cmds = verification_commands(section)
         if not cmds:
-            silent += 1
+            silent.append(tid)
             continue
         for cmd in cmds:
-            ran += 1
-            try:
-                proc = subprocess.run(cmd, shell=True, cwd=tree, capture_output=True,
-                                      text=True, timeout=VERIFY_TIMEOUT)
-                code = proc.returncode
-                tail = (proc.stdout + proc.stderr).rstrip().split("\n")[-8:]
-            except subprocess.TimeoutExpired:
-                code, tail = 124, [f"did not finish within {VERIFY_TIMEOUT}s"]
-            except OSError as exc:
-                code, tail = 127, [str(exc)]
+            if cmd not in owners:
+                owners[cmd] = []
+                order.append(cmd)
+            owners[cmd].append(tid)
+    test_cmd = test_command(bp)
+    if test_cmd and test_cmd not in owners:
+        owners[test_cmd] = ["**Test**"]
+        order.append(test_cmd)
+    if not order:
+        print("  no task names a runnable command in its **Verification** line.")
+        return 0
+    tree = copy_tree(root)
+    try:
+        print(f"  against a copy of your working tree ({tree})")
+        failures, failed_tasks, passed_tasks = 0, set(), set()
+        for cmd in order:
+            who = owners[cmd]
+            label = f"{', '.join(who[:4])}{f' (+{len(who) - 4} more)' if len(who) > 4 else ''}"
+            code, tail = _run_one(cmd, tree)
             if code == 0:
-                record("pass", f"{tid}  $ {cmd}", always=VERBOSE)
+                passed_tasks.update(who)
+                record("pass", f"{label}  $ {cmd}", always=VERBOSE)
             else:
                 failures += 1
-                record("fail", f"{tid}  $ {cmd} — exit {code}", "\n".join(tail))
-    print(f"  ran {ran} verification command(s) from {len(tasks_applied)} applied task(s):"
-          f" {ran - failures} passed, {failures} failed"
-          + (f"; {silent} task(s) name no runnable command" if silent else ""))
-    if failures:
-        print("  A **Verification** line is a claim the document makes about itself.")
-        print("  These ran in the copy, against the code the blueprint dictates — not against your tree.")
+                failed_tasks.update(who)
+                record("fail", f"{label}  $ {cmd} — exit {code}", "\n".join(tail))
+        covered = len(passed_tasks | failed_tasks)
+        print(f"  ran {len(order)} distinct command(s) covering {covered} task(s):"
+              f" {len(order) - failures} passed, {failures} failed"
+              + (f"; {len(silent)} task(s) name no runnable command" if silent else ""))
+        green = sorted(passed_tasks - failed_tasks)
+        if green:
+            print(f"  {GREEN}{len(green)} task(s) verify against your tree{NC}: "
+                  + ", ".join(green[:10]) + (f" (+{len(green) - 10} more)" if len(green) > 10 else ""))
+        if failed_tasks:
+            print(f"  {YELLOW}{len(sorted(failed_tasks))} task(s) do not{NC}: "
+                  + ", ".join(sorted(failed_tasks)[:10]))
+            print("  These ran against YOUR code, not the blueprint's. Before the bodies are written")
+            print("  a guide-mode blueprint is red here by design; after they are, this is the failure.")
+    finally:
+        if keep:
+            print(f"  Verification tree kept at: {tree}")
+        else:
+            shutil.rmtree(tree, ignore_errors=True)
     return failures
 
 
@@ -708,13 +810,36 @@ def run_build(tree: str, cmd: str) -> int:
         # ever on exactly the code it exists to be suspicious of.
         record("fail", f"build did not finish within {BUILD_TIMEOUT}s", cmd)
         return 1
-    tail = (proc.stdout + proc.stderr).rstrip().split("\n")[-20:]
     record(
         "pass" if proc.returncode == 0 else "fail",
         f"exit code {proc.returncode}",
-        "\n".join(tail),
+        "\n".join(build_excerpt(proc.stdout + proc.stderr)),
     )
     return proc.returncode
+
+
+ERROR_LINE = re.compile(r"\berror\b|\bERROR\b|\bError:|\bFAILED\b|\bFAIL:|Traceback|cannot find symbol")
+
+
+def build_excerpt(out: str, limit: int = 20) -> list:
+    """The part of a build log a reader needs: the first error, then the tail.
+
+    The last twenty lines was the whole rule, and `javac -Xlint:all` prints errors first
+    and warnings after. One repository carries seven standing warnings — twenty-one lines
+    — so a build with one error showed twenty lines of warnings, the words `1 error`, and
+    not one character saying what the error was. Measured there: a reader had to keep the
+    copy with --keep and build it by hand to find out.
+    """
+    lines = out.rstrip().split("\n")
+    if len(lines) <= limit:
+        return lines
+    tail = lines[-limit:]
+    first = next((i for i, ln in enumerate(lines) if ERROR_LINE.search(ln)), None)
+    if first is None or first >= len(lines) - limit:
+        return tail
+    head = lines[first:first + 8]
+    return head + [f"      ... ({len(lines) - len(head) - (limit - 8) - first} line(s) not shown)"] \
+        + lines[-(limit - 8):]
 
 
 def main() -> int:
@@ -726,9 +851,10 @@ def main() -> int:
         print("  --keep             print the copy's path instead of deleting it")
         print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
         print("  --scaffold         after a clean apply, copy the declared-new files into your tree")
-        print("  --verify           run each applied task's **Verification** command in the copy")
+        print("  --verify           run every task's **Verification** command against YOUR tree")
         print("  --verbose          print the per-task line for every task, not just the failures")
-        print("\nExit 0 applied cleanly, 1 a task failed or the build did, 2 feature directory not resolved.")
+        print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved,")
+        print("     3 the tree has moved past the stamp so the build failure says nothing about the document.")
         return 0
     global VERBOSE
     do_build, keep = "--build" in argv, "--keep" in argv
@@ -840,18 +966,38 @@ def main() -> int:
                 if os.path.getsize(full) > 512_000:
                     continue
                 with open(full, encoding="utf-8", errors="replace") as f:
-                    if marker.search(f.read()):
-                        orphans.append(relp)
+                    text = f.read()
+                if marker.search(text):
+                    orphans.append((relp, set(re.findall(r"\bT\d{3,}\b", text))))
             except OSError:
                 continue
-    for relp in orphans:
+    # Removed only when something in this document claims them. An undeclared file is not
+    # this blueprint's output, so deleting it does not test the blueprint — it tests
+    # whether the project still builds without a file the developer is in the middle of
+    # writing. Reproduced: a helper class typed but not yet staged, carrying one
+    # `TODO(blueprint):` line, turned a green run red, and the tool explained the failure
+    # by naming nine unrelated files and saying the blueprint was stale. Uncommitted work
+    # in progress is the workflow this tool recommends; it must not be swept.
+    #
+    # The residue this check exists for is a file a task USED to declare. That shows up as
+    # a marker naming one of this document's own task ids, which is exactly what the
+    # cleanup spec uses to trace a marker to its task.
+    own_ids = {tid for tid, _s in base_tasks + tasks}
+    claimed, unclaimed = [], []
+    for relp, ids in orphans:
+        (claimed if ids & own_ids else unclaimed).append(relp)
+    for relp in claimed:
         os.remove(os.path.join(tree, relp))
-    if orphans:
-        why = "carry blueprint markers, are not in the committed tree, and no task declares them"
-        print(f"  {YELLOW}{len(orphans)} file(s) {why};"
+    if claimed:
+        why = "carry a marker naming one of this blueprint's task ids, are not in the committed tree, and no task declares them"
+        print(f"  {YELLOW}{len(claimed)} file(s) {why};"
               f" removed from the copy so they cannot stand in for a missing task:{NC} "
-              + ", ".join(orphans[:6])
-              + (f" (+{len(orphans) - 6} more)" if len(orphans) > 6 else ""))
+              + ", ".join(claimed[:6])
+              + (f" (+{len(claimed) - 6} more)" if len(claimed) > 6 else ""))
+    if unclaimed:
+        print(f"  {len(unclaimed)} untracked file(s) carry a blueprint marker no task here claims;"
+              " left in the copy: " + ", ".join(unclaimed[:4])
+              + (f" (+{len(unclaimed) - 4} more)" if len(unclaimed) > 4 else ""))
     print(f"Tree: {tree}\n")
 
     if base_tasks:
@@ -887,6 +1033,8 @@ def main() -> int:
                 # one of three registrations written as unimplemented, and so does this.
                 (unclear if " of this task's " in str(exc) or " of the " in str(exc) else already).append(tid)
                 skipped_ids.append(tid)
+                if " of this task's " in str(exc):
+                    _partly.append(tid)
                 # "already applied" for a task where only some hunks are present says the
                 # work is done when it is half done, which is the opposite of what
                 # /speckit.blueprint.review means by implemented.
@@ -949,8 +1097,22 @@ def main() -> int:
             print("  or against a tree that predates the work; --verbose gives the per-task reason.")
 
         print(f"\n{CYAN}=== Summary ==={NC}")
+        # "Partly applied" and "cannot tell" are not "skipped". The code computes the
+        # difference and a comment in it says why the difference matters — a task with
+        # one of three hunks in the file is half done, and calling that done is the
+        # opposite of what review means by implemented — and then the summary folded all
+        # three into one word. Two counts in parentheses restore it without restoring the
+        # per-task wall of text that made this run unreadable.
+        partly = [t for t in unclear if t in _partly] + [t for t in already if t in _partly]
+        breakdown = []
+        if partly:
+            breakdown.append(f"{len(partly)} partly applied")
+        cannot = [t for t in unclear if t not in _partly]
+        if cannot:
+            breakdown.append(f"{len(cannot)} cannot tell")
         print(f"  applied: {applied_tasks}  skipped: {len(skipped_ids)}"
-              f"  {RED}FAILED{NC}: {len(failed)}"
+              + (f" ({', '.join(breakdown)})" if breakdown else "")
+              + f"  {RED}FAILED{NC}: {len(failed)}"
               + (f"  {YELLOW}replaced{NC}: {len(_overwritten)} declared-new file(s) that were on disk" if _overwritten else ""))
         # How much of the document this run actually tested. `applied: 3 skipped: 11` and
         # exit 0 is honest in the body and a lie to a CI job reading only the code; the
@@ -999,6 +1161,14 @@ def main() -> int:
                         print("      A blueprint describes the tree at its stamp. Run against a tree that has moved on,")
                         print("      a failure here is usually that distance rather than a defect in the document —")
                         print("      check the errors against the files listed before rewriting anything.")
+                        # And the exit code says the same thing the paragraph does. This
+                        # run diagnosed the distance itself and then reported it with the
+                        # code that means "the document is wrong", which is the one
+                        # reading it had just ruled out. Exit 3 is "could not test",
+                        # separate from exit 1's "tested, and it failed". Five features
+                        # out of five in one repository were exiting 1 for this reason,
+                        # which is how a tool teaches a team to ignore it.
+                        rc = 3 if not strict_anchors else 1
             elif mode.startswith("guide"):
                 print(f"      {YELLOW}a guide build compiles skeletons; it does not exercise behavior.{NC}")
                 stripped = [
@@ -1011,11 +1181,9 @@ def main() -> int:
                           + (f" (+{len(stripped) - 6} more)" if len(stripped) > 6 else "")
                           + f" — that behavior is gone from this copy and the build above cannot see it.{NC}")
         if do_verify:
-            if failed:
-                print(f"\n{YELLOW}Verification skipped — {len(failed)} task(s) did not apply.{NC}")
-            elif not applied_sections:
-                print(f"\n{YELLOW}Verification skipped — nothing was applied, so there is nothing to verify.{NC}")
-            elif run_verifications(tree, applied_sections):
+            # Not gated on whether the applier could place anything: --verify asks a
+            # question about the working tree, and the applier's copy has no say in it.
+            if run_verifications(root, base_tasks + tasks, bp, keep):
                 rc = 1
         if do_scaffold and not failed:
             # The generator writing forty skeletons by hand is where drift comes from;
@@ -1050,7 +1218,10 @@ def main() -> int:
         else:
             shutil.rmtree(tree, ignore_errors=True)
 
-    if rc:
+    if rc == 3:
+        print(f"\n{YELLOW}Could not test this blueprint — the tree has moved past its stamp"
+              f" (exit 3, not 1: nothing here says the document is wrong).{NC}")
+    elif rc:
         print(f"\n{RED}Blueprint did NOT apply cleanly{NC}")
     elif applied_tasks == 0:
         # A build that passes over an unchanged tree is evidence about the tree, not

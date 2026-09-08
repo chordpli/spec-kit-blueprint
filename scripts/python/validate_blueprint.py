@@ -23,6 +23,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     BEFORE_AFTER_RE,
+    after_additions,
+    authored_blocks,
     base_chain,
     before_labels,
     body_replaced_by_marker,
@@ -121,22 +123,6 @@ def listing(rows, limit: int = 6, sep: str = "\n") -> str:
 
 
 
-def after_additions(sec: str) -> list[str]:
-    """What each After block ADDS, as a block of lines.
-
-    A modify hunk's After repeats the lines around the change; those are quotations of
-    existing code, and scanning them reported an untouched `if` in the context as body
-    logic. Only what the After adds was authored here.
-    """
-    out = []
-    for before, after in BEFORE_AFTER_RE.findall(sec):
-        kept = {ln.strip() for ln in before.split(chr(10)) if ln.strip()}
-        added = [ln for ln in after.split(chr(10)) if ln.strip() and ln.strip() not in kept]
-        if added:
-            out.append(chr(10).join(added))
-    return out
-
-
 def code_lines(block: str) -> list[str]:
     """Lines of a code block that are code — comments and doc comments dropped.
 
@@ -223,6 +209,10 @@ def main() -> int:
             sections[_tid] += chr(10) + _sec
         else:
             sections[_tid] = _sec
+    def authored(sec: str) -> list[str]:
+        """The code this task wrote. The one reading; see _blueprint_parse.authored_blocks."""
+        return authored_blocks(sec)
+
     mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(bp.splitlines())} lines | {len(sections)} task sections\n")
     if mode == "unknown":
@@ -837,12 +827,12 @@ def main() -> int:
     unlabeled = []
     for tid, sec in sections.items():
         paths = file_paths(sec)
-        authored = strip_quoted(sec)
-        blocks = len([b for b in code_blocks(authored, content_only=True) if b[0]])
+        unquoted = strip_quoted(sec)
+        blocks = len([b for b in code_blocks(unquoted, content_only=True) if b[0]])
         if len(paths) > 1 and blocks > 1:
             # A label may be followed by anything — ":", " (new):", " — **Replace entire
             # file**". Requiring a colon counted four labelled blocks as one.
-            labels = count_path_labels(authored)
+            labels = count_path_labels(unquoted)
             if labels < blocks:
                 unlabeled.append(f"{tid}: {len(paths)} files, {blocks} blocks, {labels} labeled")
     # And the hunks. `strip_quoted` above drops every Before/After pair — rightly, they
@@ -895,15 +885,27 @@ def main() -> int:
     #     added to the generate spec a round earlier and nothing checked it.
     #
     #     One finding per document, not one per site. There were 34 sites in that one.
+    #
+    #     Authored text only, and in both directions. This check shipped reading the
+    #     non-hunk blocks alone, which in guide mode is the half nobody types: every hunk
+    #     was invisible, and hunks are what a guide-mode developer copies into the tree.
+    #     The same run reported four identifiers inside a **Replace entire file** block
+    #     that quotes a controller a PREVIOUS feature wrote, and prescribed stamping this
+    #     feature's number onto them — following it would have made the tree more wrong.
+    #     And the prescription is split by that role. Telling an author to stamp THIS
+    #     feature's number onto an id inside a reprinted file is advice that makes the
+    #     tree more wrong, not less: the id belongs to whichever feature wrote that code.
     LOCAL_ID = re.compile(r"\b(plan\s+D\d+|OQ-\d+)\b")
     bare_ids: list[str] = []
+    reprinted_ids: list[str] = []
     for tid, sec in sections.items():
-        for _i, blk in code_blocks(strip_quoted(sec), content_only=True):
+        for role, blk in authored_blocks(sec, roles=True):
             for ln in blk.split("\n"):
                 for m in LOCAL_ID.finditer(ln):
                     if re.search(r"\d{3}\s$", ln[max(0, m.start() - 4):m.start()]):
                         continue
-                    bare_ids.append(f"{tid}: {m.group(1)} — {ln.strip()[:60]}")
+                    row = f"{tid}: {m.group(1)} — {ln.strip()[:60]}"
+                    (reprinted_ids if role == "reprint" else bare_ids).append(row)
     if bare_ids:
         record(
             "warn",
@@ -912,12 +914,20 @@ def main() -> int:
             + "\nthis text becomes a comment in the tree, where `plan D5` and `OQ-1` belong to"
               f"\nwhatever feature wrote them; write `{os.path.basename(feature_dir)[:3]} plan D5`",
         )
+    if reprinted_ids:
+        record(
+            "warn",
+            f"{len(reprinted_ids)} bare identifier(s) sit in a file this task reprints whole",
+            listing(reprinted_ids, 4)
+            + "\na **Replace entire file** block quotes code an earlier feature wrote, so these ids are"
+              "\nnot this document's to renumber — fix them where they were written, or leave them alone",
+        )
 
     # 5. Placeholders — full-code modes forbid them; guide mode expects markers in bodies only
     section("[5] Placeholder content")
     ellipsis = []
     for tid, sec in sections.items():
-        for blk in [c for _i, c in code_blocks(strip_quoted(sec))]:
+        for blk in authored(sec):
             for ln in blk.split("\n"):
                 if re.search(r"(//|#|/\*)\s*\.\.\.", ln):
                     ellipsis.append(f"{tid}: {ln.strip()[:60]}")
@@ -935,11 +945,7 @@ def main() -> int:
     )
     history = []
     for tid, sec in sections.items():
-        # After blocks are authored content too — only the Before is a quotation — and the
-        # javadoc that prompted this check sat in one.
-        authored_blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
-        authored_blocks += after_additions(sec)
-        for blk in authored_blocks:
+        for blk in authored(sec):
             for ln in blk.split("\n"):
                 t = ln.strip()
                 if t.startswith(("/**", "*", "///", "#", "//", chr(34) * 3, chr(39) * 3)) and HISTORY.search(t):
@@ -975,7 +981,7 @@ def main() -> int:
     if mode in ("doc-only", "scaffold"):
         stubs = []
         for tid, sec in sections.items():
-            for blk in [c for _i, c in code_blocks(strip_quoted(sec))]:
+            for blk in authored(sec):
                 if re.search(r"\b(TODO|FIXME|HACK|XXX)\b", blk):
                     stubs.append(tid)
         if stubs:
@@ -1056,10 +1062,29 @@ def main() -> int:
             r"|\b\w+\s*=\s*[^=\s][^\n,]{0,40},\s*\w{3,}\s*=\s*[^=\s]"
             # A call subscripted: `calendar.monthrange(year, month)[1]`.
             r"|\w\s*\([^()\n]{0,60}\)\s*\["
-            # An identifier compared against a number: `elapsed_days > 0`.
-            r"|\b[a-z_][A-Za-z0-9_]{2,}\s*[<>]\s*-?\d"
+            # An identifier compared against a number: `elapsed_days > 0`, `amount <= 0`.
+            # `<=` and `>=` were missing, and a bound guard is written with them more
+            # often than not — a reviewer's `amount <= 0` went unread while `amount < 0`
+            # would have fired. One hit across the corpus's 7,964 messages (`months >= 1`,
+            # an expression handed to the reader inside a sentence), no prose collisions.
+            r"|\b[a-z_][A-Za-z0-9_]{2,}\s*(?:<=|>=|<|>)\s*-?\d"
+            # A call whose ARGUMENT is subscripted: `int(row[2])`. The rule above reads a
+            # call that is itself subscripted, `monthrange(y, m)[1]`, and a reviewer
+            # reasonably read the release note as covering both. Zero hits over the same
+            # 7,964 texts — recorded here because zero is the measurement, not an excuse
+            # to skip it — and no shape of English prose can produce it.
+            r"|\b[a-z_]\w*\s*\(\s*[a-z_]\w*\s*\[[^\]\n]{1,12}\]\s*\)"
             # Arithmetic between identifiers, where one side is unmistakably an
             # identifier (it carries a `_` or a digit) rather than an English word.
+            #
+            # Two reviewers asked for this to lose that qualifier and read plain
+            # `spent + projected` and `spent / budget` too. Measured over the corpus's
+            # 7,964 marker messages before agreeing: `+`/`-` between two bare words hits
+            # 1,137 times and is hyphenated English every time — "zero-length",
+            # "half-open", "non-empty", "package-private". `/` between two bare words
+            # hits 98 times: "text/csv", "name/value", "lockA/lockB". Refused, with the
+            # numbers, rather than shipped and withdrawn next round. `*` and `/` stay
+            # behind the underscore-or-digit test for the same reason.
             r"|(?<![*\w])[a-z_][A-Za-z0-9_]*[_0-9][A-Za-z0-9_]*\s*\*\s*[a-z_][A-Za-z0-9_]{2,}(?![*\w])"
             r"|(?<![*\w])[a-z_][A-Za-z0-9_]{2,}\s*\*\s*[a-z_][A-Za-z0-9_]*[_0-9][A-Za-z0-9_]*(?![*\w])"
             r"|(?<![/\w.])[a-z_][A-Za-z0-9_]*_[A-Za-z0-9_]*\s*/\s*[a-z_][A-Za-z0-9_]{2,}(?![/.\w])"
@@ -1138,11 +1163,7 @@ def main() -> int:
         for tid, sec in sections.items():
             kinds = dict(file_kinds(sec))
             new_behavioral = [f for f, k in kinds.items() if k == "new" and is_behavioral(os.path.basename(f))]
-            # An After is authored content — only the Before is a quotation — and in a
-            # guide blueprint the behaviour changes usually live in modify hunks, so
-            # skipping them checked the promise everywhere except where it mattered.
-            blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
-            blocks += after_additions(sec)
+            blocks = authored(sec)
             if (new_behavioral and blocks and not any(MARKER.search(b) for b in blocks)
                     and any(has_body(b) for b in blocks)):
                 # A complete implementation with one `if` in it carried no control flow
@@ -1183,9 +1204,7 @@ def main() -> int:
         # cleanup both trace markers to tasks by it. Nothing checked it.
         unlabelled_markers = []
         for tid, sec in sections.items():
-            blocks = [c for _i, c in code_blocks(strip_quoted(sec), content_only=True)]
-            blocks += after_additions(sec)
-            for blk in blocks:
+            for blk in authored(sec):
                 # A message, not a mention: the executable forms are matched only as a
                 # call carrying a string. Without the call, `class NotImplementedError
                 # extends Error {}` read as a marker whose message was "extends Error {}",
@@ -1212,22 +1231,29 @@ def main() -> int:
 
         # One message written once and pasted is not a work instruction. A reviewer found
         # twelve of eighteen markers carrying the same sentence, all passing.
-        from collections import Counter
-        msgs = []
+        #
+        # Two things this shipped wrong, both of them a machine mistaking a quotation for
+        # an author. It scanned the raw section, so the next task's **Before** — the shape
+        # 3a-G asks for when a hunk changes code around an existing marker — counted as a
+        # second and third use. And it counted OCCURRENCES, while the sentence it printed
+        # said "across three or more TASKS": a two-task document with one marker in it
+        # reported "3x". The regex was already capturing the task id.
+        msgs: dict[str, set] = {}
         for tid, sec in sections.items():
-            for m in re.finditer(
-                r"""(?:TODO\(blueprint\)\s*:|NotImplementedError|UnsupportedOperationException"""
-                r"""|panic|todo!|fatalError|throw\s+new\s+Error)\s*[(:]?\s*["'`]?\s*T\d+\s*:\s*([^"'`\n]{10,})""",
-                sec,
-            ):
-                msgs.append(m.group(1).strip())
-        repeated = [(t, n) for t, n in Counter(msgs).items() if n >= 3]
+            for blk in authored(sec):
+                for m in re.finditer(
+                    r"""(?:TODO\(blueprint\)\s*:|NotImplementedError|UnsupportedOperationException"""
+                    r"""|panic|todo!|fatalError|throw\s+new\s+Error)\s*[(:]?\s*["'`]?\s*T\d+\s*:\s*([^"'`\n]{10,})""",
+                    blk,
+                ):
+                    msgs.setdefault(m.group(1).strip(), set()).add(tid)
+        repeated = [(t, sorted(ids)) for t, ids in msgs.items() if len(ids) >= 3]
         if repeated:
-            repeated.sort(key=lambda x: -x[1])
+            repeated.sort(key=lambda x: -len(x[1]))
             record(
                 "warn",
                 f"{len(repeated)} marker message(s) are repeated across three or more tasks",
-                "\n".join(f"{n}x: {t[:70]!r}" for t, n in repeated[:4])
+                "\n".join(f"{', '.join(ids)}: {t[:70]!r}" for t, ids in repeated[:4])
                 + "\na message that fits three tasks is describing none of them; say what THIS body must achieve",
             )
 
@@ -1240,6 +1266,11 @@ def main() -> int:
             # shows a correct `throw new DomainError(...)` was reported as inventing the
             # type it was quoting. And the import that declares it lives in another hunk
             # of the same task, so the whole task is the scope, not one block.
+            #
+            # The one code check that does NOT go through authored(): it needs the fence's
+            # language, which an After's added lines have no place to carry, so it reads
+            # whole non-hunk blocks. It is therefore blind inside hunks, and the fixture
+            # corpus records that rather than claiming otherwise.
             declared_here = strip_quoted(sec)
             for info, blk in code_blocks(strip_quoted(sec)):
                 if (info or "").lower() not in JS_INFO:
