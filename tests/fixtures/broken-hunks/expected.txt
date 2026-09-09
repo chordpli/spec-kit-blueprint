@@ -1,0 +1,50 @@
+validate: ✗ a task declares a (modify) file that is not in the tree
+validate: ⚠ a Before block appears more than once in its file — the anchor is ambiguous
+validate: ✗ a **Before** block has no **After** after it
+validate: ✗ Before and After are identical — the change is not a diff
+validate: ⚠ modify task has code that is not anchored to a position
+validate: ✗ a code block is labelled with a path the task does not declare
+validate: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate: exit 1
+validate --strict-guide: ✗ a task declares a (modify) file that is not in the tree
+validate --strict-guide: ⚠ a Before block appears more than once in its file — the anchor is ambiguous
+validate --strict-guide: ✗ a **Before** block has no **After** after it
+validate --strict-guide: ✗ Before and After are identical — the change is not a diff
+validate --strict-guide: ⚠ modify task has code that is not anchored to a position
+validate --strict-guide: ✗ a code block is labelled with a path the task does not declare
+validate --strict-guide: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate --strict-guide: exit 1
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
+apply: ✗ T002  FAILED
+apply: ✗ T003  FAILED
+apply: ✗ T004  FAILED
+apply: ✗ T005  FAILED
+apply: ✗ T006  FAILED
+apply: exit 1
+apply --verify: ✗ T002  FAILED
+apply --verify: ✗ T003  FAILED
+apply --verify: ✗ T004  FAILED
+apply --verify: ✗ T005  FAILED
+apply --verify: ✗ T006  FAILED
+apply --verify: exit 1
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
+scaffold: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold: exit 0
+scaffold --fresh: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --fresh: exit 0
+scaffold --done: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --done: exit 0
+scaffold --strict: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --strict: exit 0
+scaffold --markers:   (0 marker line(s) in 2 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --done --all: exit 0
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2

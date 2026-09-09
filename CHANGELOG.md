@@ -5,6 +5,727 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The previous entry was audited by reproduction, and the three reviewers converged on one line
+of one file. `speckit.blueprint.validate.md` told its reader to run four commands, and neither
+`--verify` nor `--done` — the two features that entry is about — was among them. Measured
+independently on three repositories: a tree with a declared function deleted, so the
+application would not import; a tree with twenty-two not-implemented markers across five
+"finished" features and two test classes no runner calls; and a tree with a checklist claiming
+work nobody had started. **All four commands exited 0 on every one of them.** Typing
+`--verify` or `--done` by hand caught all three. The features existed and were not delivered;
+from where a first-year developer stands, that is indistinguishable from not having built them.
+
+That is fixed first, in all four command documents and the README, as a second copyable block
+rather than a paragraph a reader has to reach.
+
+The second half of this entry is about the corpus the previous entry introduced. A reviewer
+planted 46 regressions into a copy of the extension and asked it about each one: **it caught
+14 (30.4%)**, including **0 of the 9 defects the previous entry itself announced fixing**, and
+0 of 5 checks downgraded from failure to warning. The diagnosis is exact and is now written
+into `tests/fixtures/README.md`: the corpus ran each tool once with no flags, over three
+documents that were all clean, and a check that never speaks cannot be observed to have been
+switched off. Pinning more detail about a silent check does nothing — the reviewer measured
+that too, and the number did not move. The corpus now runs thirteen command lines per fixture
+and three of its six fixtures are red on purpose. Re-measured with the reviewer's own harness
+against the same 46 regressions: **14 → 39 (30.4% → 84.8%)**, and the harness's control — a
+change that alters no behaviour — is still correctly not flagged. By category: the
+authored/quoted judgment 7/14 → **14/14**, checks switched off 2/8 → **8/8**, checks
+downgraded 0/5 → **5/5**, this cycle's own announced fixes 0/9 → **6/9**. Three of the three
+cases whose anchor text these fixes moved were re-pointed at the same regression in the new
+code rather than dropped; none is weakened.
+
+It also carries a `--coverage` mode that names every finding the three scripts can print which
+no fixture has ever produced. That number is 18 of 56 today. It is printed rather than
+estimated because the mistake this repository keeps making is building an instrument and not
+measuring it — the previous entry did it to the checks, and then did it again to the corpus
+built to stop it.
+
+### Added
+
+- **Block A / block B in `speckit.blueprint.validate.md`.** The commands that read the document
+  and the commands that read your tree are now two lists with the commit each belongs to named
+  above it, and the reason block B is not optional is stated with the three measurements above
+  it. `README.md` carries the same split, and a table saying which gate belongs on which commit
+- **`validate-scaffold.sh --all`** runs over every `specs/*/` that has a blueprint and fails if
+  any does. Every check in that script is scoped to the files one blueprint declares, so "is
+  anything in this repository unfinished" needed one run per feature — and to know which feature
+  to ask about you had to already know the answer. A reviewer's twenty-two markers were spread
+  over five features and found by guessing which blueprint to name. Combines with `--done` and
+  with `--markers`
+- **`apply_blueprint.py --through T0NN`** applies the document only as far as one task — a
+  bisector for a blueprint whose build fails, where the alternative was deleting sections by
+  hand. Asked for in four consecutive rounds and never answered, not even with a refusal. The
+  `coverage:` denominator stays the whole document, so a truncated run reports the fraction it
+  actually tested instead of 100% of what was left, and it names the tasks it did not reach
+- **A declared name missing from a file that carries no marker is a failure on a plain run.**
+  "The developer has not typed it yet" is why this is normally a warning, and a file with no
+  marker is a file nobody is part-way through. This is the case a reviewer built by deleting a
+  declared function outright: the tree would not import and the plain run said `PASSED with
+  warnings`
+- **`self_test.py --coverage`**, and `self_test.py` in `extension.yml` and in the validate
+  command. It was installed into every tree for a release with no command, hook or manifest
+  entry naming it — a habit of the author's rather than a gate anyone else could run
+- **Three fixtures, two of them red.** `dirty-guide` (a document that trips fourteen checks a
+  clean one silences), `broken-hunks` (the six hunk failures in section 3, one per task — none
+  had ever fired inside the corpus), `quoting-only` (every checkable shape appears **only**
+  inside quotations, so a check that starts reading raw sections speaks up). The corpus also
+  runs `--strict-guide`, `--verify`, `--fresh`, `--done`, `--strict`, `--markers`, `--all` and a
+  mistyped flag on every fixture
+- **`--scaffold` names the files whose bytes a code block cannot state** — `.csv`, `.golden`,
+  `.snap`, binaries. It still writes them; it no longer writes them silently
+
+### Fixed
+
+- **`--verify` shipped the bug this cycle's notes describe fixing in `--build`.** `build_excerpt`
+  ("first error, then the tail") is used by `run_build`; `_run_one`, ten functions away, returned
+  `(stdout + stderr)[-8:]`. A test runner writes failures to stdout and a compiler writes
+  warnings to stderr, so the tail is always the warnings: a reviewer's tree with an emptied
+  policy body and a tree with a Key Decision implemented backwards produced **byte-identical**
+  `--verify` output, neither showing one character of the twelve and three failures the runner
+  had printed. The streams are now excerpted separately and labelled, with a failure vocabulary
+  a test runner actually uses — the compiler's `error`/`cannot find symbol` matches none of
+  `ran 157 checks, 12 failures`
+- **A failed verification no longer prints `Blueprint did NOT apply cleanly`.** It went into the
+  same `rc` as an apply failure, so the run said the document was wrong three lines under its
+  own `FAILED: 0`. The document's verdict and the tree's verdict are two sentences about two
+  artifacts; the exit code is still non-zero for either
+- **`14 task(s) do not:` listed ten of them and borrowed its verb.** The `(+N more)` the green
+  line one row above already had was missing, and the sentence took "verify against your tree"
+  from a line that is not printed when nothing is green — which is the state of the first run
+  anybody makes
+- **The Checklist check could not read the markers this extension writes.** It required the
+  not-implemented call and its `T0NN:` on one physical line; Python wraps them onto two, and so
+  does `--scaffold`. On a tree holding thirty-three such markers it matched **none**, printing
+  `no task ticked [X] still has its marker in the file` in the same run in which the next check
+  named the files holding them. Folding one marker onto a single line, changing not a character
+  of its wording, made it fire at once. It now uses the same joined-line extractor as
+  `--markers`. **The "6 of 118 blueprints" figure above was measured with that parser and is a
+  lower bound; it has not been re-measured, because that corpus is not in this repository**
+- **`--markers` labelled markers copied out of the blueprint verbatim as reworded.** Ownership
+  compared a 48-character run of the message against the raw document. A message wraps twice, in
+  two unrelated places — where the generator wrapped its prose, where the language wrapped the
+  string literal — so a run taken from the start of the message crosses a break on one side and
+  not the other. Four of five markers this extension had just scaffolded were labelled `the
+  wording is not the blueprint's`. Both sides are now compared with whitespace flattened
+- **`--markers` stopped at the first marker with no task id, and exited 1.** `set -eo pipefail`
+  is on and `grep` exits 1 when it matches nothing, so the command substitution that reads the
+  id killed the script. That is precisely the `[not this feature's]` case the three-way label
+  was built for, and `/speckit.blueprint.cleanup` starts from this listing — its mechanical half
+  was being truncated at the one line it most needed to show. Found while building a fixture,
+  reproduced against the released script
+- **`after_additions` deleted lines the task had authored.** It computed what an `**After**`
+  adds as a *set difference* against its `**Before**`, so any added line whose characters match
+  some quoted context line vanished — and the colliding lines are the commonest in any language:
+  `raise NotImplementedError(`, a bare `)`, a bare `}`. Because 3a-G recommends quoting the
+  previous task's marker as the context above a new one, the shape that lost its own marker was
+  the shape the rules ask for: the task-id check went silent on it, and the body-logic finding
+  then reported "a block with no marker" about a block whose marker it had just removed. It is a
+  positional diff now
+- **`os.path.basename('specs/004-x/')` is the empty string**, and a trailing slash is what shell
+  completion puts there. The identifier check's entire value is its remedy, and on that argument
+  form the remedy read ``write ` plan D5` `` — the number missing, which is the defect being
+  reported
+- **Exit 3 said "nothing here says the document is wrong" over a tree that would not compile.**
+  True about the document, and not the whole sentence: a build did fail, over the developer's own
+  files. It now names the moved files and says to read the compiler's lines before concluding the
+  distance explains them
+- **The count of checks exempt from `authored_blocks()` was 1 in `tests/fixtures/README.md`, 2 in
+  `speckit.blueprint.validate.md`, and 3 in the code.** All three say three, and the third
+  exemption — the skeleton-drift check, which compares a block to a file byte for byte and so
+  needs the block as written — now carries its reason beside it like the other two
+- **`self_test.py --update` blessed regressions in silence.** Plant one, run it, and the corpus
+  adopted it as the new truth; the docstring said "read the diff first", which is a request. It
+  prints the diff whether you want it or not and refuses to write without `--i-read-the-diff`
+- **The `clean-guide` fixture was not clean.** `tests/fixtures/README.md` introduced it as "the
+  shape the rules recommend produces no findings at all" and its `expected.txt` carried
+  `⚠ no **Sources** stamp` — a header the generate rules **require**. It has a current stamp now,
+  which also makes it the one fixture that exercises the freshness check's passing path
+- **`quoted-not-authored` did not pin what its own row claimed.** The table said it fixes "a
+  marker authored once and quoted twice is one author"; the check that reads that fires at three
+  tasks, and the fixture had two, so it stayed silent whether the attribution was right or wrong.
+  It has a third quoting task
+- **`apply_blueprint.py`'s usage line listed three of its six flags**, so the error a mistyped
+  flag prints advertised neither `--verify` nor `--scaffold` nor `--verbose`
+- **The `check-prerequisites.sh` mismatch guard is now in all four command documents.** On branch
+  `007-…` a stale `.specify/feature.json` answers `specs/004-…` with exit 0 and no error —
+  reproduced in three consecutive rounds. `cleanup` and `review` told the reader to stop and ask;
+  `generate` and `validate` did not, and `validate`'s execution block is the one that passes that
+  answer to every script
+- **`cleanup`'s FALSIFIED scope contradicted guide mode.** It asked for "any file the blueprint's
+  Why sections cite", which includes `spec.md` and `plan.md` — the two documents guide mode
+  promises the developer need not reopen. Those three artifacts are `review upstream`'s subject
+  and are out of cleanup's scope; `docs/**` and root `*.md` stay in
+- **`.extensionignore` matched `.omc/` only at the root.** A reviewer found two session-state
+  files under `scripts/python/.omc/` in an installed copy. They are not in this repository's
+  history — `.gitignore` has always caught them — but the packaging filter and the git filter are
+  different filters and only one had been hardened
+
+### Not done, and why
+
+- **Portable `review ask` — questions from "a diff and the artifacts it cites" rather than from a
+  blueprint** (a reviewer's narrowed re-submission after two rounds of reserving judgment).
+  **Declined, recorded here rather than left open.** The reviewer's own audit of the feature in
+  the same round found that its grading is meaningless in the way this extension is actually used
+  — the agent that wrote the blueprint is the agent that grades the answers — and the questions'
+  quality comes from precisely the input the proposal removes: the Key Decisions, the delegated
+  decisions, the resolved Open Questions. Replacing that with a heuristic over a diff is a new
+  question-source with no measurement behind it, and this repository's own rule is not to ship a
+  rule it has not measured. If the grading problem is solved first, the input question becomes
+  worth reopening
+- **The seven of the reviewer's 46 still not caught, named rather than absorbed into the
+  headline.** `REG3`, `REG4` and `RX1` all fail for one reason: what they break is printed by the
+  applier *outside* a `⚠`/`✗` finding — the untracked-file sweep line, the build excerpt, the
+  marker-line span — and the corpus pins findings. `REG9` needs a fixture that quotes a markdown
+  template carrying `**Before**` inside a fence. `RX3`, `RX5` and `RX7` remove one alternative
+  from a regex whose finding already fires for another reason, so catching them means a fixture
+  whose *only* hit of that class is the shape being tested: one fixture per rule, linear, and
+  `--coverage` now prices that per check instead of leaving it to be guessed at
+- **A fourth ownership label for a marker whose message carries no task id.** `--markers` prints
+  it unlabelled, which reads as "yours". Observed while fixing the crash above; changing it
+  widens a contract three documents describe, and it was not measured
+- Everything already listed under this heading later in this file still stands
+
+---
+
+## Earlier in this unreleased cycle — the round that built `--verify`, `--done` and the corpus
+
+Three reviewers each planted deliberate defects in a working tree and measured what the tools
+said. Together they planted 25 and the tools caught 7 — and of the eight that broke behaviour
+outright, including one that stopped the application importing at all, the count was zero. In
+every one of those cases the three scripts' output was byte-identical to a clean run. Their
+diagnoses converged: the applier's blind spot is exactly the `(new)` files a guide-mode
+developer types into, the declared-symbol check's population was those same files and nothing
+else, and `--verify` — asked for over five rounds and shipped last release — ran inside a copy
+that had had the developer's code deleted from it.
+
+This release is about that. `--verify` is redesigned to run against the working tree; the
+declared-symbol check reads `(modify)` hooks; a `--done` mode makes "this feature should be
+finished" a thing the scaffold validator can be told; and the Checklist is read for the first
+time.
+
+It also fixes a relapse. Last release diagnosed "a check that counts a quotation as
+authorship", fixed it in one place, and shipped two new checks with the same bug — ten lines
+apart, in the same file, under release notes describing the fix. There is now one function that
+decides what a task wrote, and a fixture corpus in the repository that fails when a check stops
+using it. Both of last release's regressions were re-introduced into a throwaway copy to
+confirm the corpus catches them.
+
+### The measurement discipline, made mechanical
+
+- **`_blueprint_parse.authored_blocks()` is the single place** that separates what a task wrote
+  from what it quotes: fenced blocks that are neither hunks nor illustrative examples, the lines
+  each `**After**` adds beyond its `**Before**`, and `**Replace entire file**` blocks tagged
+  `reprint` so a check that assigns blame can tell them apart. Every code-reading check goes
+  through it; the one documented exception says why in its own comment
+- **`tests/fixtures/` and `scripts/python/self_test.py`.** Three small blueprints and the exact
+  findings the tools must produce for each. `quoted-not-authored` fails the moment a check
+  reads a `**Before**` as this document's writing; `authored-in-a-hunk` fails the moment one
+  stops reading what an `**After**` adds; `clean-guide` fails if the shape the generate rules
+  recommend starts producing findings. `tests/fixtures/README.md` states the rule in the
+  imperative and requires a corpus measurement before a new check is kept
+- **Four candidate prose rules were measured over the corpus's 7,964 marker messages before
+  two were kept.** `amount <= 0` (1 corpus hit) and `int(row[2])` (0) are in. Plain `a + b`
+  between identifiers is out: 1,137 hits, hyphenated English every one — `zero-length`,
+  `half-open`, `non-empty`. Plain `a / b` is out: 98 hits — `text/csv`, `name/value`. Two
+  reviewers asked for those last two by name
+
+### Added
+
+- **`--verify` runs against your tree.** It ran inside the applier's copy, which the applier
+  had just stripped of every file the blueprint declares new and rewritten from the document —
+  so it tested the developer's modify-hunks over the document's skeletons, and nothing else.
+  Measured on one implemented feature: of nineteen runnable commands it ran six, and the number
+  that ran against the developer's own code was zero. Three deliberate defects were planted,
+  one of which stopped the application importing, and all three produced byte-identical output.
+  In the other direction a finished, committed feature reported `3 passed, 2 failed` and exit 1,
+  because the skeletons in the copy throw by design. The same three defects now read
+  10/2, 4/8 and 8/4 against a clean 12/0. It also runs every task rather than only the ones the
+  applier could place — the task whose job is "run the suite" declares no file and was skipped
+  for that reason — deduplicates identical commands (one document ran the same build ten times
+  and reported "12 passed"), and skips a command inside a sentence that predicts its own failure
+- **An optional `**Test**:` header line**, run last by `--verify`. Guide mode's rules stamp
+  `**Build**` as a compile check by design, so a feature was typed to completion, passed every
+  gate including `--verify`, and left the project's own suite red — no task wrote the golden
+  file its tests diff against
+- **`--done` for the scaffold validator.** Its check 3 passes a file *because* it still carries
+  a not-implemented marker, so the greenest output the script can produce is the output of a
+  feature nobody implemented: one repository crossed five features that way, left fourteen
+  markers in production code and two test classes its runner never calls, and got
+  `All checks passed` every time. `--done` makes a leftover marker, a missing declaration and a
+  ticked-but-unfinished Checklist row failures
+- **The declared-symbol check reads `(modify)` hooks.** Its population was new files only, which
+  is where it stopped paying — a feature that sprinkles new files is checked, a feature that
+  edits existing code is not, and the latter is what work in a mature codebase looks like.
+  Symbols read went 6 → 16 and 7 → 24 on two features. A test method deleted from a hook with
+  its caller removed, invisible to every tool before, is now named
+- **The Checklist is checked.** A task ticked `- [X]` whose own marker is still in the file is
+  the document contradicting the tree. Two narrower rules were measured and rejected first: "[X]
+  on a task that still has a section" fires on 84 of 118 blueprints and is simply wrong (that is
+  the normal end state), and "[X] and the id is on disk" fires on 56, almost all a `T014` an
+  earlier feature left. Requiring the id *and* the wording fires on 6
+- **Exit 3 from the applier** when the build fails on a tree that has moved past the stamp. The
+  run already diagnosed the distance in a paragraph and then reported it with the code meaning
+  "the document is wrong" — five features out of five in one repository exited 1 for this reason
+
+### Fixed
+
+- **The relapse, both halves.** The marker-repetition check scanned the raw section, so the next
+  task's `**Before**` — the shape the generate rules ask for — counted as a second and third use
+  of a message one task wrote; it also counted occurrences while its own sentence said "across
+  three or more tasks", so a two-task document with one marker reported `3x`. The feature-number
+  check read only non-hunk blocks, which in guide mode is the half nobody types, and read
+  `**Replace entire file**` blocks whole — reporting four identifiers a previous feature had
+  written and prescribing this feature's number for them, advice that makes the tree more wrong.
+  Corpus effect: repetition findings 37 → 16, feature-number 39 → 42 plus a new finding for
+  reprinted files
+- **An unknown option to `validate-scaffold.sh` is an error.** A mistyped `--frsh` turned two
+  failures into a warning and exit 1 into exit 0, silently. The Python tools got this guard last
+  release and the bash one did not — and its flags are the ones that decide FAIL from WARN
+- **`--markers` printed the first string literal of every wrapped marker twice**, because the
+  continuation loop restarted at the line the task-id join had already consumed. It fires on a
+  marker copied verbatim out of the blueprint, which is the commonest shape there is
+- **`--markers` called the developer's own debt somebody else's.** It decided ownership by
+  comparing wording to the document, so rewording a marker while half-implementing relabelled it
+  `[not written by this blueprint — an earlier feature left it]` — and cleanup's whole job is to
+  tell this feature's debt from residue. The task id says who could own it, the wording says
+  whether this document wrote it, and those give three answers, not two. The feature's own task
+  ids were already being collected for this and thrown away unread
+- **The applier deleted untracked files it had no claim on.** Any file carrying a blueprint
+  marker that no task declared was removed from the copy — including a helper the developer was
+  in the middle of writing and had not staged. One `TODO(blueprint):` line turned a green run red
+  and the tool explained the failure by naming nine unrelated files and calling the blueprint
+  stale. Only a marker naming one of *this* document's task ids justifies the removal now
+- **The applier's build excerpt hid the error.** Twenty trailing lines was the whole rule, and
+  `javac` prints errors first: one repository's seven standing warnings pushed every error off
+  the screen, leaving `1 error` and nothing else. It now shows the first error, then the tail
+- **`skipped: 17` now reads `skipped: 17 (2 partly applied, 3 cannot tell)`.** The code computed
+  that difference and a comment in it explains why it matters — a task with one of three hunks
+  present is half done, and calling that done is the opposite of what review means by implemented
+- **Two `CODE_IN_PROSE` shapes that the last release's notes implied and did not deliver:**
+  `<=`/`>=` against a number, and a call whose argument is subscripted
+
+### Not done, and why
+
+- **Plain arithmetic between identifiers in prose** (`spent + projected`, `spent / budget`),
+  asked for by two reviewers. Measured over 7,964 marker messages: 1,137 and 98 hits, and every
+  one read was English — `zero-length`, `half-open`, `text/csv`, `name/value`. A rule that fires
+  a thousand times on prose trains authors to ignore the check. The narrower forms — one side
+  carrying an underscore or a digit — stay
+- **A checklist rule based on task sections or on task ids alone.** Both were written and
+  measured (84 and 56 of 118 blueprints) before being discarded for the two-part test
+- **Semantic drift** — a Key Decision implemented backwards, a lock order the project's own
+  CLAUDE.md forbids, a prescribed exception type swapped. Three reviewers planted these and no
+  script saw them, which is correct: nothing here can read a design decision. `--done` and the
+  declared-symbol check narrow the gap to "the names are there and the markers are gone"; the
+  rest is `cleanup`'s FALSIFIED pass, which is a reading task for a person and is not a machine
+  signal. Said plainly rather than implied
+
+---
+
+## Earlier in this unreleased cycle
+
+Three reviewers ran the tools over their own repositories and counted what came back. One
+of them classified every finding: over seven runs the three scripts produced 101 — 22
+actionable, 5 informational, 74 noise — averaging 187 lines a run, and three distinct real
+defects for 1,310 lines read. Nine rounds of adding checks, and nobody had counted how often
+each check was right.
+
+Re-measured here on that repository's five features with the same classification: **before,
+87 findings — 17 actionable (19.5%), 4 informational, 66 noise, 1,008 lines. After, 19
+findings — 14 actionable (73.7%), 1 informational, 4 noise, 610 lines.** The four that
+remain are the applier's build failing over a tree that has moved past the blueprint, which
+is left red on purpose: making it green would trade a false alarm for a false pass, and the
+reviewer who weighed both said the second is worse.
+
+So this release mostly removes, merges and silences. What it adds, it adds because something
+that had never once been right was standing in for it.
+
+### Fixed
+
+- **The check this extension's README names as its founding success was structurally dead in
+  the mode the README recommends.** `[4] Multi-file task labels` counted *authored* code
+  blocks, and `strip_quoted` drops every Before/After pair, so a task made only of hunks
+  collapsed to one block and `blocks > 1` was never true for it. In one 16-task blueprint the
+  two largest multi-file tasks — nine files and 37 blocks, three files and 14 — never reached
+  the check, while the applier failed one of them for exactly this defect. It now asks the
+  applier's own question about hunks: a Before/After that follows no usable `**`path`**`
+  label, in a task with two or more files to modify, is a hunk nothing can place. The same
+  document now fails at the document stage instead of two scripts disagreeing about it
+- **A hard failure fired on the shape the spec teaches.** `body_replaced_by_marker` tested one
+  line at a time for a marker, and a self-contained work instruction — which 3a-G asks for —
+  runs over several lines in Python (implicit string concatenation) and Java (text blocks). The
+  continuation lines read as "working code being deleted", so a task quoting the previous
+  task's marker in its Before was reported as demolishing tested code. This check is a failure
+  with no `--strict-guide` escape, so the false positive stopped a junior with no way past it
+  but reading the parser. Marker calls are now read as whole expressions
+- **The document validator and the applier disagreed about the same hunk.** `before_after_pairs`
+  read its blocks with the fence-aware scanner and its `**Before**`/`**After**` labels with a
+  plain line test, so a task carrying a stray fence — the shape a README task takes when it
+  quotes a shell example — hid its `**After**` inside a block: the applier walked the blocks
+  and reported "a Before with no After", the validator paired them and printed a tick. Both
+  halves are fence-aware now, and the validator fails the same task the applier fails
+- **The tool said the blueprint declared things it does not declare.** The declared-symbol
+  extractor read `System.out.println("…");` and `Objects.requireNonNull(id, "id");` as
+  declarations, because a call statement ends in a paren and a semicolon the way a method does.
+  Five of one feature's 48 "declared symbols" were ghosts of this kind, and the tool told the
+  developer their blueprint declares `println`. A dotted receiver in front of the name, or no
+  token at all in front of it, now means a call
+- **Three validators exited 0 over a tree that would not compile.** The declared-symbol check
+  asked whether the name appeared *anywhere* in the file, which the line calling a deleted
+  method satisfies. Deleting `usedToday` from a policy class left `Money used =
+  usedToday(accountId);` behind: `bash tools/build.sh` failed with 12 errors and the check
+  answered "all 19 declared symbol(s) are present". Counted over three implemented features of
+  that repository, 111 of 163 declared symbols appear in their file more than once — every one
+  of those could be deleted without this check moving. Both sides of the comparison
+  now use one declaration recogniser — the same one the extractor uses
+- **A check no document could satisfy.** `[6]` demanded a not-implemented marker in
+  `FeeScheduleRepository.java` — a Java interface with no bodies — because the basename
+  classifier matched `scheduler` across the seam of `Schedule` + `Repository`. Matching is on
+  whole words now (camel-case seams included), and a block that declares no method body is
+  exempt: there is nowhere to put a marker in a port
+- **A section that printed a heading and no verdict.** `[4. Over-Implementation Detection]`
+  set a flag and returned without printing whenever it found something outside `--fresh`,
+  leaving a reader with "it found something and will not say what" on every post-implementation
+  run. It now says what it can and cannot judge, in one line; the unreachable assignment left
+  from a half-finished edit is gone
+- The name `head` held the stamped commit and was rebound, inside the same function, to the
+  first line of a Before block. Every position check after the first finding asked git to diff
+  against a line of Java, git declined, and the rest of the document went unchecked
+
+### Changed
+
+- **Truncated lists say how many they left out, in the document validator too.** The applier
+  learned this last release; the validator has about forty truncating sites and one of them
+  said so. Making 29 Before headers wrong reported six and never mentioned the other 23. All
+  of them now go through one helper
+- **The tools stop reporting the passage of time as a defect.** A `**Before**` whose text sits
+  at a different line than its header cites was reported on all five implemented features of
+  one repository and on none of the freshly generated ones; not one was a defect in a document.
+  It is now silent for a file git says has changed since the stamp — the run still says how
+  many files it declined to judge and why. The applier collapses "already applied", "cannot
+  tell" and "applied over a tree that has moved on" into one `AHEAD` line naming the state and
+  the task ids: they are three readings of one fact, and repeating it per task was 24 of its 35
+  findings
+- **Two warnings whose own evidence line said "expected" are passes.** A stamped source edited
+  by this blueprint's own tasks, and a reference to a task that lives in a sibling slice or
+  another feature: both resolve, both were reported in yellow on every run for ever
+- **`NO TODO markers found` is a count, not a warning per file.** Without `--fresh` a file with
+  no marker is a file someone finished. That single warning was 34 of the 45 findings the
+  scaffold validator produced over one corpus. Eight absent declared files are likewise one
+  finding with the list, not eight failures repeating one sentence
+- **A section with nothing to report is one line.** 92% of the document validator's output was
+  green ticks, and three warnings sat among twenty-one of them. A pass that carries evidence
+  still prints; a pass that carries none is counted. `--verbose` restores the old listing on
+  both Python scripts. Over 43 blueprints the validator's output fell from 1,090 lines to 408
+- The applier's summary carries a `coverage:` line — how many of the document's tasks this run
+  actually typed and compiled. `applied: 3 skipped: 11` with exit 0 is honest in the body and
+  misleading to a job that reads only the exit code. The code is unchanged on purpose: an old
+  blueprint is a fact, not a defect, and `--require-anchors` is how a caller asks for the
+  failure instead
+
+### Added
+
+- `apply_blueprint.py --verify` runs each applied task's `**Verification**` command inside the
+  copy. Asked for in five consecutive rounds; the string "Verification" appeared in these
+  scripts exactly once before this, in a comment explaining that the block under it should be
+  skipped. Only a backticked span beginning with a runner (`python3`, `bash`, `mvn`, `npm`,
+  `go`, `./gradlew`, …) is run — the rest of the line is prose — and a task naming no runnable
+  command is counted, not failed. Opt-in, for the same reason `--build` is: these are shell
+  commands out of a generated document
+- **The body-dictation check reads the two places the generator actually puts the body.** It
+  looked inside marker *calls* only, so 3a-G's own recommended shape for a change inside an
+  existing body — a `// TODO(blueprint):` comment — was the one form nothing examined, and the
+  string "Implementation notes" did not appear in any of the three scripts. Both are now read,
+  and one reviewer's `WARN 0` blueprint has three notes that are whole Java statements
+- The same check reads a message split across string literals. `"…findById(id)" + ".orElseThrow()…"` is one sentence at runtime and two literals in the source, and every pattern reads one line; a reviewer wrote the same expression three ways and only the single-literal one was seen. The seams are removed before scanning
+- **The check knows what a Python body looks like.** Its rules were written against Java and
+  Kotlin, where a body is a chain of calls; six of the seven expressions in one reviewer's
+  Python marker — four formulas and two constructor calls with eight keyword arguments — passed.
+  Arithmetic between identifiers, a call with two or more keyword arguments, a subscripted call
+  and an identifier compared against a number are now read too. Each was measured over all 2,400
+  marker messages, TODO comments and implementation notes in the corpus before being kept:
+  twelve new hits, all of them pasteable code, none on the prose shapes that trip a careless
+  rule — a path, a requirement id, `and/or`, a `*` used for emphasis
+- **The rule about feature-numbered identifiers has a checker.** It was added to the generate
+  spec last release as prose, and the next blueprint written against it used `plan D…` 34
+  times with a feature number 0 times — after which one `cli.py` carried two `(plan D9)`
+  comments meaning different decisions of different features, both typed straight from the
+  document. Text inside a code block is text that ends up in the tree. One finding per
+  document with the count and four examples, not one per site; it fires on 24 of the 43
+  blueprints in the corpus, and on every one of them the rule is genuinely broken. This is
+  the only check added here that no reviewer asked for, and it exists because "the rule went
+  in as prose and nothing enforced it" is the pattern this release is about
+- README: a table of what the three scripts do **not** check, beside each green they print
+- `cleanup` reads decision records and prose docs for its `FALSIFIED` verdict. The category
+  existed and the scope excluded the only files it applies to: an ADR is in no diff, so code
+  review does not catch it, and two rounds found the same ADR sentence made false by two
+  different features with no machine signal at all. Report-only, never edited
+- `cleanup` and `review` check that `check-prerequisites.sh` answered about the branch they are
+  on. It resolves the feature from `.specify/feature.json`, which switching branches does not
+  update, so on `005-…` it answers `specs/004-…` with exit 0 and no error — and the command
+  would then clean or quiz the wrong feature silently
+
+### Not done, and why
+
+- **The header's file counts stay a warning.** Asked twice as a promotion to failure. The
+  check's own rule — a file declared new by one task and modified by later ones counts once, as
+  new — is a heuristic, and 12 of 43 corpus blueprints trip it; a gate built on that would be
+  wrong more often than the documents it rejects
+- **The dictated-body finding stays a warning by default.** Widening it was the right half of
+  the request; promoting it was not. Whether a sentence is too literal is a judgment, this check
+  has over-fired before, and `--strict-guide` already promotes it for teams that want the gate
+- **No marker-symbol-to-import check.** Asked for three rounds. It cannot tell "same package",
+  "language builtin" and "no import needed in this language" from a real omission without
+  knowing the language, and this release's measurement is that a check which cannot be satisfied
+  is worse than no check at all. Recorded here as declined rather than left open
+- **No `blueprint drift` command.** The ownership-cost problem is real and this is not a new
+  command's worth of answer: the applier's `AHEAD` state and `coverage:` fraction are the two
+  numbers such a command would print, and the README now says plainly that nothing here measures
+  how much of a merged blueprint is still true
+
+## [1.2.0] - 2026-09-02
+
+Everything here came out of two people using the extension on real projects and
+reporting what broke. The theme is the same in both directions: the tool stated
+obligations it never collected on — that its code compiles, that the developer can
+explain their choices — and now it checks them.
+
+### Added
+
+- Two closure rules found by auditing a generated blueprint as a developer who has not read the design docs: requirements and acceptance criteria cited by task headers must be reproduced in the document (they were referenced 102 times and stated nowhere), and every "defined in T0NN" forward reference must actually be delivered by that task
+- `apply_blueprint.py` — applies a blueprint to a throwaway copy of the tree and builds it, so the document's central claim is checked by a compiler rather than asserted by its author. Deterministic: an anchor that does not match verbatim is a reported defect, never a guess
+- `/speckit.blueprint.review` — after implementing, asks about the decisions the blueprint delegated, grades the answers against the code and the blueprint, and exports a decision list for the PR
+- `review upstream` — the doubts typing raises about earlier stages now have somewhere to go. Transcribing a signature is when a design gets tested, and the doubt is usually about spec.md or a decision record rather than the line under the cursor. The mode reads each task's **Why** to find which artifact the doubt is aimed at, then separates the three cases that feel identical at the keyboard — the developer misread it, the blueprint misquoted it, or the artifact does not hold — and only the last becomes a change request
+- `**Sources**` and `**Build**` header stamps, with the document validator failing a blueprint whose inputs have moved; regeneration keeps unchanged tasks verbatim so the diff stays reviewable
+- Rule and check for undetermined specs: what the artifacts do not decide, the blueprint does not decide either — it builds to the seam, marks the task blocked, and collects the gaps in an Open Questions section, which the document validator reports with its blocking count
+- Two rules that lived only in the prompt are now checked: a regeneration that rewrites tasks whose sources never moved fails against the committed blueprint, and a guide-mode block carrying control flow beside its marker is flagged as body logic the developer was supposed to write
+- `_blueprint_parse.py` — one reading of a blueprint shared by both Python tools, after a path fix landed in one and not the other and quietly disabled a check in the second
+- The sandbox promise says what it covers. Every edit lands in the throwaway copy, but `--build` runs a shell command that can come from the blueprint's own `**Build**:` line, and a build writes wherever the developer running it can — so the command is printed before it runs and the README says to read it before pointing `--build` at a blueprint you did not generate
+- Guide mode says how a file that changes is written: a new file that several tasks build up (each later task anchors on the tail of the skeleton the previous one left), and a change inside an existing body (a `TODO(blueprint):` marker inserted where the change goes, with the notes saying what it must achieve). Both use the ordinary Before/After form and need no tool support; the gap was that the form was never written down, so generators invented one each — `**Required end state**` in one run, a tail-anchored hunk in another — and only the second applies
+- The README opens with a ten-line path for the reader who is here to type the code and learn from it, recommends `guide scaffold` over plain `guide` for that workflow, and tags each Step 3d closure rule with the projects it applies to, so a four-file CLI can skip the schema and classpath rules and know it lost nothing
+- `review` says where each mode writes: `export` to `specs/{feature}/review-decisions.md`, `upstream` to `specs/{feature}/review-upstream.md`, `ask` to the conversation
+- `validate-scaffold.sh --fresh` — states that the scaffold has only just been written, which is the one thing the script cannot see for itself. Its over-implementation check reads the sibling files to guess whether implementation has started, and when every file was written complete there are no marked siblings left to read
+
+### Added
+
+- `validate-scaffold.sh` checks that each declared file holds what the blueprint says it declares. It checked that a file exists and that it carries markers, so a task whose hunks never landed left a file that passed with a function missing — asked for in three rounds running. A missing declaration is a failure under `--fresh` and a warning after that, since a developer who has started implementing may legitimately rename what the document called something else
+- The header's own arithmetic is checked. `**Files**: N new, M modified` was a claim nobody read; a file declared `(new)` by one task and modified by later ones counts once, as new, and what is left disagrees in 14 of the 45 blueprints written against this tool
+- A `path:line` citation in prose that points past the end of that file is a failure. A line number is a claim about the tree like any other, and one naming a line the file does not have cannot be true
+- A marker message repeated across three or more tasks is reported. A message that fits three bodies is describing none of them
+- A JavaScript or TypeScript marker that throws a type the block never declares is reported. It parses, passes a syntax-only build, and dies with a `ReferenceError` naming the marker instead of the work
+
+### Fixed
+
+- A shallow clone no longer turns a correct blueprint red. The document validator asked git whether each file had changed since the stamped commit and read git's "I cannot answer" as "unchanged", so every position check ran against a tree nothing could vouch for — `actions/checkout` defaults to depth 1, and a correct feature came back with six false failures that `git fetch --unshallow` alone cleared. The applier had the same line in its anchor path and reported "Before block not found verbatim" for the same reason. Both now say what they could not check. A document with no `| HEAD` stamp still gets the plain verdict: it claims no baseline, so a missing Before is a missing Before
+- The declared-symbol check stops reading `throw new UnsupportedOperationException("T0NN: …");` as a declaration. It ends in a parenthesis and a semicolon the way a method does, so the exception's name was demanded of the file
+- `--markers` says which markers this blueprint did not write. Task ids restart at T001 in every feature, so five `T014:` markers left by feature 001 were listed as work still owed by feature 004 — which has its own T014. The id cannot decide it; whether the document contains the marker's message can
+- The ambiguous-anchor warning no longer depends on the stamp. A `**Before**` that appears twice is ambiguous for the applier wherever the tree stands
+
+### Changed
+
+- The README no longer recommends `--require-anchors` as a standing CI gate. Measured across a feature's life, it is green only on the commit that has a blueprint and no code; from the first implemented task onward it is red on every commit, and an alarm that is always on is not an alarm. The CI guidance now asks for `fetch-depth: 0` and names the two scripts worth running
+
+- The scaffold validator's marker check reaches core logic files in the full-code modes. A file was checked for markers only if its name matched `*service*`, `*handler*` or `*test*`, or if the *blueprint* gave it a marker — and in `scaffold` and `doc-only` the document holds complete code by definition, so that last condition is false for every file. A fully implemented `search.py` with no markers passed `--fresh` with `All checks passed`, while `--markers` listed its four marker lines: the enumeration path and the checking path had come apart. This is the mode the README defaults to
+- A hunk that is partly present is `cannot tell`, not `already applied`. Every attempt to sharpen the line matching has been defeated by the next repository that writes the same idiom twice, and thirteen of twenty-three lines present is not evidence the developer made this change — it is evidence that nothing here can tell. The cost was measured: the only test of a requirement never entered the build while the run ended `Blueprint applied and built`
+- A guide-mode `**Build**` that only parses says so. The spec explains two paragraphs below that a parser cannot resolve names, and nothing checked the line it had just told you to write
+
+- Two of the three bundled scripts no longer disagree about the same document. Before/After pairs were found by a regex that counted exactly three backticks, so a task whose quoted text is itself Markdown — a README update, which most features have — had to use four, and then the document validator read a Before with no After while the applier applied it without complaint. Three backticks reversed the verdicts. There was no notation that satisfied both. Fence handling is one function now, it tracks fence length the way the applier always did, and the failure message no longer asserts what a different script would do — it was asserting the opposite of the truth
+- A guide-mode hunk that replaces working code with a marker is a failure, not a warning. There is no judgment in this one: the Before holds lines that run and the After holds a marker where they were. A weaker generator treats `FAIL 0` as the target and stops, so a warning here is a gate that passes a document which breaks a shipped feature the moment it is typed — measured on a real generation: `PASS 20 / WARN 6 / FAIL 0, exit 0`, with ten deleted lines inside those warnings. It fires on 3 of the 58 guide blueprints in the corpus
+- The invented-type check reads what the task writes, not what it quotes. A `(modify)` hunk whose `**Before**` shows the existing, correct `throw new DomainError(...)` was reported as inventing the type it was quoting, and the `import` that declares it lives in a different hunk of the same task — so the check now skips quoted blocks and looks for the declaration across the whole task
+
+- The end of a `**Before**` line range is checked against the block. Only the first number was ever compared, so `(lines 48-50)` above a four-line block passed every check and shipped in a delivered blueprint; a reader counting down from 48 stops one line short of what the hunk replaces
+- `review export`'s first table asks the reviewer to test the decision instead of reading its defence. Rewording the header did nothing — measured: in a controlled pair on the same diff, the reviewer who saw only the diff called a hardcoded currency a blocker (a foreign-currency transfer dies on it) and the reviewer who saw that line justified in the table called it a minor style point and wrote that the reasoning held up. The table now carries what the decision *assumes* and what breaks here if that is wrong, which is the same information in a form that can be false
+- Truncated lists in the applier say how many they left out, in the orphan sweep and the scaffold report as well as the skip line
+
+- The check for a hunk that deletes working code is no longer blind in the shape this document recommends. It skipped any hunk whose `**Before**` carried a marker — and 3a-G's own advice for a change inside an existing body is to insert a marker comment, so a Before with one `TODO(blueprint):` line above twenty lines of tested code passed in silence. Marker lines are excluded from the count instead of disqualifying the hunk
+- A marker message that chains calls is caught. `amount.amount().multiply(rate).divide(ONE, 0, HALF_UP)` carries no comparison and no `return`, so the message check saw nothing while the reader was handed the body to paste. Measured across every marker message in the corpus: 36 of 1495, and each one hands over an expression
+- A reference to a task that belongs to another feature is a warning naming that feature, not a dangling-reference failure. A `**Why**` that says "the fee table is loaded by feature 002's T021" is a correct cross-reference, and the only verdict available for it was red
+
+- A task demoted to a pre-completed row keeps its reasoning. Regenerating while a feature is being implemented moves tasks into that table one at a time — the work is done, the `**Before**` it quoted is no longer in the file, and no full section can be written for it any more. The table had columns for task, file and status, so the Why and the Key Decision went with the section, and a reviewer found the mechanism by restoring a deleted section and watching the validator fail on it. The table now carries the Why, the rule says to carry it, and the missing-Before message names the pre-completed row as the remedy rather than leaving deletion as the obvious one
+
+- The applier's two skip counts are the same count. The summary derived skips by subtraction and the last line derived them from a list that also holds tasks which *did* apply over a moved tree, so a run printed `skipped: 8` above `9 task(s) skipped` and named eight of them. Both now read one list, tasks skipped for any reason are in it, and a truncated list says how many it left out
+- A regeneration that drops a task section reports it. The check compared only ids present in both versions, so a section that disappeared — folded into a pre-completed row, or simply lost — left `2 of 11 rewritten` without mentioning that the denominator had been 12
+- `**Build**` guidance no longer recommends a command that the next paragraph disqualifies. The mode paragraph offered `python3 -m compileall src` as an example and the paragraph below it explains that exactly this kind of parser cannot see an undeclared name
+- The symbol-resolution closure rule applies to every project and covers the skeleton's own imports. It was tagged for projects with modules or declared dependencies, so a single-package script was exempt — and a marker telling the developer to use `dataclasses.replace` in a file whose skeleton never imports `replace` parsed, passed the stamped build, and died with a `NameError` on the first run
+
+- The already-applied verdict asks about the class the hunk edits, not the whole file. A generated blueprint added a test class following the repository's own idiom — the same helper loop, under a method with the same name, in a new class — so every candidate line matched something already in the file and so did the line above it. The context check passed and a task nobody had typed was skipped: the same false verdict as the round before, reached by a different route. The duplicate now has to sit inside the same top-level declaration the hunk lands in
+- The applier never writes a hunk it cannot vouch for. The duplicate-harm test only ran when git said the file had changed since the stamp, so a clone that could not resolve that commit — a shallow CI checkout — turned the guard off entirely and applied an already-applied hunk a second time on top of itself, duplicating lines under a green last line. The harm test is a direct question about the file and now runs regardless; the stamp only decides what the answer is called: you made this change (`already applied`), the document prescribes what its own baseline holds (a defect), or nothing here can tell (`cannot tell`, and nothing is written)
+- A build that fails on a tree that has moved on says so. Every task applied, `FAILED: 0`, exit 1, and a last line blaming the blueprint — for errors in a file a *later* feature had extended. The failure now names the files this blueprint writes that have changed since its stamp, so the reader checks the distance before rewriting the document
+- The freshness exception reaches the whole slice family. A split feature's stamped source is edited by whichever slice owns that task, and looking only at this document left the first slice failing forever over its sibling's work
+
+- The not-implemented form 3a-G gives JavaScript and TypeScript is now visible to the machinery that looks for markers. The spec gained `throw new Error("T0NN: …")` and the four detectors that read markers did not, so `validate-scaffold.sh --markers` answered "0 marker line(s)" for a file whose tests were failing and cleanup reported an unfinished feature as done. The task id is what separates a marker from the way real code raises real errors, and it is required for this form only
+- `**Build**` accepts the shape the header template teaches. The Mode line's `— explanation` convention twelve lines above is how authors write the Build line too, usually with the command in backticks; stripping the ends of the value left a backtick in the middle of the command and the build died on `unexpected EOF while looking for matching ``'`
+- An absent Open Questions section is reported. Every signal lived inside `if oq:`, so a blueprint with no section and a blueprint whose generator genuinely had no questions looked identical, and the only machine signal — the blocking-row warning — fell on the document that had correctly flagged a blocker rather than the one that had asked nothing
+- The orphan sweep asks what it meant to ask. "Not in the commit the blueprint stamps" is true of every file written since — an ADR, golden fixtures, a test, `.gitignore` — and fifteen of them were deleted from the copy in one run, producing `cannot find symbol` failures reported against the blueprint. Residue is now what a blueprint left behind and no task owns: undeclared, absent from the committed tree, and carrying a marker
+- A stamped source that one of the blueprint's own tasks edits is a warning naming that task, not a permanent failure. The generate spec says not to stamp such a file, and the check told the reader to "say in the document why the difference is fine" — a sentence with no path in the code behind it, so a blueprint that stamped `CLAUDE.md` and also edited it could never pass again
+- A split feature has a passing configuration. Coverage counted only what a *base* slice delivers, so a per-slice `tasks.md` left the references across the seam dangling and a whole-feature `tasks.md` failed coverage instead — neither passed. Both ends of the link now count, and a slice that does not exist yet is still a real omission
+- The applier no longer calls a task "already applied" over a file the developer could not have touched. The verdict means "you made this change another way", and it was reached by matching a single line — so a test method named the same in two classes read as one line written twice, and the task that would have added the second class was skipped. On a tree where nothing had been implemented the run still ended `applied: 11 skipped: 1`, exit 0, "Blueprint applied and built". The question is now asked only of files that existed at the stamped commit, and a matching line must sit under the same line it sits under in the After
+- A skipped task is named in the applier's last line, and that line is no longer green. A task that was skipped never reached the build, so the run says nothing about its code — the same false pass, one level up from the one above
+- Guide mode: a hunk that replaces working code with a not-implemented marker is reported, by both tools. A reviewer's `(modify)` hunk traded a tested 38-line method for a single `throw`; the applier compiled the skeleton, went green, and the loss surfaced only in the project's own test suite, which that build never runs. The applier now also says plainly that a guide build compiles skeletons rather than exercising behavior
+- `review export` no longer tells the reviewer not to review. "Review these for correct application, not for design — the rationale was settled up front" was measured against a control: the reviewer who received the export missed a hardcoded currency that the reviewer who received only the diff caught, and the blueprint had explicitly justified that line. Agreement is not correctness, and the export now says so
+- `validate-scaffold.sh --fresh` counts methods rather than declarations. `private final Money amount;` and `public interface X {` were counted, so the failure line said "9 methods" about a file with four — reported three rounds running, and that number is the only evidence the line offers
+- The README and the generate spec now give the typing reader the same instruction. One said "Steps 3a-G, 3b and 3c — about 40 lines", the other "3a-G's first four bullets, 3b and 3c — about 30 lines"
+- The applier no longer empties its copy when it cannot resolve the commit the blueprint stamps. `in_commit` answered "not in that commit" both when git had looked and when git had no commit to look in, and a shallow CI checkout — the case the docs recommend — is the second one for every path in the tree, so the whole working tree was swept out as scaffold residue and the build failure that followed was reported as the blueprint's. A stamp this clone cannot resolve is now announced and used for nothing
+- A class *declaration* is no longer read as a not-implemented marker. `export class NotImplementedError extends Error {}` matched the marker names, so the file that declared its error type failed with "a marker message does not begin with a task id — `extends Error {}`" while the file that threw an undeclared name passed. A reviewer watched a generator pick the broken form to satisfy the check. The executable forms are now matched only as a call carrying a string
+- Go's documented marker form, `panic("TODO: T0NN: …")`, no longer fails the task-id check that this document's own example writes
+- JavaScript and TypeScript have a canonical not-implemented form in Step 3a-G, and a rule against inventing one. `NotImplementedError` is a Python name; written in a JS skeleton it parses, passes a syntax-only build, and dies at runtime with a `ReferenceError` naming the marker rather than the work
+- The `**Build**` guidance says what a syntax checker cannot do. `node --check` and `python3 -m compileall` read one file and stop, so a skeleton referring to a name that does not exist passes the gate the header stamps; the guidance now asks for a checker that resolves names, or a command that loads the files rather than only parsing them
+- The applier refuses a declared path that resolves outside its throwaway copy, and no longer preserves symlinks into it — an absolute or `../` target in a blueprint could write to the real filesystem, against the one promise the tool makes
+- `(modified)` and `(deleted)` are read as the kinds they are; a `rstrip("d")` turned the first into `modifie`, so a correct blueprint was reported as declaring no modified file
+- A `**File**:` declaration is recognised at the end of a section, and stops before following prose, which was being read as more declared files
+- Task coverage counts task sections and pre-completed rows, not every task id in the document — the checklist the template requires made the check unfailable
+- The dropped-anchor check uses non-overlapping edge windows; in a hunk under ten lines the head and tail windows overlapped and the deletion it exists to catch passed
+- The regeneration check compares only the source hashes, not the `| HEAD` suffix that moves on any unrelated commit
+- The Open Questions section ends at a heading of its own depth instead of swallowing the rest of the document
+- Kind and label parsing in the validator go through the shared module, so `(modified)`, `(all modify)`, labels without a trailing colon, and ten-character extensions all agree with the applier
+- The scaffold validator recognises `(all new)` and repository-root files, and reads paths without word-splitting or glob-expanding them
+- The scaffold validator ran on macOS and nowhere else: `((PASS++))` returns the value before the increment, so the very first `pass` call exited 1 and `set -e` killed the script before check 2 on every bash >= 4. On a Linux CI runner it printed one header and stopped, while still exiting red — three of its four checks had never run
+- The applier could corrupt the file it was applying to. Its end-of-file newline allowance dropped the block's last newline unconditionally, so a Before of `    val fee = 0` matched inside `    val fee = 0L` and wrote `    val fee = feeOf(x)L` while reporting the task applied. The allowance now fires only where it was justified, at a region that really is at the end of the file
+- `file_kinds` was not fence-aware, against the shared module's own headline promise. A task that documented the blueprint format, with a `**File**:` line quoted inside a markdown block and none of its own, adopted the quoted path — and the applier wrote it. The scaffold validator read fenced declarations and tables the same way, and demanded the example paths on disk
+- The dropped-anchor check is counted, not positioned. Both earlier versions were wrong in both directions at once: a two-line Before put its closing brace in the opening window and failed a correct diff, while a `/**` four lines in fell between the windows and passed — the exact hunk the check was written for. It now compares how many times a structural line appears on each side, and reports as a warning, since a task that removes a block legitimately drops one
+- `code_lines` treated a one-line docstring as an opening delimiter and never closed it, so everything after the commonest Python docstring form went unread and guide mode's one mechanically enforced promise never fired
+- `copy_tree` matched its skip list at any depth and against files, so a Java or Go package directory named `build`, `dist` or `out` was dropped from the copy and `--build` failed with "cannot find symbol" while the report blamed the blueprint. Those names are skipped at the repository root now; `.git` and `node_modules` still anywhere
+- `--build` no longer runs after a task failed to apply — it would have reported the applier's damage as the blueprint's — and is killed after 15 minutes instead of waiting for ever on the unverified code it exists to be suspicious of
+- The freshness check resolved a stamped source by basename inside the feature directory first, so an unrelated file of the same name shadowed the real one and reported a byte-identical artifact as changed
+- A duplicated task id no longer disappears: `dict(split_tasks(...))` kept only the last section, so the first went unchecked by every check and the section count printed one too few. The duplicate is now a failure of its own
+- A `**Before**` with no `**After**` is reported instead of being paired with a later task's After — a diff that is not in the document. The applier already refused these, so the document validator was strictly weaker than the applier on a defect it exists to find
+- A `(lines 40-500)` citation has both ends checked; only the first number was read, so the bound that mattered never was
+- Code blocks are extracted with the shared fence scanner. The regex the checks used mispaired fences on any info string that was not a bare word — a ```` ```c++ ```` block made the following prose scan as code — and a nested fence hid a block entirely
+- Paths with a space survive: the dedup ran through an unquoted command substitution, so `docs/my file.md` became two fabricated missing files, and the expansion was glob-subject as well
+- `(new — moved from …)` is read as `new` again on both sides, `(New)` is matched case-insensitively by the scaffold validator, and both tools accept an extensionless build file and a path whose last dot-segment is long. The two disagreed on all four, each demanding a file the other never wrote
+- `**Mode**` is parsed once, in the shared module, and tolerates the backticked spelling the README and the generator's own tables use — three parsers with three grammars meant a header read as `guide` by one tool and `unknown` by the next
+- Applier failure messages name the file again instead of a six-level `../` chain, from comparing against an unresolved temporary path
+- `--fresh` reports each violating file once, and spares a file too small to tell a written-complete body from a type the basename classifier mislabelled
+- A blueprint whose declared paths are all placeholders says so, instead of printing nothing at all for the file-existence check
+- A `(modify)` path that is not in the tree is a defect, not a file to create. The applier wrote the fragment to that path instead, producing a phantom file no source set compiles — so `--build` passed while the real file was never touched
+- A block label has to look like a path. `**`Svc.transfer()`**` names a method, and a dot was enough to make the applier write that block to a file called `Svc.transfer()` at the tree root while reporting the declared path as edited
+- Overwriting a declared-new file that is already on disk is now reported. It is the right thing to do while the tree holds scaffolds — guide-scaffold puts them there before implementation, and the compile gate depends on it — and the wrong thing once the tree holds the implementation, because the same overwrite discards the work and the build then describes the blueprint rather than your tree. The command spec claimed those files were left alone, which was never true
+- A dangling symlink no longer aborts the copy, and a copy that fails part-way is cleaned up instead of leaking a temporary tree through an uncaught traceback
+- A ```bash block under **Verification** is a command, not file content. Counting it reported every task that has one as carrying code the applier could not place, and the applier "left it alone" out loud. The two tools now read a task section through one shared event stream, which is also the only place that knows which labels are illustrative
+- A Before that cites a line past the end of the file on disk, in a file an earlier task changes first, is a warning that names that task rather than a failure. The document cannot settle it — T008 edits the wiring T006 adds — and a correct blueprint could only pass by citing a number it knew was wrong. The applier settles it, since it applies in order and matches the text. The same warning covers a tree you have started implementing in
+- A Before citation is attributed to the file the document names — on the Before line, or in the nearest `**`path`**` label above it — instead of to every file the task declares; the check was telling an author who had labelled the block to name the file they had already named
+- The applier's summary and last line say when declared-new files were overwritten, in yellow; the per-task note alone let "applied and built cleanly" end a run that had just discarded an implementation
+- The applier's copy starts without this blueprint's declared-new files. In `guide scaffold` mode the skeletons are already on disk, and a copy that kept them let the build pass over a task whose block was deleted or whose label was wrong — the skeleton filled the hole and the compiler never saw it. The most recommended mode had the weakest build gate, and the document said the opposite
+- A task that declares a `(new)` file and gives it no block is a document failure, with the task id, before it is a javac trace
+- A `(modify)` path that is not in the tree is checked before anything else in the task. At the write site, a task whose only block carried no label was reported "unanchored" first and never reached the check — a wrong path passed all three tools with exit 0
+- Over-implementation is a warning unless `--fresh` says the scaffold was just written. The sibling ratio was meant to tell "just scaffolded" from "being implemented", but with four skeleton files the first one finished is 3/4 still marked, and the developer who had just implemented it honestly was told it "was written complete instead of stubbed"
+- The skeleton population is read from the blueprint — every declared-new file whose block carries a marker — not guessed from the basename. A controller and a scheduler written complete at scaffold time were never looked at because their names matched neither `*service*` nor `*test*`
+- An unlabelled hunk is measured against the task's `(modify)` files only, the rule the applier already uses to place it: a fifteen-line new exception class was being offered as the file a sixty-line service hunk might be quoting, and the warning told the author to name a file the tool then did not read
+- After implementation, a guide-mode hunk whose added lines are all in the file and whose markers are gone is reported "implemented since" rather than "Before not found verbatim", which sent the reader hunting for a blueprint bug. A Before that is merely wrong by a character still fails
+- An abbreviated Before (`// ... rest of file`) is a document failure by name; the placeholder check strips Before/After first, rightly, so the abbreviation reached the applier as an anonymous "not found"
+- A Before whose text sits at a different line than the number it cites is a warning — in range is not the same as right, and the reader follows the number
+- `--markers` lists each marker once: a file that several tasks build up is declared once per task, and the first version printed its markers that many times — four markers reported as nineteen. A marker whose message wraps to the next line (Python's `raise NotImplementedError(` with the string below) is printed with that line joined on, so the task id is visible
+- The applier tallies hunks per task instead of stopping at the first one already in the file: a task with two hunks present and one that matched nothing is reported as exactly that — "implemented since, differently" — rather than "the After content is already in the file"
+- The applier compares the line a Before cites with the line its text matched on, in the copy as the earlier tasks left it, and says so in the task's note. That is the one check no document-level tool can make, and it closes the case the document validator hands off
+- One marker form: `TODO(blueprint): T{ID}: {instruction}` with the colon, the same shape as the executable markers' messages; the generate spec had said it two ways
+- The generate spec says who it is for: the generator. A developer typing from the result reads 3a-G, 3b and 3c, as the README says, and none of the closure rules; the two lists differ because the two readers do
+- Cleanup's remaining-work list also reads the unchecked Checklist rows, since a `(modify)` task leaves no marker on disk and a feature half done had an empty list
+- Guide-mode body detection covers what an `**After**` block adds. A guide feature's behaviour changes live in modify hunks, so the mode's one mechanical promise was checked everywhere except where it mattered: a reviewer replaced an After's marker with a working body and every tool passed it. Context the After repeats from its Before stays a quotation
+- A block label naming a path its task does not declare is a failure; the applier ignored it, fell back to the sole modified file, and reported the block as having no label at all
+- A declaration written without its `(kind)` is checked for existence, and a task with a hunk but no `(modify)` file is a failure — two shapes of wrong path that passed every document check
+- `--require-anchors` fails when a task is already in the tree or cannot be judged, so a CI job does not stay green over a tree that has moved past the blueprint
+- A partly typed task is not counted among those already in the tree
+- Both Python scripts take `--help` and refuse an unknown option instead of running as though it had not been typed; a typo in `--build` looked like a run that chose not to build
+- The scaffold validator counts methods, not fields, and `--markers` joins a message split across concatenated string literals
+- Guide-mode body detection reads the marker's message and expression bodies. A message that spells out the exact expression hands over the body inside a string, where no code check had ever looked, and a stream chain or a lambda is body logic with no control-flow keyword in it — half a Java body. Both were invisible; a reviewer found four dictated markers and a completed repository method in one blueprint that had passed
+- A Before block that is not in the file it quotes, or is in it twice, is reported by the document validator — checked against the tree as the blueprint's commit left it, so an implemented tree does not report every hunk as wrong. Both tools ask git the same question now, through one shared helper
+- "Already applied" says when only part of a task has landed, and a hunk whose anchor an earlier task moved says "cannot tell" rather than claiming the work is done
+- The scaffold validator warns once per file rather than twice; a feature under implementation collected two warnings per file until none of the output was signal
+- The shared parser sets `dont_write_bytecode` itself, so a third caller importing it does not leave a `__pycache__` in the user's tree
+- The guide-mode `**Build**` warning matches a test runner, not the word `test`: `compileall -q pkg tests` names a directory, and it is the command the spec tells a Python project to stamp
+- `if __name__ == "__main__":` is not body logic — 3a-G asks test skeletons to match the project's existing tests, and in Python those end with exactly that line
+- The applier compares whole lines, not substrings, when deciding a hunk is already applied: `def select_entries(` matched inside the old signature and called an untouched task done. "Already applied" now needs every added line present, or a demonstrable duplicate if the hunk were applied; a hunk that is neither is reported as "cannot tell" and left out of the already-in-the-tree count
+- The guide-mode anchor rule says which run to quote per language: a signature line alone works where the body is on it, and puts the new function between `def` and its body where it is not
+- The copy never drops a file that was in the commit the blueprint stamps. Keying on markers alone deleted a baseline class the moment a sibling slice put a marker in it, and the build failed on symbols the blueprint had nothing to do with — a split feature hit this the first time anyone typed a hunk from the other slice. A sibling slice's declared files are that slice's, not this one's residue
+- A reference to a task that `tasks.md` declares but this blueprint does not carry is a warning, not a failure. The first slice of a split could not pass until the second existed, which inverts the only order anyone would work in; a reference to a task that exists nowhere is still a failure
+- A blocking cell in Open Questions is one that begins with yes. An exact match read `**yes** — Phase 6 is blocked` as no and reported zero blocking questions
+- The generate spec says not to stamp a file one of the blueprint's own tasks modifies, cleanup's scope excludes sibling slices, and the validate spec says to type the base slice's hunks before scaffolding a later one
+- The marker-message check is narrow and quotes what fired. Measured against every blueprint written with this tool, its first version caught `&&` and `==` and nothing else, while its other rules fired only on honest prose — an arrow between two states, an API named mid-sentence, a semicolon between list items — so it trained authors to write expressions and avoid prose, the opposite of the rule. It now reports only what a reader could paste, and names the fragment: a reviewer had bisected one marker twelve times to find the cause
+- `--strict-guide` turns the guide-mode body findings into failures, so a CI job can tell a guide blueprint that hands over a finished body from one that does not
+- A marker message that does not begin with its task id is reported; `--markers` and cleanup trace markers to tasks by that id, and the generate spec asks for it
+- A task declaring more than one new file must label a block with each; one block between two declarations passed, and the missing file surfaced as a compiler error
+- The applier refuses a block label naming a path its task does not declare. Following the label wrote the block there anyway, which put a skeleton back immediately after the sweep had removed it — the reason a mistyped declaration still built
+- The copy drops any undeclared file that was not in the stamped commit, not only those carrying markers: a structural skeleton carries none by design, and one was filling the hole a mistyped path had left
+- A file that later tasks grow is no longer compared to its creating task's block. The "one new file, several tasks" form the spec recommends, scaffolded the way the spec recommends, reported a skeleton nobody had opened as edited since scaffolding — the drift check now looks only at files no other task touches
+- `--markers` joins continuation lines for executable markers only. A comment marker has no closing paren to stop at, so the join ran on and pulled the code beneath it into the list cleanup is supposed to read
+- The generator's reading list names Step 3-Sources, which holds the hash rule and the guide-mode build rule; without it a first blueprint stamps a git sha1 and a test command, and both are wrong
+- Typing every hook first leaves the tree in the last task's shape, which is not an earlier Checkpoint's shape — the instruction now says so
+- The validate spec says what to run while implementing: the project's tests, not this set
+- Splitting a feature works. The README has always advised it past about thirty tasks, and the closure the tool is built on made it impossible: a reviewer split a 57-task feature at its user-story boundary and got ten dangling references in the first slice, twenty-five in the second, and a build failure in the second on the first's types. A later slice names its predecessor with `**Base**: specs/{slice}/blueprint.md`, and that one line is read from both ends — references across the seam resolve in either direction, coverage counts what the base delivers, and the applier applies the base's tasks first. The same 57-task feature now splits into two slices that each validate, apply and build
+- `apply_blueprint.py --scaffold` writes the declared-new files from the verified copy into your tree, after a clean apply and only where nothing is already there. A generator writing forty skeletons by hand is where drift comes from; the copy holds exactly what the document says
+- A forward reference that points at a task the document does not have is a failure. Step 3d asked for it and nothing checked it — the one closure rule with no machine behind it
+- The generate command splits its reading guide by reader, not only by mode: a developer who will type from the blueprint reads 3a-G, 3b and 3c and stops, about forty lines, because the validators enforce the rest. Both reviewers asked for this, from opposite ends — the junior read 395 of 417 lines to write one, the senior would not expect a reviewer to read the 1,467 lines it produced
+- The applier reads the commit the blueprint stamps and asks git whether a file has changed since. A Before that is not in a file that has moved is reported as implemented since, not as a failure — the guide-mode body-change hunk adds only a marker line, so no text heuristic could ever tell the two apart, and the command spec's "a failure means the blueprint is wrong" was sending developers after a bug that was not there. A mixed task, some hunks applied and some already there, is a warning rather than a tick
+- A `(new)` file's label above the hunks no longer claims them: only a label for a file a hunk can edit attributes the hunks below it. The validator had measured a service hunk against the eighteen-line exception class declared beside it and failed a correct blueprint — the opposite of what its own spec said
+- On a tree that has moved past the blueprint's commit, a hunk any of whose added lines are already in the file is reported as implemented since rather than applied; applying it registered a test the developer had already registered, twice
+- The document validator fails a `(modify)` path that is not in the tree (unless an earlier task creates it) and a declared path that escapes the repository; a wrong path passed sixteen checks green because every check that read the file skipped it quietly
+- The applier removes from its copy any file carrying a blueprint marker that no task declares — a deleted section left its skeleton on disk to fill the hole, and the build passed over it — and warns when a task id has more than one section
+- A skeleton on disk that still carries its marker but is not the blueprint's block is a warning; nothing compared the two, so a method added to the file on disk passed all three tools
+- One control-flow line beside a marker is enough to report a guide block, since a method written complete beside five that kept their markers is one `if`
+- A missing `**Mode**:` line is a warning from all three tools instead of a silent unknown that skipped the guide checks; a guide-mode `**Build**:` that runs tests is a warning, since the skeletons throw by design
+- The applier's per-task note lists the files it wrote, not every file the task declared, and a task that left a block unplaced is a warning rather than a tick
+- The hunk-in-a-new-only-task message says what is wrong — the file should be declared `(modify)` — instead of asking for a label that fixes nothing
+- Neither Python tool writes `__pycache__` into the user's `.specify/` any more
+- The scaffold validator colours its output only on a terminal, like the Python tools
+- `validate-scaffold.sh --markers` lists every marker left in the declared files, so cleanup's enumeration is mechanical and only its judgment is the model's
+- Guide-mode body detection reads a block with no marker as suspect at one control-flow line, not three — a complete `claim()` with a single `if` passed — and reports a new service, handler, controller, scheduler or test whose block carries no marker at all
+- An authored comment that narrates the blueprint's history ("moved verbatim", "pre-existing") is a warning: cleanup never touches a doc comment, so a sentence written for this document's reader would stay in the code for ever
+- The generate command opens with a reading guide by mode and lists the shapes the validators read, so a first blueprint passes on format without reading the validators' source; its Rules section no longer restates six rules the Steps already state
+- The command specs' Step 1 says what to do when `check-prerequisites.sh` cannot find the feature (newer spec-kit reads `.specify/feature.json`), the validate spec lists the ten sections the script actually prints, and the README's guide-mode size estimate matches what the closure rules produce
+- Version banners agree: the applier printed 1.0.0 inside a 1.2.0 release, and the README's badge alt text still read 1.1.0
+- The scaffold validator's line-joining pass no longer deletes its own input: a table or a paragraph written directly under a `**File**:` line, with no blank line between, was folded into that line and never re-emitted, so the declarations it carried were invisible. Only continuations are folded now
+- A table row whose status cell reads `New` declares a file again, not only one reading `new file`
+- A file-less mode reports which checks were skipped instead of "All checks passed"
+- The guide-mode body check ignores comments and doc comments, which describe control flow constantly
+- An empty `**Mode**:` value no longer crashes both Python tools with an IndexError
+- `--require-anchors` makes the applier fail when a task's code is not anchored, or when nothing anchored at all — off by default, because a guide blueprint of pure instructions legitimately applies nothing, and on in CI, where "verified nothing" and "verified everything" must not share an exit code
+- The command spec and manifest describe the checks that actually run; three whole sections and half of a fourth had gone undocumented
+- The scaffold validator no longer special-cases one project's wording for a moved file
+- The dropped-anchor check compares positions instead of set membership: the real defect it was written for — a doc-comment opener deleted from the end of a hunk — was exempted by an unrelated opener at the top, while a legitimately rewritten condition was reported instead
+- Over-implementation fails only when nearly every file that should carry a marker still does; mid-implementation, a finished file is normal and no longer fails
+- Multi-file labels are counted whatever follows them, not only a colon
+- Only a task's File declaration says what gets created; reference tables are no longer scraped for paths
+- Guide-mode blueprints stamp a compile or syntax check as their `**Build**`, never a test run — guide skeletons are not-implemented by design, so a test command is red before the developer starts, and in a compiled language that trap hides itself
+- The document validator warns when a modify task's code is not anchored to a position, so prose like "append this at the end" is caught before the applier fails on it
+- Cited requirements are now verified, not self-reported: the document validator fails when a task header names a requirement id whose text appears nowhere in the blueprint (markdown emphasis around the id still counts as a definition)
+- Both validators print their version, so a stale installed copy is visible
+- The applier reports an edit already present in the tree as `already applied` rather than as a missing anchor, so running it after implementing points at the real problem
+
+## [1.1.0] - 2026-08-21
+
+### Added
+
+- `validate_blueprint.py` — validates the blueprint document itself (task coverage, a Why per task, Before/After claims checked against the working tree, multi-file label discipline, placeholder scan), complementing the scaffold validator. Runs in every mode, including doc-only and guide where nothing is written to disk
+- `guide` mode for `/speckit.blueprint.generate` — a design-guidance blueprint with signatures, rationale, implementation notes, pitfalls, and references but **no body code**, for learning-first workflows where the developer designs the logic; `guide scaffold` also writes compilable skeletons to disk
+
+- `/speckit.blueprint.cleanup` command — post-implementation sweep of scaffold residue: stale `TODO(blueprint):` markers, narration comments, commented-out code. Report-only by default, `apply` to edit; never deletes honest unfinished markers or constraint comments
+- `after_implement` hook (optional) prompting the cleanup sweep
+- **Closure rules** (Step 3d) making the blueprint self-sufficient, enforced in self-verification: reproduce behavior-defining tables instead of citing them; every named type must resolve on its module's classpath (or the blueprint carries the task that adds the dependency); simulate every port/caller pair; verify every claim about the working tree (line numbers, Before≠After, add-vs-update ripples, contradicting comments in files the reader is sent to); close the type-to-schema loop (fields↔columns, NOT NULL suppliers) and the declaration loop (collaborators in constructors, no orphan types)
+- **Why layer** in generated blueprints: per-task rationale traced to spec/plan/decision records (decision, rejected alternative, invariant to protect), per-phase background, and a Key Decisions table with rationale, trade-off, rejected alternative, and source columns
+- Comment rules for generated code: constraint comments stay in code, narration stays in blueprint prose; scaffold markers use the greppable `TODO(blueprint): T{ID}` form
+- `provides.scripts` declaration for `validate-scaffold.sh` in the manifest
+
+### Fixed
+
+- Cleanup now recognizes guide-mode markers: a not-implemented **call** carrying a task ID (Kotlin `TODO("T012: …")`) is a blueprint marker, always classified UNFINISHED, never removed. Previously only `TODO(blueprint):` comments were matched, so guide-mode scaffolds were invisible to cleanup
+- Multi-file tasks: each code block must be labeled with its own path, and `validate-scaffold.sh` now extracts every path from a `**File**:` line instead of only the first — a task listing two files no longer maps content to the wrong file
+- `validate-scaffold.sh` gained `--strict` for scaffolding done after a doc-only/guide blueprint was generated
+- `validate-scaffold.sh` no longer fails doc-only/guide blueprints: it reads the `**Mode**:` line and only requires files on disk for scaffold modes. Mode parsing reads the leading token only, so prose mentioning another mode (e.g. a link to a scaffolding decision doc) no longer misclassifies the blueprint
+- File-existence check skips placeholder/glob paths (`docs/2026-MM-DD-*.md`) instead of reporting them missing
+
+### Changed
+
+- Cleanup scope extends to files carrying this feature's blueprint/task-ID markers even when the blueprint never named them (reported separately as blueprint drift)
+- Cleanup removal rules cover comment shape (own-line, trailing, block) and multi-language comment syntax (SQL, YAML, shell, JS); an executable not-implemented call such as Kotlin `TODO("…")` is never deleted by cleanup
+- Cleanup must state plainly when no correctness check could be run rather than implying removals were verified
+- `**Mode**:` line in generated blueprints must lead with the mode token (validation parses it)
+- Guide-mode test skeletons must carry the project's real test imports and annotations, so the skeleton compiles
+- Blueprint structure now mirrors current Spec Kit `tasks.md` organization: user-story phases, `[P]` parallel markers, `[US#]` story labels, and Checkpoint lines are preserved verbatim
+- Step 1 additionally loads `research.md` and referenced decision records (ADRs) as rationale sources
+- Self-verification also checks: phase/label fidelity to `tasks.md`, presence of a Why per task, cited sources per Key Decision, and no narration comments inside code blocks
+
 ## [1.0.0] - 2026-04-15
 
 ### Added

@@ -1,0 +1,64 @@
+validate: ✗ the same task id has more than one section
+validate: ⚠ a Before quotes a structural line the After does not return — applying it deletes that line
+validate: ✗ a task declares a new file and gives it no content
+validate: ✗ multi-file task does not label every code block with its path
+validate: ✗ ellipsis placeholder in a code block
+validate: ⚠ a comment narrates the blueprint's history rather than the code
+validate: ✗ a Before block is abbreviated — it has to quote the file verbatim
+validate: ⚠ a not-implemented marker's message does not begin with its task id
+validate: ⚠ a guide-mode block looks like it contains body logic
+validate: ✗ 1 source artifact(s) changed since this blueprint was generated
+validate: exit 1
+validate --strict-guide: ✗ the same task id has more than one section
+validate --strict-guide: ⚠ a Before quotes a structural line the After does not return — applying it deletes that line
+validate --strict-guide: ✗ a task declares a new file and gives it no content
+validate --strict-guide: ✗ multi-file task does not label every code block with its path
+validate --strict-guide: ✗ ellipsis placeholder in a code block
+validate --strict-guide: ⚠ a comment narrates the blueprint's history rather than the code
+validate --strict-guide: ✗ a Before block is abbreviated — it has to quote the file verbatim
+validate --strict-guide: ✗ a not-implemented marker's message does not begin with its task id
+validate --strict-guide: ✗ a guide-mode block looks like it contains body logic
+validate --strict-guide: ✗ 1 source artifact(s) changed since this blueprint was generated
+validate --strict-guide: exit 1
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
+apply: ✗ T002  FAILED
+apply: ✗ T003  FAILED
+apply: ✗ T004  FAILED
+apply: ✗ T005  FAILED
+apply: exit 1
+apply --verify: ✗ T002  FAILED
+apply --verify: ✗ T003  FAILED
+apply --verify: ✗ T004  FAILED
+apply --verify: ✗ T005  FAILED
+apply --verify: exit 1
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
+scaffold: ✗ 3 declared file(s) are not on disk: pkg/one.py, pkg/two.py, pkg/report_service.py
+scaffold: ⚠ 7 declared symbol(s) read from the blueprint, and none of the files that should hold them are on disk yet
+scaffold: exit 1
+scaffold --fresh: ✗ 3 declared file(s) are not on disk: pkg/one.py, pkg/two.py, pkg/report_service.py
+scaffold --fresh: ⚠ 7 declared symbol(s) read from the blueprint, and none of the files that should hold them are on disk yet
+scaffold --fresh: exit 1
+scaffold --done: ✗ 3 declared file(s) are not on disk: pkg/one.py, pkg/two.py, pkg/report_service.py
+scaffold --done: ✗ 1 declared file(s) still carry a not-implemented marker: pkg/wrapped.py (2)
+scaffold --done: ⚠ 7 declared symbol(s) read from the blueprint, and none of the files that should hold them are on disk yet
+scaffold --done: exit 1
+scaffold --strict: ✗ 3 declared file(s) are not on disk: pkg/one.py, pkg/two.py, pkg/report_service.py
+scaffold --strict: ⚠ 7 declared symbol(s) read from the blueprint, and none of the files that should hold them are on disk yet
+scaffold --strict: exit 1
+scaffold --markers: pkg/wrapped.py:2: raise NotImplementedError( "an old marker an earlier feature left here" )
+scaffold --markers: pkg/wrapped.py:8: raise NotImplementedError( "and its neighbour, left at the same time" )
+scaffold --markers:   (2 marker line(s) in 5 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ✗ 3 declared file(s) are not on disk: pkg/one.py, pkg/two.py, pkg/report_service.py
+scaffold --done --all: ✗ 1 declared file(s) still carry a not-implemented marker: pkg/wrapped.py (2)
+scaffold --done --all: ⚠ 7 declared symbol(s) read from the blueprint, and none of the files that should hold them are on disk yet
+scaffold --done --all: ✗ 1 of 1 feature(s) did not pass: specs/013-dirty
+scaffold --done --all: exit 1
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2
