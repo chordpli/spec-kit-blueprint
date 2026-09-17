@@ -139,7 +139,7 @@ for arg in "$@"; do
         --help|-h)
             echo "$USAGE"
             echo "  --fresh    the scaffold was just written; a declared file with no marker is a defect"
-            echo "  --done     the feature is finished; a declared file that still has a marker is a defect"
+            echo "  --done     the feature is finished; check declared files and markers on disk in every mode"
             echo "  --markers  list the markers left in the declared files, and exit"
             echo "  --strict   check files on disk even in a mode that writes none"
             echo "  --all      run over every specs/*/ that has a blueprint, and fail if any does"
@@ -262,8 +262,15 @@ esac
 if [[ "$STRICT" == true ]]; then
     SCAFFOLD_EXPECTED=true
     echo "Mode: $MODE (--strict: validating files on disk anyway)"
+elif [[ "$DONE" == true ]]; then
+    echo "Mode: $MODE (--done: validating completed files on disk)"
 else
     echo "Mode: $MODE"
+fi
+# --done is a claim about a completed tree, not what generation mode originally
+# wrote. Guide mode normally skips disk checks; a completed guide feature must not.
+if [[ "$DONE" == true ]]; then
+    SCAFFOLD_EXPECTED=true
 fi
 if [[ "$MODE" == "unknown" ]] && [[ "$MARKERS" != true ]]; then
     echo -e "  ${YELLOW}⚠${NC} the header's **Mode**: line is missing or unreadable — validating as a scaffold run"

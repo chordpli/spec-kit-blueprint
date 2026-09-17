@@ -28,12 +28,12 @@ would not start.
 
 - **The blueprint commit** — the document exists, the bodies do not. Run block A.
 - **The commit that closes the feature** — the bodies are typed and you are claiming the
-  work is done. Run block A **and** block B.
+  work is done. Run block B. Do not replay historical `Before` hunks with `--build`.
 
-If you cannot tell, run both: block B on an unfinished feature is red by construction and
-says so in its own output, which is a cheaper mistake than the other one.
+If you cannot tell, run the document validator and block B. Block B on an unfinished
+feature is red by construction and says so in its own output.
 
-### Block A — is the document sound? (any commit)
+### Block A — is the document sound and applicable? (blueprint commit, before implementation)
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
@@ -46,6 +46,9 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 ### Block B — is the tree finished, and does it do what the document asked?
 
 ```bash
+# document rules still apply after implementation; guide modes make body findings strict
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR" --strict-guide
 # every task's **Verification** line, against YOUR working tree
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
 # no declared file still carries a marker, no declared name is missing, no ticked row lies
@@ -97,7 +100,7 @@ command that begins with a runner (`python3`, `bash`, `mvn`, `npm`, `go`, `./gra
 rest of the line is prose for you, and a sentence that predicts its own failure ("`bash tools/build.sh`
 fails until T003 supplies an implementation") is not run at all, because running it and counting the
 failure is the tool disagreeing with a sentence it just read. Identical commands run once and the
-report says so: `ran 2 distinct command(s) covering 13 task(s)`. It is a flag for the same reason
+report says so: `ran 2 distinct command(s) covering 12 task(s) plus 1 header test suite(s)`. It is a flag for the same reason
 `--build` is: these are shell commands out of a generated document, and running them is a decision
 the caller makes — which is why block B above makes the decision explicitly rather than leaving it
 to whether the reader got this far. A failing verification exits non-zero.
@@ -269,7 +272,7 @@ The copy starts **without this blueprint's declared-new files**. In `guide scaff
 
 - `--build` — run the project's build in the copy and report its exit code. The command comes from a `**Build**: <command>` line in the blueprint header if there is one; otherwise the script picks the first of `tools/build.sh`, `gradlew`, `package.json`, `Makefile` it finds, falling back to `python3 -m unittest discover` for a tree with tests. If nothing matches, the build is skipped with a warning
 - `--keep` — print the copy's path instead of deleting it, so you can inspect the applied result
-- `--verify` — run every task's `**Verification**` command against a copy of the working tree: the developer's code, with nothing applied to it and nothing removed. A backticked span that begins with a runner (`python3`, `bash`, `node`, `mvn`, `go`, `./gradlew`, …) is a command; everything else in the line is prose and is left alone, and a command inside a sentence that predicts its own failure is not run. Identical commands run once, reported as `ran N distinct command(s) covering M task(s)`. A task naming no runnable command is counted, not failed. An optional `**Test**:` header line runs last. Any verification that exits non-zero fails the run
+- `--verify` — run every task's `**Verification**` command against a copy of the working tree: the developer's code, with nothing applied to it and nothing removed. A backticked span that begins with a runner (`python3`, `bash`, `node`, `mvn`, `go`, `./gradlew`, …) is a command; everything else in the line is prose and is left alone, and a command inside a sentence that predicts its own failure is not run. Identical commands run once, reported as `ran N distinct command(s) covering M task(s)`, with an optional `**Test**:` header suite reported separately. A task naming no runnable command is counted, not failed. `--verify` alone (including `--through`) does not apply historical hunks; combining it with `--build`, `--scaffold`, or `--require-anchors` does. Any verification that exits non-zero fails the run
 - `--verbose` — print the per-task line for every task, not only the failures
 
 **A failure on a tree at the blueprint's commit means the blueprint is wrong, not the applier.** The header's `**Sources**` line stamps that commit; on a tree that has moved past it, a Before that no longer matches in a file git says has changed is reported as implemented since, not as a failure. Applying is deterministic and unforgiving on purpose: a `**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect and never repaired by guesswork. Silent repair is what lets a lossy hunk reach a reader as if it were sound. When the applier reports `T0NN FAILED`, fix that task's Before block against the real file and run it again.

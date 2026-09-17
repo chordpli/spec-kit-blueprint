@@ -238,9 +238,12 @@ python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py specs/{f
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh specs/{feature}
 ```
 
-**On the commit that closes the feature**, add these two. They are the ones that read your code:
+**On the commit that closes the feature**, validate the document and run the tree-completion checks:
 
 ```bash
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature}
+# guide and guide scaffold only
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature} --strict-guide
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py specs/{feature} --verify
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
 ```
@@ -339,8 +342,10 @@ Color-coded output: green (pass), yellow (warning), red (failure). All three exi
 Python scripts ask git what has changed since the commit the blueprint stamps. A clone that does
 not have that commit cannot answer, and they now report what they could not check rather than
 guessing — which is safe, and also means a shallow job verifies much less than it appears to. Set
-`fetch-depth: 0`. Run `validate_blueprint.py` and `apply_blueprint.py --build`; leave
-`--require-anchors` off unless you are gating the pre-implementation commit specifically.
+`fetch-depth: 0`. On the pre-implementation blueprint commit, run
+`validate_blueprint.py` and `apply_blueprint.py --build`; leave `--require-anchors` off
+unless you are gating that commit specifically. On the completed implementation commit,
+run `validate_blueprint.py`, `apply_blueprint.py --verify`, and the `--done` check instead.
 
 Gate the two commits differently, because they are two different claims:
 

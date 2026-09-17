@@ -23,12 +23,7 @@ apply: ✗ T004  FAILED
 apply: ✗ T005  FAILED
 apply: ✗ T006  FAILED
 apply: exit 1
-apply --verify: ✗ T002  FAILED
-apply --verify: ✗ T003  FAILED
-apply --verify: ✗ T004  FAILED
-apply --verify: ✗ T005  FAILED
-apply --verify: ✗ T006  FAILED
-apply --verify: exit 1
+apply --verify: exit 0
 apply --typo: ERROR: unknown option(s): --verfy
 apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
 apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]

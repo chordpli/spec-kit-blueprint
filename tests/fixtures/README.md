@@ -112,3 +112,15 @@ python3 scripts/python/self_test.py --update --i-read-the-diff   # writes it
 
 Commit the fixture update in the same commit as the change that caused it. If any line of
 the diff surprises you, that line is the regression this corpus exists to catch.
+
+## Recording a small observed-finding sample (S7)
+
+The fixture corpus is synthetic coverage, not a measurement of production finding
+precision. For an observed run, save stdout, stderr, command, exit code, feature path,
+and tool revision in an evidence directory. Then record one row per actual warning or
+failure headline: `run-id`, `stage`, `headline`, `classification`
+(`actionable`, `informational`, `noise`, or `unknown`), and the evidence filename and
+reason. Include runs with zero warning/failure headlines in the denominator. Keep
+undetected defects and separate domain-test/probe results in a different table; do not
+count them as tool findings or infer precision from a small sample. The seven historic
+misses discussed in the handoff remain unmeasured by this format.
