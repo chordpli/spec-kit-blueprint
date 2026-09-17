@@ -42,9 +42,10 @@ summary, and the number did not move at all:
    have been switched off or downgraded. That is why five checks could be lowered from
    fail to warn without a single one being noticed.
 
-So the corpus now runs thirteen command lines per fixture, and three of the six fixtures
-are **red on purpose**. The current score against the same 46 regressions is recorded in
-the release notes.
+That historical expansion made the corpus run thirteen command lines per fixture, with
+three of its then six fixtures **red on purpose**. The current corpus has fifteen
+fixtures; the current score against the same 46 regressions is recorded in the release
+notes.
 
 ## The rule
 
@@ -94,6 +95,10 @@ exists to replace.
 | `authored-in-a-hunk` | no | the lines an After ADDS are authored — a check blind here is blind where guide mode's developer types |
 | `dirty-guide` | **yes** | fourteen checks that say nothing about a clean document: empty new file, unlabelled multi-file blocks, ellipsis, history comment, abbreviated Before, smuggled body, duplicate task id, lossy hunk, a stale `**Sources**` stamp, and markers on disk that `--markers` has to list |
 | `broken-hunks` | **yes** | the six hunk failures in section 3 — identical pair, ambiguous anchor, absent Before, dangling Before, absent modify file, mislabelled block, unanchored block. None of them had ever fired inside this corpus |
+| `stale-hunk-verify`, `stale-hunk-verify-failing` | mixed | a stale historical hunk does not make standalone `--verify` red; the paired fixture still makes an actual working-tree import failure red |
+| `guide-done-marker`, `guide-done-missing` | mixed | plain guide mode remains informational, while `--done` checks its declared marker and missing file on disk |
+| `malformed-sources`, `empty-sources`, `no-source-stamp` | **yes** | backticked `CURRENT`, empty hashes, and a non-stamp Sources value cannot silently reach a freshness pass |
+| `mixed-sources`, `prefix-mismatch` | **yes** | a valid stamp beside an invalid one still fails, and a nonmatching hexadecimal prefix is stale rather than a partial match |
 
 Two of the red fixtures carry exactly one defect per task, so a change to any one check
 moves exactly one line of `expected.txt`.
@@ -123,4 +128,5 @@ failure headline: `run-id`, `stage`, `headline`, `classification`
 reason. Include runs with zero warning/failure headlines in the denominator. Keep
 undetected defects and separate domain-test/probe results in a different table; do not
 count them as tool findings or infer precision from a small sample. The seven historic
-misses discussed in the handoff remain unmeasured by this format.
+misses described in the `CHANGELOG.md` Unreleased measurement remain unmeasured by this
+format.
