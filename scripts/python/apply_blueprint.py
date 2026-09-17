@@ -779,7 +779,8 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool) -> int:
             owners[cmd].append(tid)
     test_cmd = test_command(bp)
     if test_cmd and test_cmd not in owners:
-        owners[test_cmd] = ["**Test**"]
+        # A header suite is a target, not another task in the coverage count.
+        owners[test_cmd] = []
         order.append(test_cmd)
     if not order:
         print("  no task names a runnable command in its **Verification** line.")
@@ -790,7 +791,8 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool) -> int:
         failures, failed_tasks, passed_tasks = 0, set(), set()
         for cmd in order:
             who = owners[cmd]
-            label = f"{', '.join(who[:4])}{f' (+{len(who) - 4} more)' if len(who) > 4 else ''}"
+            label = (f"{', '.join(who[:4])}{f' (+{len(who) - 4} more)' if len(who) > 4 else ''}"
+                     if who else "**Test** header")
             code, tail = _run_one(cmd, tree)
             if code == 0:
                 passed_tasks.update(who)
@@ -800,7 +802,9 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool) -> int:
                 failed_tasks.update(who)
                 record("fail", f"{label}  $ {cmd} — exit {code}", "\n".join(tail))
         covered = len(passed_tasks | failed_tasks)
-        print(f"  ran {len(order)} distinct command(s) covering {covered} task(s):"
+        suites = sum(1 for who in owners.values() if not who)
+        print(f"  ran {len(order)} distinct command(s) covering {covered} task(s)"
+              + (f" plus {suites} header test suite(s)" if suites else "") + ":"
               f" {len(order) - failures} passed, {failures} failed"
               + (f"; {len(silent)} task(s) name no runnable command" if silent else ""))
         green = sorted(passed_tasks - failed_tasks)
@@ -910,9 +914,9 @@ def main() -> int:
         print("  --keep             print the copy's path instead of deleting it")
         print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
         print("  --scaffold         after a clean apply, copy the declared-new files into your tree")
-        print("  --verify           run every task's **Verification** command against YOUR tree")
+        print("  --verify           run every task's **Verification** command against YOUR tree; alone, does not apply")
         print("  --verbose          print the per-task line for every task, not just the failures")
-        print("  --through T0NN     apply only as far as that task — a bisector for a build that fails")
+        print("  --through T0NN     limit application, or --verify commands, to that task — a build bisector")
         print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved,")
         print("     3 the tree has moved past the stamp so the build failure says nothing about the document.")
         return 0
@@ -996,6 +1000,16 @@ def main() -> int:
     if dupes:
         print(f"  {YELLOW}{len(dupes)} task id(s) have more than one section — each section is applied:"
               f" {', '.join(dupes)}{NC}")
+
+    # --verify asks only whether commands pass on the working tree. Once a feature is
+    # complete its historical Before blocks no longer anchor, so applying them first
+    # turns a passing verification into an unrelated document failure. --through still
+    # limits the task commands; applying is retained only when an explicit operation
+    # needs the document copy.
+    verify_only = do_verify and not (do_build or do_scaffold or strict_anchors)
+    if verify_only:
+        verify_failures = run_verifications(root, base_tasks + tasks, bp, keep)
+        return 1 if verify_failures else 0
 
     # realpath: on macOS mkdtemp returns /var/... and inside() resolves to /private/var/...,
     # so an unresolved _tree made every Defect message a six-level ../ chain.

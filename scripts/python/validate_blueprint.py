@@ -1431,8 +1431,19 @@ def main() -> int:
     else:
         import hashlib
 
-        stale, unknown, own_work = [], [], []
-        for name, want in re.findall(r"([\w.\-/]+\.\w+)@([0-9a-f]{6,64})", src_line):
+        stale, unknown, own_work, malformed = [], [], [], []
+        # Visible but non-hex stamps used to be skipped by the old regex, letting
+        # `tasks.md@CURRENT` reach the green "every stamped source" line.
+        # A source may be an extensionless project file such as Dockerfile or Makefile.
+        # Parse the complete token rather than treating its suffix as the file grammar.
+        stamps = re.findall(r"`?([\w.\-/]+)`?@([^\s|`]*)", src_line)
+        if not stamps:
+            record("fail", "Sources line has no file@hash stamp",
+                   "cite each source as path@a SHA-256 prefix")
+        for name, want in stamps:
+            if not re.fullmatch(r"[0-9a-f]{6,64}", want):
+                malformed.append(f"{name}@{want}")
+                continue
             # The stamp records a repo-relative path; resolve it as one. Matching the
             # basename inside feature_dir first let an unrelated same-named file shadow
             # the real source and report a byte-identical artifact as changed.
@@ -1474,6 +1485,9 @@ def main() -> int:
                 listing(own_work)
                 + "\ncite such a file in the Why that needs it rather than stamping it",
             )
+        if malformed:
+            record("fail", "Sources stamp contains a non-hex or empty hash",
+                   ", ".join(malformed) + "\nuse a SHA-256 prefix, not CURRENT or a label")
         if stale:
             record(
                 "fail",
@@ -1482,7 +1496,7 @@ def main() -> int:
             )
         elif unknown:
             record("warn", "stamped sources not found on disk", ", ".join(unknown))
-        else:
+        elif stamps and not malformed:
             record("pass", "every stamped source artifact still matches")
 
     # 9. Cited requirements are reproduced, not just named. A task header pointing at

@@ -238,9 +238,12 @@ python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py specs/{f
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh specs/{feature}
 ```
 
-**On the commit that closes the feature**, add these two. They are the ones that read your code:
+**On the commit that closes the feature**, validate the document and run the tree-completion checks:
 
 ```bash
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature}
+# guide and guide scaffold only
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py specs/{feature} --strict-guide
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py specs/{feature} --verify
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
 ```
@@ -270,6 +273,7 @@ Every flag the three scripts take, since until now they were documented only in 
 | `--strict-guide` | validate | Turn the guide-mode body findings into failures rather than warnings |
 | `--verbose` | validate | Print a line for every check that passed. Without it a section with nothing to report is one line |
 | `--strict` | scaffold | Check files on disk even when the mode says none were written — for scaffolding done after the blueprint was generated |
+| `--done` | scaffold | On a finished feature, check declared files and markers on disk in every mode |
 | `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note. Declarations a `(modify)` hook introduces are not judged — the developer has not typed them yet |
 | `--done` | scaffold | The opposite claim: this feature is finished. A declared file that still carries a not-implemented marker is a failure, and so is a declaration the blueprint promised that the file does not have. Without either flag a marker is a green tick, which is how a repository can cross five features and leave fourteen markers in production code while this script prints `All checks passed` |
 | `--markers` | scaffold | List every marker left in the declared files as `path:line: text` and exit. This is what cleanup starts from |
@@ -339,8 +343,10 @@ Color-coded output: green (pass), yellow (warning), red (failure). All three exi
 Python scripts ask git what has changed since the commit the blueprint stamps. A clone that does
 not have that commit cannot answer, and they now report what they could not check rather than
 guessing — which is safe, and also means a shallow job verifies much less than it appears to. Set
-`fetch-depth: 0`. Run `validate_blueprint.py` and `apply_blueprint.py --build`; leave
-`--require-anchors` off unless you are gating the pre-implementation commit specifically.
+`fetch-depth: 0`. On the pre-implementation blueprint commit, run
+`validate_blueprint.py` and `apply_blueprint.py --build`; leave `--require-anchors` off
+unless you are gating that commit specifically. On the completed implementation commit,
+run `validate_blueprint.py`, `apply_blueprint.py --verify`, and the `--done` check instead.
 
 Gate the two commits differently, because they are two different claims:
 

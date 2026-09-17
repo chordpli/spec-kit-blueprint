@@ -18,7 +18,7 @@ If arguments contain a directory path, use it as the feature directory. Otherwis
 
 - `blueprint.md` must exist (run `/speckit.blueprint.generate` first)
 - `apply_blueprint.py --build` is a **pre-implementation** check — run it before the tasks are typed, not after. `--verify` is the opposite: it needs the bodies to exist
-- The scaffold validator needs scaffold mode to have been used, or `--strict`
+- The scaffold validator needs scaffold mode to have been used, or `--strict`/`--done`
 
 ## Execution
 
@@ -28,12 +28,12 @@ would not start.
 
 - **The blueprint commit** — the document exists, the bodies do not. Run block A.
 - **The commit that closes the feature** — the bodies are typed and you are claiming the
-  work is done. Run block A **and** block B.
+  work is done. Run block B. Do not replay historical `Before` hunks with `--build`.
 
-If you cannot tell, run both: block B on an unfinished feature is red by construction and
-says so in its own output, which is a cheaper mistake than the other one.
+If you cannot tell, run the document validator and block B. Block B on an unfinished
+feature is red by construction and says so in its own output.
 
-### Block A — is the document sound? (any commit)
+### Block A — is the document sound and applicable? (blueprint commit, before implementation)
 
 ```bash
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
@@ -46,6 +46,9 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 ### Block B — is the tree finished, and does it do what the document asked?
 
 ```bash
+# document rules still apply after implementation; guide modes make body findings strict
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
+python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR" --strict-guide
 # every task's **Verification** line, against YOUR working tree
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
 # no declared file still carries a marker, no declared name is missing, no ticked row lies
@@ -70,7 +73,7 @@ Each script answers a different question:
 | `apply_blueprint.py` | Does its code actually work? |
 | `validate-scaffold.sh` | Did scaffold mode put the right things on disk? |
 
-The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The applier also runs in every mode, and is the only one of the three that hands the blueprint to a compiler. The scaffold validator short-circuits for the file-less modes unless you pass `--strict`.
+The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The applier also runs in every mode, and is the only one of the three that hands the blueprint to a compiler. The scaffold validator short-circuits for the file-less modes unless you pass `--strict` or make the completion claim with `--done`.
 
 `apply_blueprint.py` takes `--require-anchors`, which fails the run when a task's code anchors to
 no position, when nothing anchored at all, or when any task is already in the tree or could not be
@@ -97,7 +100,7 @@ command that begins with a runner (`python3`, `bash`, `mvn`, `npm`, `go`, `./gra
 rest of the line is prose for you, and a sentence that predicts its own failure ("`bash tools/build.sh`
 fails until T003 supplies an implementation") is not run at all, because running it and counting the
 failure is the tool disagreeing with a sentence it just read. Identical commands run once and the
-report says so: `ran 2 distinct command(s) covering 13 task(s)`. It is a flag for the same reason
+report says so: `ran 2 distinct command(s) covering 12 task(s) plus 1 header test suite(s)`. It is a flag for the same reason
 `--build` is: these are shell commands out of a generated document, and running them is a decision
 the caller makes — which is why block B above makes the decision explicitly rather than leaving it
 to whether the reader got this far. A failing verification exits non-zero.
@@ -269,7 +272,7 @@ The copy starts **without this blueprint's declared-new files**. In `guide scaff
 
 - `--build` — run the project's build in the copy and report its exit code. The command comes from a `**Build**: <command>` line in the blueprint header if there is one; otherwise the script picks the first of `tools/build.sh`, `gradlew`, `package.json`, `Makefile` it finds, falling back to `python3 -m unittest discover` for a tree with tests. If nothing matches, the build is skipped with a warning
 - `--keep` — print the copy's path instead of deleting it, so you can inspect the applied result
-- `--verify` — run every task's `**Verification**` command against a copy of the working tree: the developer's code, with nothing applied to it and nothing removed. A backticked span that begins with a runner (`python3`, `bash`, `node`, `mvn`, `go`, `./gradlew`, …) is a command; everything else in the line is prose and is left alone, and a command inside a sentence that predicts its own failure is not run. Identical commands run once, reported as `ran N distinct command(s) covering M task(s)`. A task naming no runnable command is counted, not failed. An optional `**Test**:` header line runs last. Any verification that exits non-zero fails the run
+- `--verify` — run every task's `**Verification**` command against a copy of the working tree: the developer's code, with nothing applied to it and nothing removed. A backticked span that begins with a runner (`python3`, `bash`, `node`, `mvn`, `go`, `./gradlew`, …) is a command; everything else in the line is prose and is left alone, and a command inside a sentence that predicts its own failure is not run. Identical commands run once, reported as `ran N distinct command(s) covering M task(s)`, with an optional `**Test**:` header suite reported separately. A task naming no runnable command is counted, not failed. `--verify` alone (including `--through`) does not apply historical hunks; combining it with `--build`, `--scaffold`, or `--require-anchors` does. Any verification that exits non-zero fails the run
 - `--verbose` — print the per-task line for every task, not only the failures
 
 **A failure on a tree at the blueprint's commit means the blueprint is wrong, not the applier.** The header's `**Sources**` line stamps that commit; on a tree that has moved past it, a Before that no longer matches in a file git says has changed is reported as implemented since, not as a failure. Applying is deterministic and unforgiving on purpose: a `**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect and never repaired by guesswork. Silent repair is what lets a lossy hunk reach a reader as if it were sound. When the applier reports `T0NN FAILED`, fix that task's Before block against the real file and run it again.
@@ -282,7 +285,7 @@ The summary carries a `coverage:` line — how many of the document's tasks this
 
 ### Scaffold checks (`validate-scaffold.sh`)
 
-The script reads the `**Mode**:` line from `blueprint.md` first, taking only the first two tokens. `doc-only` and `guide` write nothing to disk, so for those modes checks 1-3 run informationally — file existence is reported as a present/missing count and passes either way, and check 4 is skipped entirely. Scaffold modes (`scaffold`, `guide scaffold`) run all four. `--strict` forces the on-disk checks regardless of mode, for scaffolding done after the blueprint was generated.
+The script reads the `**Mode**:` line from `blueprint.md` first, taking only the first two tokens. `doc-only` and `guide` write nothing to disk, so for those modes checks 1-3 run informationally — file existence is reported as a present/missing count and passes either way, and check 4 is skipped entirely. Scaffold modes (`scaffold`, `guide scaffold`) run all four. `--strict` forces the on-disk checks regardless of mode, for scaffolding done after the blueprint was generated; `--done` does too, because it claims the feature is complete.
 
 1. **Blueprint Document**: verifies `blueprint.md` exists (a hard exit if not)
 2. **File Existence**: all NEW files declared in the blueprint's `**File**:` lines exist on disk (placeholder/glob paths such as `docs/2026-MM-DD-*.md` are skipped)
