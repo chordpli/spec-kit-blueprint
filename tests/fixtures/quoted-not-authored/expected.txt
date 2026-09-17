@@ -1,0 +1,33 @@
+validate: ⚠ 1 bare identifier(s) sit in a file this task reprints whole
+validate: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate: exit 0
+validate --strict-guide: ⚠ 1 bare identifier(s) sit in a file this task reprints whole
+validate --strict-guide: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate --strict-guide: exit 0
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
+apply: exit 0
+apply --verify: exit 0
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
+scaffold: ⚠ 2 declaration(s) a (modify) hook introduces are not in the file: pkg/thing.py `describe`, pkg/thing.py `summarise` — typed under another name, or the hunk was never typed
+scaffold: exit 0
+scaffold --fresh: exit 0
+scaffold --done: ✗ 1 declared file(s) still carry a not-implemented marker: pkg/thing.py (1)
+scaffold --done: ✗ 2 declaration(s) a (modify) hook introduces are not in the file: pkg/thing.py `describe`, pkg/thing.py `summarise`
+scaffold --done: exit 1
+scaffold --strict: ⚠ 2 declaration(s) a (modify) hook introduces are not in the file: pkg/thing.py `describe`, pkg/thing.py `summarise` — typed under another name, or the hunk was never typed
+scaffold --strict: exit 0
+scaffold --markers: pkg/thing.py:3: raise NotImplementedError( "T001: add a and b, and refuse a negative result - the caller treats a " "negative as a programming error rather than a value (010 FR-001)." )   [T001 is this feature's task; the wording is not the blueprint's — reworded here, or an earlier feature also had T001]
+scaffold --markers:   (1 marker line(s) in 2 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ✗ 1 declared file(s) still carry a not-implemented marker: pkg/thing.py (1)
+scaffold --done --all: ✗ 2 declaration(s) a (modify) hook introduces are not in the file: pkg/thing.py `describe`, pkg/thing.py `summarise`
+scaffold --done --all: ✗ 1 of 1 feature(s) did not pass: specs/010-quoted
+scaffold --done --all: exit 1
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2

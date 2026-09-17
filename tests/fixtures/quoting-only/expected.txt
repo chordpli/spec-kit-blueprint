@@ -1,0 +1,30 @@
+validate: exit 0
+validate --strict-guide: exit 0
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
+apply: exit 0
+apply --verify: exit 0
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
+scaffold: ⚠ 4 declaration(s) a (modify) hook introduces are not in the file: pkg/legacy.py `report`, pkg/report.py `count`, pkg/report.py `narrowest`, pkg/report.py `widest` — typed under another name, or the hunk was never typed
+scaffold: exit 0
+scaffold --fresh: exit 0
+scaffold --done: ✗ 2 declared file(s) still carry a not-implemented marker: pkg/report.py (1), pkg/legacy.py (1)
+scaffold --done: ✗ 4 declaration(s) a (modify) hook introduces are not in the file: pkg/legacy.py `report`, pkg/report.py `count`, pkg/report.py `narrowest`, pkg/report.py `widest`
+scaffold --done: exit 1
+scaffold --strict: ⚠ 4 declaration(s) a (modify) hook introduces are not in the file: pkg/legacy.py `report`, pkg/report.py `count`, pkg/report.py `narrowest`, pkg/report.py `widest` — typed under another name, or the hunk was never typed
+scaffold --strict: exit 0
+scaffold --markers: pkg/report.py:3: raise NotImplementedError( "T001: sum the rendered rows, and decide there what an unrendered row " "contributes; count, widest and narrowest all inherit that answer " "(014 FR-001)." )
+scaffold --markers: pkg/legacy.py:9: raise NotImplementedError( "an earlier feature left this one, and its message names no task at all" )
+scaffold --markers:   (2 marker line(s) in 2 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ✗ 2 declared file(s) still carry a not-implemented marker: pkg/report.py (1), pkg/legacy.py (1)
+scaffold --done --all: ✗ 4 declaration(s) a (modify) hook introduces are not in the file: pkg/legacy.py `report`, pkg/report.py `count`, pkg/report.py `narrowest`, pkg/report.py `widest`
+scaffold --done --all: ✗ 1 of 1 feature(s) did not pass: specs/014-quoting
+scaffold --done --all: exit 1
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2
