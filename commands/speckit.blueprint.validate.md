@@ -18,7 +18,7 @@ If arguments contain a directory path, use it as the feature directory. Otherwis
 
 - `blueprint.md` must exist (run `/speckit.blueprint.generate` first)
 - `apply_blueprint.py --build` is a **pre-implementation** check — run it before the tasks are typed, not after. `--verify` is the opposite: it needs the bodies to exist
-- The scaffold validator needs scaffold mode to have been used, or `--strict`
+- The scaffold validator needs scaffold mode to have been used, or `--strict`/`--done`
 
 ## Execution
 
@@ -73,7 +73,7 @@ Each script answers a different question:
 | `apply_blueprint.py` | Does its code actually work? |
 | `validate-scaffold.sh` | Did scaffold mode put the right things on disk? |
 
-The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The applier also runs in every mode, and is the only one of the three that hands the blueprint to a compiler. The scaffold validator short-circuits for the file-less modes unless you pass `--strict`.
+The document validator runs in every mode — a doc-only or guide blueprint has no files on disk to check, but its own contents still have to hold up. The applier also runs in every mode, and is the only one of the three that hands the blueprint to a compiler. The scaffold validator short-circuits for the file-less modes unless you pass `--strict` or make the completion claim with `--done`.
 
 `apply_blueprint.py` takes `--require-anchors`, which fails the run when a task's code anchors to
 no position, when nothing anchored at all, or when any task is already in the tree or could not be
@@ -285,7 +285,7 @@ The summary carries a `coverage:` line — how many of the document's tasks this
 
 ### Scaffold checks (`validate-scaffold.sh`)
 
-The script reads the `**Mode**:` line from `blueprint.md` first, taking only the first two tokens. `doc-only` and `guide` write nothing to disk, so for those modes checks 1-3 run informationally — file existence is reported as a present/missing count and passes either way, and check 4 is skipped entirely. Scaffold modes (`scaffold`, `guide scaffold`) run all four. `--strict` forces the on-disk checks regardless of mode, for scaffolding done after the blueprint was generated.
+The script reads the `**Mode**:` line from `blueprint.md` first, taking only the first two tokens. `doc-only` and `guide` write nothing to disk, so for those modes checks 1-3 run informationally — file existence is reported as a present/missing count and passes either way, and check 4 is skipped entirely. Scaffold modes (`scaffold`, `guide scaffold`) run all four. `--strict` forces the on-disk checks regardless of mode, for scaffolding done after the blueprint was generated; `--done` does too, because it claims the feature is complete.
 
 1. **Blueprint Document**: verifies `blueprint.md` exists (a hard exit if not)
 2. **File Existence**: all NEW files declared in the blueprint's `**File**:` lines exist on disk (placeholder/glob paths such as `docs/2026-MM-DD-*.md` are skipped)

@@ -1434,7 +1434,9 @@ def main() -> int:
         stale, unknown, own_work, malformed = [], [], [], []
         # Visible but non-hex stamps used to be skipped by the old regex, letting
         # `tasks.md@CURRENT` reach the green "every stamped source" line.
-        stamps = re.findall(r"`?([\w.\-/]+\.\w+)`?@([^\s|`]*)", src_line)
+        # A source may be an extensionless project file such as Dockerfile or Makefile.
+        # Parse the complete token rather than treating its suffix as the file grammar.
+        stamps = re.findall(r"`?([\w.\-/]+)`?@([^\s|`]*)", src_line)
         if not stamps:
             record("fail", "Sources line has no file@hash stamp",
                    "cite each source as path@a SHA-256 prefix")

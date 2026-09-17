@@ -43,7 +43,7 @@ summary, and the number did not move at all:
    fail to warn without a single one being noticed.
 
 That historical expansion made the corpus run thirteen command lines per fixture, with
-three of its then six fixtures **red on purpose**. The current corpus has fifteen
+three of its then six fixtures **red on purpose**. The current corpus has seventeen
 fixtures; the current score against the same 46 regressions is recorded in the release
 notes.
 
@@ -99,6 +99,7 @@ exists to replace.
 | `guide-done-marker`, `guide-done-missing` | mixed | plain guide mode remains informational, while `--done` checks its declared marker and missing file on disk |
 | `malformed-sources`, `empty-sources`, `no-source-stamp` | **yes** | backticked `CURRENT`, empty hashes, and a non-stamp Sources value cannot silently reach a freshness pass |
 | `mixed-sources`, `prefix-mismatch` | **yes** | a valid stamp beside an invalid one still fails, and a nonmatching hexadecimal prefix is stale rather than a partial match |
+| `dotless-source`, `mixed-dotless-source` | mixed | an extensionless source file has a valid current stamp; mixing it with `Makefile@CURRENT` fails rather than ignoring the malformed token |
 
 Two of the red fixtures carry exactly one defect per task, so a change to any one check
 moves exactly one line of `expected.txt`.

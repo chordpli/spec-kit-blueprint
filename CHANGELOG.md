@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R13 — verify, done, and Sources boundaries
+
+- Fixed `apply_blueprint.py --verify` so a completed working tree runs its Verification commands without first applying stale blueprint hunks; explicit `--verify --build` and `--verify --require-anchors` retain apply behavior.
+- Fixed `validate-scaffold.sh --done` to inspect declared files and markers in guide mode; the ordinary guide check still allows unfinished markers.
+- Fixed Sources parsing to reject visible non-hex or empty hashes while retaining the existing warning for a missing Sources header.
+- Added regression fixtures and focused probes for these boundaries. The final working-file snapshot reports 17/17 self-test fixtures; the R13 fixture work grew the set from 6 to 17. The dotless Sources probe passes with a valid hash and rejects `tasks.md@valid | Dockerfile@CURRENT`.
+- Independent old/new validation of the final working-file snapshot covered 48 runs with six expected changes and zero unexpected changes. The raw result and manifest are retained in the round-13 handoff evidence. Three exact reverted mutations were detected by self-test. Historic 46-case coverage and the seven old unobserved regressions were not remeasured.
+
 The previous entry was audited by reproduction, and the three reviewers converged on one line
 of one file. `speckit.blueprint.validate.md` told its reader to run four commands, and neither
 `--verify` nor `--done` — the two features that entry is about — was among them. Measured
@@ -37,7 +45,8 @@ cases whose anchor text these fixes moved were re-pointed at the same regression
 code rather than dropped; none is weakened.
 
 It also carries a `--coverage` mode that names every finding the three scripts can print which
-no fixture has ever produced. That number is 18 of 56 today. It is printed rather than
+no fixture has ever produced. At the R13 baseline, 18 of 56 distinct findings were observed
+and 38 were never observed. It is printed rather than
 estimated because the mistake this repository keeps making is building an instrument and not
 measuring it — the previous entry did it to the checks, and then did it again to the corpus
 built to stop it.
