@@ -25,6 +25,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     BEFORE_AFTER_RE,
     after_additions,
     authored_blocks,
+    BaseChainError,
     base_chain,
     before_labels,
     body_replaced_by_marker,
@@ -237,7 +238,11 @@ def main() -> int:
     # The slices this blueprint continues, if the header names one. Read once: coverage
     # and forward references both span the chain, and reading it twice would let them
     # disagree about what exists.
-    chain = base_chain(bp, feature_dir, root)
+    try:
+        chain = base_chain(bp, feature_dir, root)
+    except BaseChainError as exc:
+        print(f"{RED}ERROR: invalid Base chain: {exc}{NC}")
+        return 1
     # And the slices that name this one as their base. The link is declared once, by the
     # later slice, and both ends need it: this one refers forward to work its successor
     # delivers, and the successor refers back to work this one does.

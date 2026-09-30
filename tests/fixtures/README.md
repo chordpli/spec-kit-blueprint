@@ -43,9 +43,8 @@ summary, and the number did not move at all:
    fail to warn without a single one being noticed.
 
 That historical expansion made the corpus run thirteen command lines per fixture, with
-three of its then six fixtures **red on purpose**. The current corpus has seventeen
-fixtures; the current score against the same 46 regressions is recorded in the release
-notes.
+three of its then six fixtures **red on purpose**. The current corpus has twenty-one
+fixtures. Historical 46-case results are in the release notes; they were not remeasured in R14.
 
 ## The rule
 
@@ -100,6 +99,7 @@ exists to replace.
 | `malformed-sources`, `empty-sources`, `no-source-stamp` | **yes** | backticked `CURRENT`, empty hashes, and a non-stamp Sources value cannot silently reach a freshness pass |
 | `mixed-sources`, `prefix-mismatch` | **yes** | a valid stamp beside an invalid one still fails, and a nonmatching hexadecimal prefix is stale rather than a partial match |
 | `dotless-source`, `mixed-dotless-source` | mixed | an extensionless source file has a valid current stamp; mixing it with `Makefile@CURRENT` fails rather than ignoring the malformed token |
+| `base-missing`, `base-cycle`, `base-valid-chain`, `quoted-base` | mixed | missing and cyclic predecessor chains fail before validation or verification; an existing chain and a fenced Base example remain valid |
 
 Two of the red fixtures carry exactly one defect per task, so a change to any one check
 moves exactly one line of `expected.txt`.

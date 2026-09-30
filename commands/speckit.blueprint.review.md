@@ -308,3 +308,5 @@ An `ARTIFACT DOES NOT HOLD` doubt and an unanswered Open Questions row are the s
 - **A change request stands alone**: its reader has never opened `blueprint.md` and never will.
 - **Read-only on the artifacts too**: `upstream` mode never edits `spec.md`, `plan.md`, or a decision record. It writes requests; a person decides.
 - Follow the language used in existing spec/plan/tasks documents when writing questions and the report.
+
+When export records a completed feature, check that the blueprint Checklist and any team handoff document state the same completion boundary; this is documentation review, not a substitute for behavior verification.

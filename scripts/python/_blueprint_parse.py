@@ -388,6 +388,10 @@ def body_replaced_by_marker(section: str) -> list:
     return out
 
 
+class BaseChainError(ValueError):
+    """A declared Base cannot safely be used as a slice predecessor."""
+
+
 def base_chain(text: str, feature_dir: str, root: str) -> list[tuple[str, str]]:
     """(path, text) of the blueprints this one continues, oldest first.
 
@@ -397,31 +401,37 @@ def base_chain(text: str, feature_dir: str, root: str) -> list[tuple[str, str]]:
     names its predecessor with `**Base**: specs/{other}/blueprint.md` in the header, and
     the tools read the chain as one document for the questions that span it.
     """
-    seen, chain, current, where = set(), [], text, feature_dir
+    seen = {os.path.realpath(os.path.join(feature_dir, "blueprint.md"))}
+    chain, current, where = [], text, feature_dir
     for _ in range(8):  # a chain, not a cycle; eight slices is already too many
-        line = next((ln for ln in current.split(chr(10)) if ln.lower().startswith("**base**:")), "")
+        line = next((ln for ln in outside_fences(current).split(chr(10)) if ln.lower().startswith("**base**:")), "")
         if ":" not in line:
             break
         raw = line.split(":", 1)[1].strip().strip("`").split("|")[0].strip()
         if not raw:
-            break
+            raise BaseChainError("**Base** is present but names no blueprint")
         for cand in (os.path.join(root, raw), os.path.join(where, raw), raw):
             path = cand if cand.endswith(".md") else os.path.join(cand, "blueprint.md")
             if os.path.isfile(path):
                 break
         else:
-            break
+            raise BaseChainError(f"Base blueprint not found: {raw}")
         path = os.path.realpath(path)
         if path in seen:
-            break
+            raise BaseChainError("Base blueprint cycle: " + " -> ".join(
+                [os.path.relpath(p, root) for p, _t in chain] + [os.path.relpath(path, root)]))
         seen.add(path)
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
                 current = f.read()
-        except OSError:
-            break
+        except OSError as exc:
+            raise BaseChainError(f"Base blueprint cannot be read: {raw}: {exc}") from exc
         chain.append((path, current))
         where = os.path.dirname(path)
+    else:
+        line = next((ln for ln in outside_fences(current).split(chr(10)) if ln.lower().startswith("**base**:")), "")
+        if line:
+            raise BaseChainError("Base blueprint chain has more than 8 predecessor slices")
     chain.reverse()
     return chain
 
@@ -448,7 +458,11 @@ def dependent_slices(feature_dir: str, root: str) -> list[tuple[str, str]]:
                 text = f.read()
         except OSError:
             continue
-        if any(os.path.realpath(cp) == mine for cp, _t in base_chain(text, other_dir, root)):
+        try:
+            other_chain = base_chain(text, other_dir, root)
+        except BaseChainError:
+            continue  # another feature's broken chain must not poison this feature's check
+        if any(os.path.realpath(cp) == mine for cp, _t in other_chain):
             out.append((other, text))
     return out
 

@@ -57,6 +57,9 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
 ```
 
+`--done` is a structural completion check for declared files, symbols, and markers. It does
+not execute behavior; retain `--verify` or a focused acceptance command in the completed-tree gate.
+
 **Block B is not optional prose.** Everything block A runs is a question about the
 document, and a document can be perfect over a tree whose application does not start.
 Measured by three reviewers on this release, independently: a tree with a declared
