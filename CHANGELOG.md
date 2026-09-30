@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R14 — Base-chain and completion-scope boundaries
+
+- Base chains reject empty, missing, cyclic, and overlong predecessor declarations before validation or verification runs; unrelated broken dependent slices are ignored while validating a standalone feature.
+- `--done` now states that it checks declared structure and markers, not runtime behavior.
+
 ### R13 — verify, done, and Sources boundaries
 
 - Fixed `apply_blueprint.py --verify` so a completed working tree runs its Verification commands without first applying stale blueprint hunks; explicit `--verify --build` and `--verify --require-anchors` retain apply behavior.

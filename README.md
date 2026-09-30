@@ -273,11 +273,13 @@ Every flag the three scripts take, since until now they were documented only in 
 | `--strict-guide` | validate | Turn the guide-mode body findings into failures rather than warnings |
 | `--verbose` | validate | Print a line for every check that passed. Without it a section with nothing to report is one line |
 | `--strict` | scaffold | Check files on disk even when the mode says none were written — for scaffolding done after the blueprint was generated |
-| `--done` | scaffold | On a finished feature, check declared files and markers on disk in every mode |
 | `--fresh` | scaffold | Treat the files as just written: a behavioral file with no marker is a failure, not a note. Declarations a `(modify)` hook introduces are not judged — the developer has not typed them yet |
-| `--done` | scaffold | The opposite claim: this feature is finished. A declared file that still carries a not-implemented marker is a failure, and so is a declaration the blueprint promised that the file does not have. Without either flag a marker is a green tick, which is how a repository can cross five features and leave fourteen markers in production code while this script prints `All checks passed` |
+| `--done` | scaffold | On a finished feature, check declared files, symbols, and markers in every mode. Remaining not-implemented markers or missing promised declarations fail; this does not run behavior verification |
 | `--markers` | scaffold | List every marker left in the declared files as `path:line: text` and exit. This is what cleanup starts from |
 | `--all` | scaffold | Run over every `specs/*/` that has a blueprint and fail if any does. Combines with `--done` or `--markers`. Everything else here is scoped to one feature's declared files, so "is anything in this repository unfinished" required knowing which feature to ask about — which is the thing you do not know |
+
+`--done` checks declared files, symbols, and unfinished markers. It does not run behavior
+verification; pair it with the feature's focused tests or `apply_blueprint.py --verify`.
 
 An unknown flag on any of the three is an error, not a silently ignored word. `--frsh` used to
 turn two failures into a warning and exit 1 into exit 0.

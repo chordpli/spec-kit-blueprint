@@ -271,6 +271,7 @@ fi
 # wrote. Guide mode normally skips disk checks; a completed guide feature must not.
 if [[ "$DONE" == true ]]; then
     SCAFFOLD_EXPECTED=true
+    echo "Completion scope: declared files, symbols, and markers only; runtime behavior is not executed."
 fi
 if [[ "$MODE" == "unknown" ]] && [[ "$MARKERS" != true ]]; then
     echo -e "  ${YELLOW}⚠${NC} the header's **Mode**: line is missing or unreadable — validating as a scaffold run"

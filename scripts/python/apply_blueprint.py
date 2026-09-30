@@ -38,6 +38,7 @@ sys.dont_write_bytecode = True  # the copy lives in the user's .specify/, and a 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _blueprint_parse import (  # noqa: E402  (path set above)
     base_chain,
+    BaseChainError,
     body_replaced_by_marker,
     changed_since,
     commit_known,
@@ -969,7 +970,11 @@ def main() -> int:
     bp = open(bp_path, encoding="utf-8", errors="replace").read()
     # A slice of a split feature needs its predecessors applied first: its Before blocks
     # quote the file as they leave it, and its code calls what they declare.
-    chain = base_chain(bp, feature_dir, root)
+    try:
+        chain = base_chain(bp, feature_dir, root)
+    except BaseChainError as exc:
+        print(f"{RED}ERROR: invalid Base chain: {exc}{NC}")
+        return 1
     base_tasks = [(tid, sec) for _p, text in chain for tid, sec in split_tasks(text)]
     tasks = split_tasks(bp)
     full_task_count = len(tasks)

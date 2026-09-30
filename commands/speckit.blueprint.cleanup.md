@@ -168,3 +168,5 @@ In `report` mode, stop here and suggest: "Run `/speckit.blueprint.cleanup apply`
 - **Never touch**: license headers, doc comments, annotations, pragmas, linter directives, comments in files the blueprint does not mention.
 - **Verify after apply**: a cleanup that breaks the build is worse than no cleanup — run the correctness check and roll back on failure.
 - Follow the language used in existing spec/plan/tasks documents when writing the report.
+
+`--done` only establishes declared-file, symbol, and marker structure. Run the focused behavior verification separately before calling the feature complete. In report mode, note any mismatch with a team handoff document; only apply mode may update that document after the checks pass.
