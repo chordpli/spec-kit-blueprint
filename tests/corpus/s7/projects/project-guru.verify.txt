@@ -1,0 +1,5 @@
+/Users/pli/Desktop/side/spec-kit-blueprint/.omc/handoffs/blueprint-review-loop/round-15/reports/independent/repro-capsule/project-guru.bundle is okay
+The bundle contains this ref:
+cf57436065292db3c1c5adc0173a7a40a78f129e HEAD
+The bundle records a complete history.
+The bundle uses this hash algorithm: sha1

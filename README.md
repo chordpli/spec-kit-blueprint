@@ -72,6 +72,14 @@ From repository directly:
 specify extension add blueprint --from https://github.com/chordpli/spec-kit-blueprint/archive/refs/tags/v1.2.0.zip
 ```
 
+### Observed finding ledger (maintainers)
+
+The fixture corpus tells us whether synthetic contracts changed. For an actual
+project finding sample, use the reproducible S7 collector and retain raw output,
+zero-headline runs, and separate human adjudications. It never turns domain-test
+output into a Blueprint finding or claims general precision from repeated runs.
+See [docs/s7.md](docs/s7.md) for the collection and validation commands.
+
 ## Usage
 
 ### Generate (doc-only)

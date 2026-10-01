@@ -1,0 +1,38 @@
+=== Blueprint Document Validator 1.2.0 ===
+Feature: specs/002-transfer-history
+Mode: guide | 267 lines | 11 task sections
+
+[0] Sibling slices
+  ✓ this feature is split across 2 blueprint(s)
+      base: specs/001-idempotent-transfer/blueprint.md | continued in: none — 12 task(s) live in them
+
+[1] Task coverage
+  ⚠ the header's file counts do not match the tasks
+      modified: header says 3, the tasks declare 4
+      a file declared new by one task and modified by later ones counts once, as new
+  ✓ 1 other check(s) passed
+
+[2] Rationale (Why) — 1 check(s) passed
+
+[3] Working-tree claims — 9 check(s) passed
+
+[4] Multi-file task labels — 1 check(s) passed
+
+[5] Placeholder content — 2 check(s) passed
+
+[6] Guide-mode bodies — 1 check(s) passed
+
+[7] Regeneration — 1 check(s) passed
+
+[8] Freshness — 1 check(s) passed
+
+[9] Cited requirements reproduced — 1 check(s) passed
+
+[10] Forward references — 1 check(s) passed
+
+[11] Open questions — 1 check(s) passed
+
+=== Summary ===
+  PASS: 21  WARN: 1  FAIL: 0
+
+No failures — 1 warning(s) above; read them before you rely on this document

@@ -1,0 +1,8 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/002-settlement-cancellation
+Mode: guide | 10 task sections (+0 from 1 base blueprint(s))
+
+=== Verification ===
+  against a copy of your working tree (/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-it01lioo)
+  ran 10 distinct command(s) covering 10 task(s) plus 1 header test suite(s): 10 passed, 0 failed
+  10 task(s) verify against your tree: T012, T013, T014, T015, T016, T017, T018, T019, T020, T021

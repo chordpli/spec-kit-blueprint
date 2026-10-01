@@ -1,0 +1,20 @@
+=== Blueprint Scaffold Validator 1.2.0 ===
+Feature: specs/002-settlement-cancellation
+Blueprint: specs/002-settlement-cancellation/blueprint.md
+Mode: guide
+
+[1. Blueprint Document]
+  ✓ blueprint.md exists
+
+[2. File Existence (NEW files from blueprint)]
+  ✓ guide mode writes nothing to disk — file existence not required (8 present, 0 not yet created)
+
+[3. TODO Markers in Scaffold Files]
+  ✓ guide mode — no scaffold files on disk to check
+
+=== Summary ===
+  PASS: 3
+  WARN: 0
+  FAIL: 0
+
+Blueprint checks passed — guide mode writes nothing to disk, so the file, marker and over-implementation checks were skipped. Pass --strict to run them against files scaffolded after generation.

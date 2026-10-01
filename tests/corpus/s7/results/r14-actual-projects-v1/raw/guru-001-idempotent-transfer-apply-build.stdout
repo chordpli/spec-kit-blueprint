@@ -1,0 +1,20 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/001-idempotent-transfer
+Mode: guide-scaffold | 7 task sections
+  3 declared-new file(s) were already on disk and were removed from the copy first — the build tests what the blueprint supplies, not what the tree holds
+Tree: /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-qq9a4omf
+
+[1] Applying tasks in document order
+
+=== Summary ===
+  applied: 7  skipped: 0  FAILED: 0  replaced: 3 declared-new file(s) that were on disk
+  coverage: this run typed and tested 7 of 7 task(s) (100%)
+
+=== Build ===
+  $ npm run build
+  (in /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-qq9a4omf, limit 900s)
+      a guide build compiles skeletons; it does not exercise behavior.
+
+Blueprint applied and built — 3 declared-new file(s) removed from the copy first.
+      If those held your implementation, this run describes the blueprint, not your tree;
+      if they were scaffolds, this is the run you wanted.

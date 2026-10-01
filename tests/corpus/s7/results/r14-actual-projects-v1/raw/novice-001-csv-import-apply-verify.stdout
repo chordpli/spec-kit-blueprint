@@ -1,0 +1,8 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/001-csv-import
+Mode: guide | 7 task sections
+
+=== Verification ===
+  against a copy of your working tree (/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-ltolyeyi)
+  ran 4 distinct command(s) covering 7 task(s) plus 1 header test suite(s): 4 passed, 0 failed
+  7 task(s) verify against your tree: T006, T007, T008, T009, T010, T011, T012

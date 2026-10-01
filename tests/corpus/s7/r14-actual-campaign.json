@@ -1,0 +1,826 @@
+{
+  "schema": 1,
+  "campaign_id": "r14-actual-projects-v1",
+  "purpose": "History-preserving R14 actual-project matrix, six feature blueprints across three bundle-derived projects.",
+  "project_root_argument": "--project-root PROJECT=/absolute/full-history-clone",
+  "source_projects": "tests/corpus/s7/projects/PROJECTS.json",
+  "required_execution_count": 60,
+  "runs": [
+    {
+      "run_id": "novice-001-csv-import-validate-normal",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-validate-normal",
+      "correlation_id": "novice-001-csv-import-validate-normal",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/001-csv-import"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-validate-strict",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-validate-strict",
+      "correlation_id": "novice-001-csv-import-validate-strict",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/001-csv-import",
+        "--strict-guide"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-apply-default",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-apply-default",
+      "correlation_id": "novice-001-csv-import-apply-default",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-csv-import"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-apply-build",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-apply-build",
+      "correlation_id": "novice-001-csv-import-apply-build",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-csv-import",
+        "--build"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-apply-verify",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-apply-verify",
+      "correlation_id": "novice-001-csv-import-apply-verify",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-csv-import",
+        "--verify"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-scaffold-normal-bash3",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-scaffold-normal-bash3",
+      "correlation_id": "novice-001-csv-import-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-csv-import"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-scaffold-normal-bash5",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-scaffold-normal-bash5",
+      "correlation_id": "novice-001-csv-import-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-csv-import"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-scaffold-done-bash3",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-scaffold-done-bash3",
+      "correlation_id": "novice-001-csv-import-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-csv-import",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "novice-001-csv-import-scaffold-done-bash5",
+      "project": "novice",
+      "scenario_id": "novice-001-csv-import-scaffold-done-bash5",
+      "correlation_id": "novice-001-csv-import-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-csv-import",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-validate-normal",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-validate-normal",
+      "correlation_id": "novice-002-monthly-summary-validate-normal",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/002-monthly-summary"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-validate-strict",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-validate-strict",
+      "correlation_id": "novice-002-monthly-summary-validate-strict",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/002-monthly-summary",
+        "--strict-guide"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-apply-default",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-apply-default",
+      "correlation_id": "novice-002-monthly-summary-apply-default",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-monthly-summary"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-apply-build",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-apply-build",
+      "correlation_id": "novice-002-monthly-summary-apply-build",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-monthly-summary",
+        "--build"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-apply-verify",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-apply-verify",
+      "correlation_id": "novice-002-monthly-summary-apply-verify",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-monthly-summary",
+        "--verify"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-scaffold-normal-bash3",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-scaffold-normal-bash3",
+      "correlation_id": "novice-002-monthly-summary-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-monthly-summary"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-scaffold-normal-bash5",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-scaffold-normal-bash5",
+      "correlation_id": "novice-002-monthly-summary-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-monthly-summary"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-scaffold-done-bash3",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-scaffold-done-bash3",
+      "correlation_id": "novice-002-monthly-summary-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-monthly-summary",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "novice-002-monthly-summary-scaffold-done-bash5",
+      "project": "novice",
+      "scenario_id": "novice-002-monthly-summary-scaffold-done-bash5",
+      "correlation_id": "novice-002-monthly-summary-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-monthly-summary",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "novice-all-done-bash3",
+      "project": "novice",
+      "scenario_id": "novice-all-done-bash3",
+      "correlation_id": "novice-all-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "--done",
+        "--all"
+      ]
+    },
+    {
+      "run_id": "novice-all-done-bash5",
+      "project": "novice",
+      "scenario_id": "novice-all-done-bash5",
+      "correlation_id": "novice-all-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "--done",
+        "--all"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-validate-normal",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-validate-normal",
+      "correlation_id": "senior-001-fee-settlement-validate-normal",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/001-fee-settlement"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-validate-strict",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-validate-strict",
+      "correlation_id": "senior-001-fee-settlement-validate-strict",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/001-fee-settlement",
+        "--strict-guide"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-apply-default",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-apply-default",
+      "correlation_id": "senior-001-fee-settlement-apply-default",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-fee-settlement"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-apply-build",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-apply-build",
+      "correlation_id": "senior-001-fee-settlement-apply-build",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-fee-settlement",
+        "--build"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-apply-verify",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-apply-verify",
+      "correlation_id": "senior-001-fee-settlement-apply-verify",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-fee-settlement",
+        "--verify"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-scaffold-normal-bash3",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-scaffold-normal-bash3",
+      "correlation_id": "senior-001-fee-settlement-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-fee-settlement"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-scaffold-normal-bash5",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-scaffold-normal-bash5",
+      "correlation_id": "senior-001-fee-settlement-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-fee-settlement"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-scaffold-done-bash3",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-scaffold-done-bash3",
+      "correlation_id": "senior-001-fee-settlement-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-fee-settlement",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "senior-001-fee-settlement-scaffold-done-bash5",
+      "project": "senior",
+      "scenario_id": "senior-001-fee-settlement-scaffold-done-bash5",
+      "correlation_id": "senior-001-fee-settlement-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-fee-settlement",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-validate-normal",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-validate-normal",
+      "correlation_id": "senior-002-settlement-cancellation-validate-normal",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/002-settlement-cancellation"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-validate-strict",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-validate-strict",
+      "correlation_id": "senior-002-settlement-cancellation-validate-strict",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/002-settlement-cancellation",
+        "--strict-guide"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-apply-default",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-apply-default",
+      "correlation_id": "senior-002-settlement-cancellation-apply-default",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-settlement-cancellation"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-apply-build",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-apply-build",
+      "correlation_id": "senior-002-settlement-cancellation-apply-build",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-settlement-cancellation",
+        "--build"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-apply-verify",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-apply-verify",
+      "correlation_id": "senior-002-settlement-cancellation-apply-verify",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-settlement-cancellation",
+        "--verify"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-scaffold-normal-bash3",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-scaffold-normal-bash3",
+      "correlation_id": "senior-002-settlement-cancellation-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-settlement-cancellation"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-scaffold-normal-bash5",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-scaffold-normal-bash5",
+      "correlation_id": "senior-002-settlement-cancellation-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-settlement-cancellation"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-scaffold-done-bash3",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-scaffold-done-bash3",
+      "correlation_id": "senior-002-settlement-cancellation-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-settlement-cancellation",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "senior-002-settlement-cancellation-scaffold-done-bash5",
+      "project": "senior",
+      "scenario_id": "senior-002-settlement-cancellation-scaffold-done-bash5",
+      "correlation_id": "senior-002-settlement-cancellation-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-settlement-cancellation",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "senior-all-done-bash3",
+      "project": "senior",
+      "scenario_id": "senior-all-done-bash3",
+      "correlation_id": "senior-all-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "--done",
+        "--all"
+      ]
+    },
+    {
+      "run_id": "senior-all-done-bash5",
+      "project": "senior",
+      "scenario_id": "senior-all-done-bash5",
+      "correlation_id": "senior-all-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "--done",
+        "--all"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-validate-normal",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-validate-normal",
+      "correlation_id": "guru-001-idempotent-transfer-validate-normal",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/001-idempotent-transfer"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-validate-strict",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-validate-strict",
+      "correlation_id": "guru-001-idempotent-transfer-validate-strict",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/001-idempotent-transfer",
+        "--strict-guide"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-apply-default",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-apply-default",
+      "correlation_id": "guru-001-idempotent-transfer-apply-default",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-idempotent-transfer"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-apply-build",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-apply-build",
+      "correlation_id": "guru-001-idempotent-transfer-apply-build",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-idempotent-transfer",
+        "--build"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-apply-verify",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-apply-verify",
+      "correlation_id": "guru-001-idempotent-transfer-apply-verify",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/001-idempotent-transfer",
+        "--verify"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-scaffold-normal-bash3",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-scaffold-normal-bash3",
+      "correlation_id": "guru-001-idempotent-transfer-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-idempotent-transfer"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-scaffold-normal-bash5",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-scaffold-normal-bash5",
+      "correlation_id": "guru-001-idempotent-transfer-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-idempotent-transfer"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-scaffold-done-bash3",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-scaffold-done-bash3",
+      "correlation_id": "guru-001-idempotent-transfer-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-idempotent-transfer",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "guru-001-idempotent-transfer-scaffold-done-bash5",
+      "project": "guru",
+      "scenario_id": "guru-001-idempotent-transfer-scaffold-done-bash5",
+      "correlation_id": "guru-001-idempotent-transfer-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/001-idempotent-transfer",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-validate-normal",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-validate-normal",
+      "correlation_id": "guru-002-transfer-history-validate-normal",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/002-transfer-history"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-validate-strict",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-validate-strict",
+      "correlation_id": "guru-002-transfer-history-validate-strict",
+      "state": "baseline",
+      "tool": "validate",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/validate_blueprint.py",
+        "specs/002-transfer-history",
+        "--strict-guide"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-apply-default",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-apply-default",
+      "correlation_id": "guru-002-transfer-history-apply-default",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-transfer-history"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-apply-build",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-apply-build",
+      "correlation_id": "guru-002-transfer-history-apply-build",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-transfer-history",
+        "--build"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-apply-verify",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-apply-verify",
+      "correlation_id": "guru-002-transfer-history-apply-verify",
+      "state": "baseline",
+      "tool": "apply",
+      "argv": [
+        "python3",
+        "{project_root}/.specify/extensions/blueprint/scripts/python/apply_blueprint.py",
+        "specs/002-transfer-history",
+        "--verify"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-scaffold-normal-bash3",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-scaffold-normal-bash3",
+      "correlation_id": "guru-002-transfer-history-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-transfer-history"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-scaffold-normal-bash5",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-scaffold-normal-bash5",
+      "correlation_id": "guru-002-transfer-history-scaffold-normal",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-transfer-history"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-scaffold-done-bash3",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-scaffold-done-bash3",
+      "correlation_id": "guru-002-transfer-history-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-transfer-history",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "guru-002-transfer-history-scaffold-done-bash5",
+      "project": "guru",
+      "scenario_id": "guru-002-transfer-history-scaffold-done-bash5",
+      "correlation_id": "guru-002-transfer-history-scaffold-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "specs/002-transfer-history",
+        "--done"
+      ]
+    },
+    {
+      "run_id": "guru-all-done-bash3",
+      "project": "guru",
+      "scenario_id": "guru-all-done-bash3",
+      "correlation_id": "guru-all-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "--done",
+        "--all"
+      ]
+    },
+    {
+      "run_id": "guru-all-done-bash5",
+      "project": "guru",
+      "scenario_id": "guru-all-done-bash5",
+      "correlation_id": "guru-all-done",
+      "state": "baseline",
+      "tool": "scaffold",
+      "argv": [
+        "/opt/homebrew/bin/bash",
+        "{project_root}/.specify/extensions/blueprint/scripts/bash/validate-scaffold.sh",
+        "--done",
+        "--all"
+      ]
+    }
+  ]
+}
