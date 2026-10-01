@@ -1,0 +1,13 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/001-fee-settlement
+Mode: guide | 0 task sections
+Tree: /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-vm26g5yu
+
+[1] Applying tasks in document order
+
+=== Summary ===
+  applied: 0  skipped: 0  FAILED: 0
+
+Nothing was applied — no task anchored its code to a position in a file.
+      The build result above describes the working tree, not this blueprint.
+      Pass --require-anchors to make this a failure.

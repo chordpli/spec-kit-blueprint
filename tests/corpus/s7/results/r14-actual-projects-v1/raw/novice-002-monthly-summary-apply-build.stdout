@@ -1,0 +1,33 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/002-monthly-summary
+Mode: guide | 9 task sections (+7 from 1 base blueprint(s))
+  4 declared-new file(s) were already on disk and were removed from the copy first — the build tests what the blueprint supplies, not what the tree holds
+Tree: /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-dlp4irrw
+
+[0] Applying 7 task(s) from the base blueprint(s)
+[1] Applying tasks in document order
+
+=== Summary ===
+  applied: 3  skipped: 6  FAILED: 0  replaced: 4 declared-new file(s) that were on disk
+  coverage: this run typed and tested 3 of 16 task(s) (19%)
+
+=== Build ===
+  $ python3 -c "import moneylog.cli, moneylog.storage"
+  (in /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-dlp4irrw, limit 900s)
+  ✗ exit code 1
+      Traceback (most recent call last):
+        File "<string>", line 1, in <module>
+        File "/private/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-dlp4irrw/moneylog/cli.py", line 11, in <module>
+          from .monthly_summary import parse_month, render_summary, summarize
+        File "/private/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-dlp4irrw/moneylog/monthly_summary.py", line 1, in <module>
+          @dataclass(frozen=True)
+      NameError: name 'dataclass' is not defined
+
+      every task applied and the build still failed. 4 of the file(s) this blueprint writes have changed since HEAD 8a7c23942159: moneylog/cli.py, moneylog/monthly_summary.py, tests/test_baseline.py, tests/test_monthly_summary.py
+      A blueprint describes the tree at its stamp. Run against a tree that has moved on,
+      a failure here is usually that distance rather than a defect in the document —
+      check the errors against the files listed before rewriting anything.
+
+Could not test this blueprint — the tree has moved past its stamp (exit 3, not 1: nothing here says the document is wrong).
+      The build above did fail. It ran over your files, and 4 of the ones this blueprint writes have moved: moneylog/cli.py, moneylog/monthly_summary.py, tests/test_baseline.py (+1 more)
+      Read the compiler's own lines above before concluding the distance explains them.

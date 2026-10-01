@@ -1,0 +1,8 @@
+{
+  "catalog_sha256": "9e7cf7547605623f2dde50412dcee7a341eb437ecea39f641c1d63282cf05924",
+  "collector_sha256": "0ba589abffe6bb045bae25c1e4ad7d479bd79893f084123ac845657cb967bcc2",
+  "project_capsule": "tests/corpus/s7/projects/PROJECTS.json",
+  "schema": 1,
+  "source_dirty_snapshot": true,
+  "source_revision": "57d064c35f033de3fed8f814a8df0a1c4342ec51"
+}

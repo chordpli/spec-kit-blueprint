@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R15 — reproducible observed-finding ledger
+
+- Added an S7 collector with raw stdout/stderr hashes, one execution row for every
+  run including zero-headline runs, stable tool/check IDs, and explicit correlated
+  scenario metadata. A separate adjudication file records human classification;
+  unmapped or pending records fail ledger validation rather than disappearing.
+- Added a tracked R14 actual-project campaign manifest and schema/example artifacts.
+  The collector reports observed execution composition only; it does not claim a
+  general precision value.
+- Retained full-history bundles for three exact R14 projects and the actual
+  60-run sample: 48 zero-headline runs, 14 emissions, 3 actionable, 1 informational,
+  and 10 noise after document review. Exit composition is 58 exit 0, one exit 1,
+  and one exit 3. Repeated shell/strict variants are correlated observations.
+- Ledger validation rechecks content-addressed source bytes, schema versions,
+  raw diagnostic/check-ID agreement, and manifest argv/metadata/unique IDs.
+  Collection uses a single-writer lock. Ten tracked contract tests cover these
+  boundaries and positive controls; collection-time source remains distinct
+  from the subsequently hardened validator.
+- Expanded the self-test corpus to 22 fixtures and added five direct regression
+  oracles. Seven named
+  historical mutations were remeasured: before hardening, one was detected and
+  six survived; the final mutation runner detects 7/7 with each patch applied,
+  exit 1, and its specified FAILED test observed. The historic 46-case harness
+  and denominator were not restored or remeasured.
+
 ### R14 — Base-chain and completion-scope boundaries
 
 - Base chains reject empty, missing, cyclic, and overlong predecessor declarations before validation or verification runs; unrelated broken dependent slices are ignored while validating a standalone feature.

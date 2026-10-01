@@ -1,0 +1,1 @@
+{"emission_id":"r14-guru-complete-b-verify:01","classification":"actionable","reason":"The tool's verification command exits nonzero; raw stdout/stderr preserves the command and failure.","adjudicator":"reviewer-id","evidence":"raw/r14-guru-complete-b-verify.stdout"}

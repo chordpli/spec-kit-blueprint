@@ -1,0 +1,42 @@
+=== Blueprint Scaffold Validator 1.2.0 ===
+Feature: specs/001-csv-import
+Blueprint: specs/001-csv-import/blueprint.md
+Mode: guide (--done: validating completed files on disk)
+Completion scope: declared files, symbols, and markers only; runtime behavior is not executed.
+
+[1. Blueprint Document]
+  ✓ blueprint.md exists
+
+[2. File Existence (NEW files from blueprint)]
+  ✓ 2 declared file(s) exist
+
+[3. TODO Markers in Scaffold Files]
+
+  Services/Handlers:
+    (no service/handler files to check)
+
+  Tests:
+
+  Other skeletons (the blueprint gives them a marker):
+
+  ✓ 2 of 2 declared skeleton(s) carry no marker — implemented, or written complete on purpose. Pass --fresh to judge a scaffold nobody has touched yet
+
+[3a. Checklist against the markers on disk]
+  ✓ no task ticked [X] still has its marker in the file
+
+[3b. Feature declared done]
+  ✓ no declared file carries a not-implemented marker
+
+[4. Over-Implementation Detection]
+  ✓ 2 file(s) are written complete with no marker — over-implementation is only a verdict on a fresh scaffold; pass --fresh to make it one
+
+=== Declared symbols ===
+  ✓ all 10 declared symbol(s) are present in the files that should hold them (4 introduced by a (modify) hook)
+
+=== Summary ===
+  PASS: 7
+  WARN: 0
+  FAIL: 0
+  After implementing, run /speckit.blueprint.cleanup to sweep leftover markers.
+
+All checks passed

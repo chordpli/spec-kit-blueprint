@@ -43,6 +43,9 @@ import subprocess
 import sys
 import tempfile
 
+from _blueprint_parse import before_after_pairs, body_replaced_by_marker, looks_like_path
+from apply_blueprint import build_excerpt
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 FIXTURES = os.path.join(ROOT, "tests", "fixtures")
@@ -112,6 +115,60 @@ def run_fixture(path: str) -> list[str]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def regression_oracles() -> list[tuple[str, bool, str]]:
+    """Observable contracts whose output is not a finding headline."""
+    out = []
+    excerpt = build_excerpt("error: first useful diagnostic\n" + "\n".join(
+        f"warning {i}" for i in range(25)))
+    out.append(("REG4-build-first-error", any("first useful" in x for x in excerpt),
+                "a failed build excerpt must retain its first diagnostic"))
+
+    hunk = """**Before**:\n```java\nint a = 1;\nint b = 2;\n```\n**After**:\n```java\nthrow new UnsupportedOperationException(\"T001: implement\");\n```\n"""
+    out.append(("RX1-marker-vocabulary", bool(body_replaced_by_marker(hunk)),
+                "non-TODO marker calls must participate in body-loss detection"))
+    out.append(("RX5-dotless-path", looks_like_path("Makefile"),
+                "a supported extensionless build filename must be a path"))
+
+    positive = """**Before**:\n```text\nold\n```\n**After**:\n```text\nnew\n```\n"""
+    hidden_after = """**Before**:\n```text\nold\n```\n````markdown\n**After**:\n```text\nquoted example\n```\n````\n```text\nnew\n```\n"""
+    pairs = before_after_pairs(positive)
+    hidden_pairs = before_after_pairs(hidden_after)
+    out.append(("REG9-fenced-label", len(pairs) == 1 and pairs[0][:2] == ("old\n", "new\n")
+                and hidden_pairs == [],
+                "a real pair must remain visible and a fenced **After** must not become its label"))
+
+    tmp = tempfile.mkdtemp(prefix="blueprint-reg3-")
+    kept_tree = ""
+    try:
+        dest = os.path.join(tmp, "tree")
+        shutil.copytree(os.path.join(FIXTURES, "clean-guide"), dest)
+        subprocess.run(["git", "init", "-q"], cwd=dest, check=True)
+        subprocess.run(["git", "add", "."], cwd=dest, check=True)
+        subprocess.run(["git", "-c", "user.name=self-test", "-c",
+                        "user.email=self-test@example.invalid", "-c", "commit.gpgsign=false",
+                        "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture"],
+                       cwd=dest, check=True)
+        stray = os.path.join(dest, "scratch.py")
+        open(stray, "w", encoding="utf-8").write("# TODO(blueprint): T999 foreign work\n")
+        rel = "specs/" + sorted(os.listdir(os.path.join(dest, "specs")))[0]
+        proc = subprocess.run([sys.executable, os.path.join(HERE, "apply_blueprint.py"),
+                               rel, "--keep"], cwd=dest, capture_output=True, text=True,
+                              env=dict(os.environ, NO_COLOR="1"), timeout=300)
+        match = re.search(r"^Tree:\s+(.+)$", proc.stdout, re.M)
+        kept_tree = match.group(1).strip() if match else ""
+        copied = os.path.join(kept_tree, "scratch.py") if kept_tree else ""
+        ok = (proc.returncode == 0 and bool(kept_tree) and os.path.isfile(copied)
+              and open(copied, encoding="utf-8").read()
+              == open(stray, encoding="utf-8").read())
+        out.append(("REG3-foreign-untracked", ok,
+                    "an untracked marker file unclaimed by this blueprint must remain in the copy"))
+    finally:
+        if kept_tree:
+            shutil.rmtree(kept_tree, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
 # --- Coverage ---------------------------------------------------------------------
 #
 # The corpus used to have no idea what it covered, and "add a fixture when you add a
@@ -176,7 +233,7 @@ def main() -> int:
     if not names:
         print(f"no fixtures under {FIXTURES}")
         return 1
-    bad = 0
+    fixture_bad = 0
     pinned: set[str] = set()
     pending: list[tuple[str, list[str]]] = []
     for name in names:
@@ -205,12 +262,12 @@ def main() -> int:
             continue
         if not want:
             print(f"  {name}: no expected.txt — run with --update and read the diff")
-            bad += 1
+            fixture_bad += 1
             continue
         if want == got:
             print(f"  ok       {name}")
             continue
-        bad += 1
+        fixture_bad += 1
         print(f"  FAILED   {name}")
         for line in want:
             if line not in got:
@@ -218,6 +275,15 @@ def main() -> int:
         for line in got:
             if line not in want:
                 print(f"      extra:   {line}")
+    oracle_bad = 0
+    if not update:
+        for name, ok, reason in regression_oracles():
+            if ok:
+                print(f"  ok       {name}")
+            else:
+                oracle_bad += 1
+                print(f"  FAILED   {name}")
+                print(f"      {reason}")
     if update:
         if not acked:
             print("\nNothing was written. Every line above is a change to what this extension")
@@ -233,14 +299,15 @@ def main() -> int:
         if coverage:
             report_coverage(pinned)
         return 0
-    print(f"\n{len(names) - bad} of {len(names)} fixture(s) match.")
-    if bad:
+    print(f"\n{len(names) - fixture_bad} of {len(names)} fixture(s) match;")
+    print(f"{5 - oracle_bad} of 5 behavioral regression oracle(s) match.")
+    if fixture_bad or oracle_bad:
         print("A difference here is a check that changed what it says. Either the change is")
         print("the point — then update expected.txt in the same commit — or it is the bug this")
         print("corpus exists to catch. See tests/fixtures/README.md.")
     if coverage:
         report_coverage(pinned)
-    return 1 if bad else 0
+    return 1 if fixture_bad or oracle_bad else 0
 
 
 if __name__ == "__main__":

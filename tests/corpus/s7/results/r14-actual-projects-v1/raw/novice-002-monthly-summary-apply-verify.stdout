@@ -1,0 +1,8 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/002-monthly-summary
+Mode: guide | 9 task sections (+7 from 1 base blueprint(s))
+
+=== Verification ===
+  against a copy of your working tree (/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-gdvmrz53)
+  ran 12 distinct command(s) covering 11 task(s): 12 passed, 0 failed
+  11 task(s) verify against your tree: T002, T003, T004, T005, T006, T007, T008, T009, T010, T011 (+1 more)
