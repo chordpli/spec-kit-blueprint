@@ -310,3 +310,8 @@ An `ARTIFACT DOES NOT HOLD` doubt and an unanswered Open Questions row are the s
 - Follow the language used in existing spec/plan/tasks documents when writing questions and the report.
 
 When export records a completed feature, check that the blueprint Checklist and any team handoff document state the same completion boundary; this is documentation review, not a substitute for behavior verification.
+
+For a completion handoff, record `document-valid`, `scaffold-complete`, and
+`behavior-verified` separately as pass/fail/not run, with the actual command, exit,
+and scope. Only focused acceptance assertions establish the last state; a
+checklist tick or marker cleanup does not. See [verification evidence](../docs/verification.md).

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R16 — observable feature acceptance
+
+- Verification executes whole fenced shell scripts, preserving heredoc assertions
+  and failing fast instead of running only their first line.
+- Added optional `--verify-scope feature`: selected task commands and explicitly
+  feature-scoped header tests run; unspecified header scope exits 2 and missing
+  runnable proof fails. Default verification retains Base and header execution.
+- Namespace task IDs by feature and report selected/Base coverage and header results
+  separately. Strict-guide file-count mismatches now fail. Shared foreign markers
+  retain conservative failure with feature/repository ownership details.
+
+- Generation now embeds executable Verification assertions and records red
+  controls before handoff, with green/mutation controls when a completed app exists.
+  Added a runnable R14 guru history example asserting CLI JSON, stderr, exit,
+  unchanged ledger bytes/inode/mtime and domain contracts; it supplies no application code.
+- Documented optional header test scope, focused feature verification, separate
+  Base/selected/header evidence, and three completion states in handoffs. Default
+  verification remains the full command set; declared scope is not semantic proof.
+
 ### R15 — reproducible observed-finding ledger
 
 - Added an S7 collector with raw stdout/stderr hashes, one execution row for every

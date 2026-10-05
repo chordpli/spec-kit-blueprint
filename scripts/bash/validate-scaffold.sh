@@ -930,12 +930,31 @@ fi
 if [[ "$DONE" == true ]]; then
     header "3b. Feature declared done"
     DONE_LEFT=()
+    DONE_OWN=0
+    DONE_OTHER=0
+    DONE_UNKNOWN=0
     for f in "${DECLARED[@]}"; do
         [[ -f "$REPO_ROOT/$f" ]] || continue
         n_bp=$(count_matches -c "TODO(blueprint)" "$REPO_ROOT/$f")
         n_impl=$(count_matches -ci "$NOT_IMPL_RE" "$REPO_ROOT/$f")
         if [[ "$n_bp" -gt 0 ]] || [[ "$n_impl" -gt 0 ]]; then
             DONE_LEFT+=("$f ($(( n_bp + n_impl )))")
+            while IFS= read -r hit; do
+                [[ -n "$hit" ]] || continue
+                if marker_owner "$hit"; then
+                    if printf '%s\n' "$OWN_IDS" | grep -qx -- "$MK_ID"; then
+                        if bp_has_wording "$MK_MSG"; then
+                            DONE_OWN=$((DONE_OWN + 1))
+                        else
+                            DONE_UNKNOWN=$((DONE_UNKNOWN + 1))
+                        fi
+                    else
+                        DONE_OTHER=$((DONE_OTHER + 1))
+                    fi
+                else
+                    DONE_UNKNOWN=$((DONE_UNKNOWN + 1))
+                fi
+            done < <(awk -v re="TODO[(]blueprint[)]|$MARKER_ERE" "$MARKER_JOIN_AWK" "$REPO_ROOT/$f")
         fi
     done
     if [[ ${#DONE_LEFT[@]} -gt 0 ]]; then
@@ -943,6 +962,7 @@ if [[ "$DONE" == true ]]; then
         MORE=""
         [[ ${#DONE_LEFT[@]} -gt 8 ]] && MORE=" (+$(( ${#DONE_LEFT[@]} - 8 )) more)"
         fail "${#DONE_LEFT[@]} declared file(s) still carry a not-implemented marker: $(printf '%s, ' "${SHOWN[@]}" | sed 's/, $//')${MORE}"
+        echo "      Marker debt: selected ownership $DONE_OWN; other task IDs $DONE_OTHER; unknown ownership $DONE_UNKNOWN (all remain failures)."
         echo "      --done says this feature is finished. Run /speckit.blueprint.cleanup, or drop --done."
     else
         pass "no declared file carries a not-implemented marker"
@@ -1182,6 +1202,9 @@ echo -e "  ${GREEN}PASS${NC}: $PASS"
 echo -e "  ${YELLOW}WARN${NC}: $WARN"
 echo -e "  ${RED}FAIL${NC}: $FAIL"
 
+if [[ "$DONE" == true ]]; then
+    echo "  Scaffold completion result only: declared files/symbols/markers; behavior verification not executed."
+fi
 echo -e "  After implementing, run /speckit.blueprint.cleanup to sweep leftover markers."
 
 if [[ $FAIL -gt 0 ]]; then

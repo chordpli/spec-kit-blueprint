@@ -149,7 +149,8 @@ whether files are expected on disk.
 > run reports the blueprint as out of date against its own work. Cite such a file in the
 > Why that depends on it instead.
 **Build**: {the command that compiles or tests this project, from plan.md or the build files — omit the line if there is none}
-**Test**: {optional — the command that runs this project's own tests, for `--verify` to run once the bodies are written; omit unless Build is a compile check}
+**Test**: {optional — focused feature acceptance command, run by `--verify`; a repository suite can be checked separately}
+**Test Scope**: {optional — feature or repository; omitted means unspecified, not inferred from the command}
 
 ## Key Decisions
 
@@ -322,7 +323,7 @@ The blueprint is a **complete implementation blueprint**. A developer must be ab
 
 ### Step 3a-G: Guide Mode Content Rules
 
-In `guide` mode, Step 3a's completeness rule applies to **guidance, not code**: every task must be implementable by the developer *without asking anything further*, but the blueprint never contains body logic. Per task:
+In `guide` mode, Step 3a's completeness rule applies to **guidance, not code**: every task must be implementable by the developer *without asking anything further*, but application/file-content blocks never contain body logic. Executable acceptance assertions under `**Verification**` are separate evidence (Step 4b). Per task:
 
 - **Skeleton block**: one code block with the complete file skeleton — package/module declaration, imports, class/function **signatures exactly as agreed in plan/spec/contracts**, and each body as the language's canonical not-implemented form (e.g., Kotlin `TODO("...")`, Python `raise NotImplementedError("...")`, Go `panic("TODO: ...")`, Java `throw new UnsupportedOperationException("...")`, JavaScript/TypeScript `throw new Error("...")`) whose message is a **self-contained work instruction**: what to implement, which spec section or official doc to consult, and the pitfall to avoid. Begin each message with the task ID (`T{ID}: ...`) so validation and cleanup can trace markers to tasks. The skeleton must compile/parse as written.
 - **Never invent a not-implemented type.** Use the one the language has; where it has none — JavaScript and TypeScript — the form is `throw new Error("T0NN: ...")`. An undeclared `NotImplementedError` reads like the Python habit, parses cleanly, passes a syntax-only build, and fails at runtime with a `ReferenceError` naming the marker instead of the work. It is the most common way a guide skeleton ships broken, and the syntax check in the header is exactly the gate that will not catch it.
@@ -330,7 +331,7 @@ In `guide` mode, Step 3a's completeness rule applies to **guidance, not code**: 
 - **Identifiers carry their feature number outside their own document.** `OQ-1`, `D5`, `FR-004` and `T002` are unique inside one blueprint and collide across a repository: a single `cli.py` ends up carrying four features' `T002`. In code comments, in cleanup output and in anything a later reader greps, write `005 OQ-1`, `005 plan D5`. **This is checked**, inside code blocks — which is where the text becomes a comment in someone's tree. The round this rule was written, the next blueprint used `plan D…` 34 times and numbered none of them, and the developer typing it produced two `(plan D9)` comments in one file meaning different decisions of different features.
 - **References once, not per task**: cite an official document by name where the task needs it ("the `csv` module's writer rules") and collect the URLs in one **References** section at the end of the blueprint. Repeating a link block under every task is a measurable share of a guide blueprint's length and none of it is new after the second time.
 - **Implementation notes**: an ordered list of *what to achieve* in each body — behavior, edge cases, invariants to uphold, error handling — written as goals, never as line-by-line code dictation. Cite spec/plan/decision sections and official documentation URLs. **These are checked.** The validator reads implementation notes for pasteable expressions the same way it reads a marker's message; a note that is a Java statement with the punctuation removed is the body, wherever it is written. A reviewer's notes 2, 3 and 4 for one task were whole statements — and one of them inverted the sign of the arithmetic it dictated, which the developer only found by running the tests.
-- **No body logic anywhere**: no branches, queries, transaction code, or assertion bodies — not in code blocks, not in a `// TODO(blueprint):` comment, not in the implementation notes, not spelled out in prose so literally that typing it is transcription. If a body is genuinely one obvious line (a delegation, a constant), say so in the notes instead of coding it. Shapes the validator reports: a boolean operator, a comparison with a call on one side, an arithmetic formula over identifiers (`spent/elapsed_days`, `avg*days_in_month`), a call carrying two or more keyword arguments, a subscripted call, an identifier compared against a number. Naming an API mid-sentence is what the mode asks for and passes.
+- **No application body logic**: no branches, queries, transaction code, or application-test assertion bodies in file-content blocks, not in a `// TODO(blueprint):` comment, not in the implementation notes, not spelled out in prose so literally that typing it is transcription. If a body is genuinely one obvious line (a delegation, a constant), say so in the notes instead of coding it. Completed acceptance assertions are allowed only under the separate `**Verification**` heading (Step 4b), never as an application implementation. Shapes the validator reports: a boolean operator, a comparison with a call on one side, an arithmetic formula over identifiers (`spent/elapsed_days`, `avg*days_in_month`), a call carrying two or more keyword arguments, a subscripted call, an identifier compared against a number. Naming an API mid-sentence is what the mode asks for and passes.
 - **Test skeletons carry their framework**: in guide mode, test-file skeletons must include the project's real test imports and annotations (`@Test`, class-level framework annotations, fixtures wiring) exactly as the project's existing tests do — a test skeleton without its framework does not compile and fails the skeleton rule. Only the method bodies are not-implemented markers.
 - **Test tasks**: name the scenarios, the fixtures/preconditions, and *what each assertion must establish* — never write the given/when/then bodies. Designing assertions is the developer's work.
 - **Structural files** (schemas, config, wiring, DTO/type declarations with no logic): complete content is allowed even in guide mode — there is no design learning in transcribing a config file. Mark the boundary honestly: anything with behavior gets a skeleton, not content.
@@ -405,6 +406,43 @@ Note: The scaffold files on disk are intentionally incomplete (TODO stubs). The 
 
 ### Step 4b: Verification
 
+**Generate executable acceptance before handing off behavior work.** Put completed
+assertions under `**Verification**` in a fenced shell block, for example a
+`node --input-type=module <<'NODE'` heredoc. It checks deterministic spec-derived inputs
+and expected results and supplies no application implementation. A standalone assertion
+file already owned by the project may instead be invoked as `node tools/verify-history.mjs`;
+guide/doc-only generation does not write that file. Every behavior task names its focused
+assertions or a focused suite asserting its contract. Identical blocks run once.
+A valid CLI assertion checks exit 0, exact parsed output and expected stderr; read-only
+operations also compare input file bytes. A bare invocation, redirected output, import,
+compile or help check is smoke coverage only. Use static assertions or a recorded human
+check for documentation tasks. Do not treat a smoke command as acceptance evidence.
+
+Run the verification block against the unimplemented/half state and record its expected
+failure. At implementation completion, record the same assertions passing; if a completed control
+is already available during generation, record it then.
+Prove it fails on isolated no-op-output, unwanted-write and wrong-domain-result
+copies. Never complete the app to manufacture a green generation control. If no completed
+implementation exists, explicitly mark the green control not measured and hand off the
+red assertion. Follow [the reusable recipe and working Node example](../docs/verification.md).
+These finite controls test the chosen contract; a validator does not prove general semantics.
+Completed Verification assertions are executable evidence, distinct from application/test
+file bodies: guide skeleton/test tasks remain marked and unimplemented. Fenced assertions
+run in the throwaway verification copy, and generate creates no guide/doc-only app files.
+
+Prefer a focused `**Test**` with `**Test Scope**: feature`; label a whole suite `repository`.
+The annotation states the intended scope, not a machine-certified scope. Default `--verify`
+continues to run Base, selected tasks and the header. A focused completion gate can use
+`--verify --verify-scope feature`; report its omitted Base/header commands and selected-task
+coverage, then run repository tests separately. Task IDs restart in each feature; qualify
+Base and selected task coverage by feature path in evidence. A `--through` prefix does not
+make a header suite narrower.
+
+In any handoff, record document-valid, scaffold-complete and behavior-verified separately
+as pass/fail/not run with command, exit and tested scope. Only the named behavioral
+assertions establish behavior-verified; checklist ticks and `--done` establish no runtime
+behavior. Use the three-state table in the verification guide.
+
 Run the bundled validators rather than only re-reading your own output. A model auditing itself finds
 what it was already looking for; these scripts find what it missed, and several rules below exist because
 a read-through passed a blueprint the scripts then failed.
@@ -423,9 +461,8 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 ```
 
 The first two check the document; the third applies it to a throwaway copy of the tree and runs the
-project's build, which is the only way to know that the code in here works. `--verify` and `--done`
-are deliberately not in this list, and their absence here is the *only* place that absence is
-correct: `--verify` runs each task's `**Verification**` line against the *working tree*, so at
+project's build, which is the only way to know that the code in here works. Completion `--verify` and `--done`
+are deliberately not in this validator list. The separate red-control assertion run above is generation evidence, not a completed gate: `--verify` runs each task's `**Verification**` line against the *working tree*, so at
 generation time — before a body exists — it is red by construction, and `--done` asks whether a
 feature nobody has started is finished. Both belong to `/speckit.blueprint.validate`, block B, on the
 commit that closes the feature. What you owe them here is that every `**Verification**` line name a

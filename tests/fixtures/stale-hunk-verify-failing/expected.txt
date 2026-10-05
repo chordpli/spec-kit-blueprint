@@ -5,7 +5,7 @@ validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
 validate --typo: exit 2
 apply: ✗ T002  FAILED
 apply: exit 1
-apply --verify: ✗ T002  $ python3 -c "import pkg.cli" — exit 1
+apply --verify: ✗ specs/012-clean/T002  $ python3 -c "import pkg.cli" — exit 1
 apply --verify: exit 1
 apply --typo: ERROR: unknown option(s): --verfy
 apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]

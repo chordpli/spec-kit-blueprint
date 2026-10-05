@@ -170,3 +170,8 @@ In `report` mode, stop here and suggest: "Run `/speckit.blueprint.cleanup apply`
 - Follow the language used in existing spec/plan/tasks documents when writing the report.
 
 `--done` only establishes declared-file, symbol, and marker structure. Run the focused behavior verification separately before calling the feature complete. In report mode, note any mismatch with a team handoff document; only apply mode may update that document after the checks pass.
+
+For a completion handoff, record `document-valid`, `scaffold-complete`, and
+`behavior-verified` separately as pass/fail/not run, with the actual command, exit,
+and scope. Only focused acceptance assertions establish the last state; a
+checklist tick or marker cleanup does not. See [verification evidence](../docs/verification.md).

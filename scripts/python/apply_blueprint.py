@@ -666,12 +666,18 @@ def verification_commands(section: str) -> list[str]:
     for _i, line, in_fence, block in scan(section):
         if block is not None:
             if under_label:
-                for ln in block.split(chr(10)):
-                    ln = ln.strip()
-                    if ln.startswith("$"):
-                        ln = ln[1:].strip()
-                    if ln and VERIFY_RUNNER.match(ln) and ln not in out:
-                        out.append(ln)
+                lines = block.strip().splitlines()
+                first = next((ln.strip() for ln in lines
+                              if ln.strip() and not ln.lstrip().startswith("#")), "")
+                if first.startswith("$"):
+                    first = first[1:].strip()
+                if first and VERIFY_RUNNER.match(first):
+                    # Preserve heredoc bodies and command sequencing. Executing only
+                    # runner-prefixed lines silently dropped acceptance assertions.
+                    script = "set -e\n" + "\n".join(
+                        ln[1:].lstrip() if ln.startswith("$ ") else ln for ln in lines)
+                    if script not in out:
+                        out.append(script)
                 under_label = False
             continue
         if not in_fence and line.startswith("**"):
@@ -736,94 +742,111 @@ def _run_one(cmd: str, cwd: str):
         return 127, [str(exc)]
 
 
-def run_verifications(root: str, tasks: list, bp: str, keep: bool) -> int:
-    """Run every task's **Verification** command against the developer's own tree.
+def test_scope(blueprint: str) -> str:
+    """Scope is declared, never inferred from the test runner's name."""
+    for _, line, in_fence, _ in scan(blueprint):
+        if not in_fence and line.startswith("**Test Scope**:"):
+            return line.split(":", 1)[1].strip().strip("`")
+    return "unspecified"
 
-    This flag was asked for five rounds running, arrived, and answered a different
-    question than the one asked. It ran the commands inside the applier's working copy —
-    a copy the applier had just stripped of every file the blueprint declares new and
-    rewritten from the document. So the tree it tested was a chimera: the developer's
-    modify-hunks over the document's skeletons. Measured on one implemented feature, of
-    nineteen runnable commands it ran six, and the number that ran against the
-    developer's own code was zero; three deliberate defects, one of which stopped the
-    application importing at all, produced byte-identical output. In the other direction
-    a finished, committed feature reported `3 passed, 2 failed`, because the skeletons in
-    the copy throw by design. An alarm that is on when the work is right and off when it
-    is wrong is worse than no alarm.
 
-    So it runs against a copy of the working tree AS IT STANDS — the developer's code,
-    nothing removed, nothing applied. Before the bodies are written that is red and it
-    should be; when they are right it is green. A copy rather than the tree itself
-    because these are shell commands out of a generated document, and because a test run
-    writes build output.
-
-    Every task, not only the ones the applier could place: the task whose whole job is
-    "run the suite" declares no file, and was skipped for that reason — a flag that runs
-    commands filtered them by whether a file was declared.
-
-    Deduplicated. Twelve commands from one document were ten copies of the same build,
-    and "12 passed" read as twelve things checked.
-    """
-    print(f"\n{CYAN}=== Verification ==={NC}")
-    order: list[str] = []
-    owners: dict[str, list] = {}
-    silent = []
-    for tid, section in tasks:
+def run_verifications(root: str, tasks: list, bp: str, keep: bool,
+                      scope: str = "all", base_tasks: list | None = None,
+                      partial: bool = False) -> int:
+    """Run declared commands once, preserving their scope and qualified ownership."""
+    base_tasks = base_tasks or []
+    header_scope = test_scope(bp)
+    print(f"\n{CYAN}=== Verification: {scope} command scope ==={NC}")
+    if header_scope not in ("feature", "repository", "unspecified"):
+        record("fail", f"invalid **Test Scope**: {header_scope!r}; use feature or repository")
+        return 1
+    test_cmd = test_command(bp)
+    if scope == "feature" and test_cmd and header_scope == "unspecified":
+        record("fail", "feature verification unavailable: **Test** header scope is unspecified; declare **Test Scope**: feature or repository")
+        return 2
+    include_header = bool(test_cmd and (scope == "all" or header_scope == "feature"))
+    if test_cmd:
+        print(f"  Header test scope: {header_scope} — "
+              + ("included" if include_header else "omitted from feature gate"))
+    if scope == "feature":
+        print(f"  Base: {len(base_tasks)} referenced task(s); commands omitted from feature gate")
+    order, owners, silent = [], {}, []
+    for tid, section in ((base_tasks if scope == "all" else []) + tasks):
         cmds = verification_commands(section)
         if not cmds:
             silent.append(tid)
-            continue
         for cmd in cmds:
             if cmd not in owners:
                 owners[cmd] = []
                 order.append(cmd)
             owners[cmd].append(tid)
-    test_cmd = test_command(bp)
-    if test_cmd and test_cmd not in owners:
-        # A header suite is a target, not another task in the coverage count.
+    if include_header and test_cmd not in owners:
         owners[test_cmd] = []
         order.append(test_cmd)
+    selected_silent = [tid for tid, section in tasks if not verification_commands(section)]
+    proof_missing = scope == "feature" and bool(selected_silent) and not (
+        include_header and header_scope == "feature")
+    failures = 0
+    if proof_missing:
+        record("fail", "selected tasks lack runnable verification and no feature-scoped header covers them",
+               ", ".join(selected_silent))
+        failures += 1
     if not order:
-        print("  no task names a runnable command in its **Verification** line.")
-        return 0
+        record("fail", "no runnable verification proof; behavior verification unavailable")
+        return failures or 1
     tree = copy_tree(root)
     try:
         print(f"  against a copy of your working tree ({tree})")
-        failures, failed_tasks, passed_tasks = 0, set(), set()
+        passed_tasks, failed_tasks = set(), set()
+        header_code = None
         for cmd in order:
             who = owners[cmd]
-            label = (f"{', '.join(who[:4])}{f' (+{len(who) - 4} more)' if len(who) > 4 else ''}"
-                     if who else "**Test** header")
+            labels = list(who)
+            if include_header and cmd == test_cmd:
+                labels.append(f"**Test** header [{header_scope}]")
+            label = ", ".join(labels[:4]) + (f" (+{len(labels) - 4} more)" if len(labels) > 4 else "")
+            display_lines = cmd.splitlines()
+            display = display_lines[1] if display_lines[0] == "set -e" and len(display_lines) > 1 else display_lines[0]
+            if len(display_lines) > 1:
+                display += f" (+{len(display_lines) - 1} script line(s))"
             code, tail = _run_one(cmd, tree)
+            if include_header and cmd == test_cmd:
+                header_code = code
             if code == 0:
                 passed_tasks.update(who)
-                record("pass", f"{label}  $ {cmd}", always=VERBOSE)
+                record("pass", f"{label}  $ {display}", always=VERBOSE)
             else:
                 failures += 1
                 failed_tasks.update(who)
-                record("fail", f"{label}  $ {cmd} — exit {code}", "\n".join(tail))
-        covered = len(passed_tasks | failed_tasks)
-        suites = sum(1 for who in owners.values() if not who)
-        print(f"  ran {len(order)} distinct command(s) covering {covered} task(s)"
-              + (f" plus {suites} header test suite(s)" if suites else "") + ":"
-              f" {len(order) - failures} passed, {failures} failed"
-              + (f"; {len(silent)} task(s) name no runnable command" if silent else ""))
-        green = sorted(passed_tasks - failed_tasks)
-        if green:
-            print(f"  {GREEN}{len(green)} task(s) verify against your tree{NC}: "
-                  + ", ".join(green[:10]) + (f" (+{len(green) - 10} more)" if len(green) > 10 else ""))
-        if failed_tasks:
-            red = sorted(failed_tasks)
-            # The sentence has to stand on its own, and name what it counts. It read
-            # "14 task(s) do not:" — borrowing its verb from the green line above, which
-            # is not printed when nothing is green, and nothing is green the first time
-            # anybody runs this. It then listed ten of the fourteen and said nothing
-            # about the other four, while the green line one row up already had the
-            # `(+N more)` this one needed.
-            print(f"  {YELLOW}{len(red)} task(s) do not verify against your tree{NC}: "
-                  + ", ".join(red[:10]) + (f" (+{len(red) - 10} more)" if len(red) > 10 else ""))
-            print("  These ran against YOUR code, not the blueprint's. Before the bodies are written")
-            print("  a guide-mode blueprint is red here by design; after they are, this is the failure.")
+                record("fail", f"{label}  $ {display} — exit {code}", "\n".join(tail))
+        print(f"  ran {len(order)} distinct command(s); "
+              f"{len(passed_tasks | failed_tasks)} qualified task(s) covered; "
+              f"{len(silent)} task(s) name no runnable command")
+        covered_ids = passed_tasks | failed_tasks
+        selected_ids = {tid for tid, _section in tasks}
+        base_ids = {tid for tid, _section in base_tasks}
+        selected_silent_ids = set(selected_silent)
+        base_silent_ids = {tid for tid, section in base_tasks if not verification_commands(section)}
+        print(f"  Selected task proof: {len(selected_ids & covered_ids)} covered; "
+              f"{len(selected_silent_ids)} without runnable commands; {len(tasks)} selected task section(s)")
+        print(f"  Base task proof: {len(base_ids & covered_ids)} covered; "
+              f"{len(base_silent_ids)} without runnable commands; {len(base_tasks)} referenced task section(s)"
+              + (" (commands omitted)" if scope == "feature" else ""))
+        if header_code is not None:
+            print(f"  Header result [{header_scope}]: "
+                  + ("passed" if header_code == 0 else f"failed (exit {header_code})"))
+        for kind, group in (("passed", passed_tasks - failed_tasks), ("failed", failed_tasks)):
+            if group:
+                shown = sorted(group)
+                print(f"  Task command results {kind}: " + ", ".join(shown[:12])
+                      + (f" (+{len(shown) - 12} more)" if len(shown) > 12 else ""))
+        print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
+        if partial:
+            print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
+        elif failures or selected_silent and not (include_header and header_scope == "feature"):
+            print("  Complete feature behavior is unverified: failed or missing feature proof.")
+        else:
+            print("  Selected feature's declared verification commands passed.")
     finally:
         if keep:
             print(f"  Verification tree kept at: {tree}")
@@ -915,6 +938,7 @@ def main() -> int:
         print("  --keep             print the copy's path instead of deleting it")
         print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
         print("  --scaffold         after a clean apply, copy the declared-new files into your tree")
+        print("  --verify-scope S   all (default): Base/tasks/header; feature: selected tasks and feature-scoped header")
         print("  --verify           run every task's **Verification** command against YOUR tree; alone, does not apply")
         print("  --verbose          print the per-task line for every task, not just the failures")
         print("  --through T0NN     limit application, or --verify commands, to that task — a build bisector")
@@ -926,6 +950,18 @@ def main() -> int:
     strict_anchors = "--require-anchors" in argv
     do_scaffold = "--scaffold" in argv
     do_verify = "--verify" in argv
+    verify_scope = "all"
+    for i, arg in enumerate(argv):
+        if arg.startswith("--verify-scope="):
+            verify_scope = arg.split("=", 1)[1]
+        elif arg == "--verify-scope":
+            verify_scope = argv[i + 1] if i + 1 < len(argv) else ""
+    if verify_scope not in ("all", "feature"):
+        print("ERROR: --verify-scope takes feature or all")
+        return 2
+    if any(a.startswith("--verify-scope") for a in argv) and not do_verify:
+        print("ERROR: --verify-scope requires --verify")
+        return 2
     VERBOSE = "--verbose" in argv
     # --through T0NN: apply the document only as far as one task.
     #
@@ -941,15 +977,20 @@ def main() -> int:
         elif a == "--through" and i + 1 < len(argv):
             through = argv[i + 1].strip()
     KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold", "--verify", "--verbose",
-             "--through"}
+             "--through", "--verify-scope"}
     unknown = [a for a in argv
-               if a.startswith("-") and a not in KNOWN and not a.startswith("--through=")]
+               if a.startswith("-") and a not in KNOWN and not a.startswith("--through=") and not a.startswith("--verify-scope=")]
     if unknown:
         # A typo in --build looked like a run that simply chose not to build.
         print(f"{RED}ERROR: unknown option(s): {' '.join(unknown)}{NC}")
         print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
         return 2
     args = [a for a in argv if not a.startswith("--")]
+    if "--verify-scope" in argv:
+        # Consume the option's value by position; a feature directory may itself
+        # be named "feature" or "all".
+        scope_values = {i + 1 for i, a in enumerate(argv) if a == "--verify-scope"}
+        args = [a for i, a in enumerate(argv) if not a.startswith("--") and i not in scope_values]
     if through is not None:
         args = [a for a in args if a != through]
         if not re.fullmatch(r"T\d+", through):
@@ -977,6 +1018,8 @@ def main() -> int:
         return 1
     base_tasks = [(tid, sec) for _p, text in chain for tid, sec in split_tasks(text)]
     tasks = split_tasks(bp)
+    qualified_base = [(f"{os.path.relpath(os.path.dirname(path), root)}/{tid}", sec)
+                      for path, text in chain for tid, sec in split_tasks(text)]
     full_task_count = len(tasks)
     dropped_through = 0
     if through is not None:
@@ -1006,6 +1049,10 @@ def main() -> int:
         print(f"  {YELLOW}{len(dupes)} task id(s) have more than one section — each section is applied:"
               f" {', '.join(dupes)}{NC}")
 
+    if do_verify and verify_scope == "feature" and test_command(bp) and test_scope(bp) == "unspecified":
+        print("ERROR: feature gate cannot omit an unspecified **Test** header; declare **Test Scope**: feature or repository")
+        return 2
+
     # --verify asks only whether commands pass on the working tree. Once a feature is
     # complete its historical Before blocks no longer anchor, so applying them first
     # turns a passing verification into an unrelated document failure. --through still
@@ -1013,7 +1060,7 @@ def main() -> int:
     # needs the document copy.
     verify_only = do_verify and not (do_build or do_scaffold or strict_anchors)
     if verify_only:
-        verify_failures = run_verifications(root, base_tasks + tasks, bp, keep)
+        verify_failures = run_verifications(root, [(f"{os.path.relpath(feature_dir, root)}/{tid}", sec) for tid, sec in tasks], bp, keep, verify_scope, qualified_base, through is not None)
         return 1 if verify_failures else 0
 
     # realpath: on macOS mkdtemp returns /var/... and inside() resolves to /private/var/...,
@@ -1111,12 +1158,18 @@ def main() -> int:
               + (f" (+{len(unclaimed) - 4} more)" if len(unclaimed) > 4 else ""))
     print(f"Tree: {tree}\n")
 
+    base_written, base_noop, base_unplaced, base_failed = 0, 0, 0, []
     if base_tasks:
         print(f"{CYAN}[0] Applying {len(base_tasks)} task(s) from the base blueprint(s){NC}")
-        base_failed = []
         for tid, section in base_tasks:
             try:
-                apply_task(tree, section)
+                _note, count, _flags = apply_task(tree, section)
+                if count:
+                    base_written += 1
+                elif "unanchored" in _flags:
+                    base_unplaced += 1
+                else:
+                    base_noop += 1
             except (Defect, AlreadyApplied, Ambiguous) as exc:
                 base_failed.append(f"{tid}: {exc}")
         if base_failed:
@@ -1126,7 +1179,7 @@ def main() -> int:
                    "\n".join(base_failed[:4]) + (f"\n(+{len(base_failed) - 4} more)" if len(base_failed) > 4 else "")
                    + "\nrun the applier in the base feature directory; this slice builds on top of it")
         else:
-            record("pass", f"{len(base_tasks)} base task(s) applied")
+            record("pass", f"Base: {base_written} task(s) wrote blocks; {base_noop} no-op/reference; {base_unplaced} unplaced")
 
     print(f"{CYAN}[1] Applying tasks in document order{NC}")
     failed, applied_tasks, unanchored_tasks, already, unclear = [], 0, [], [], []
@@ -1236,12 +1289,15 @@ def main() -> int:
         # Measuring the truncated run against itself would print `coverage: 5 of 5 (100%)`
         # for a run that never looked at fifteen tasks, which is the exact shape of false
         # green this line exists to prevent.
-        total_tasks = full_task_count + len(base_tasks)
-        if total_tasks:
-            pct = round(100 * applied_tasks / total_tasks)
+        if full_task_count:
+            pct = round(100 * applied_tasks / full_task_count)
             colour = GREEN if pct >= 80 else YELLOW
-            print(f"  {colour}coverage: this run typed and tested {applied_tasks} of {total_tasks}"
-                  f" task(s) ({pct}%){NC}")
+            print(f"  {colour}Selected application coverage: {applied_tasks} of {full_task_count}"
+                  f" task(s) wrote blocks ({pct}%){NC}")
+        if base_tasks:
+            print(f"  Base application: {base_written} of {len(base_tasks)} task(s) wrote blocks; "
+                  f"{base_noop} no-op/reference; {len(base_failed) + base_unplaced} not applied")
+        print("  Application coverage describes writes in the copied tree; it does not prove behavior.")
         if dropped_through:
             print(f"  {YELLOW}--through {through}: {dropped_through} later task(s) were not applied,"
                   f" not tested, and are not evidence of anything.{NC}")
@@ -1311,7 +1367,7 @@ def main() -> int:
             # which points a developer at the document when the finding is about their
             # code. The two verdicts are about two different artifacts and get two
             # different sentences; the exit code is still non-zero for either.
-            verify_failures = run_verifications(root, base_tasks + tasks, bp, keep)
+            verify_failures = run_verifications(root, [(f"{os.path.relpath(feature_dir, root)}/{tid}", sec) for tid, sec in tasks], bp, keep, verify_scope, qualified_base, through is not None)
         if do_scaffold and not failed:
             # The generator writing forty skeletons by hand is where drift comes from;
             # the copy already holds exactly what the document says, verified by the
