@@ -124,7 +124,14 @@ flag is red and should be; when they are right it is green.
 The header may carry an optional `**Test**: <command>`, run last. Guide mode's rules stamp `**Build**`
 as a compile check by design, so a feature can compile, pass every task's verification and still
 leave the project's own suite red; `**Test**` is where the document names the command that catches
-that.
+that. Add optional `**Test Scope**: feature` for focused acceptance or `repository`
+for a whole suite; omitted scope is unspecified. Default verification preserves all
+commands. `--verify --verify-scope feature` runs selected task commands plus an explicit
+feature-scoped header, and reports omitted Base/repository-header commands; an unspecified header is rejected (exit 2).
+It fails without runnable proof or when selected tasks lack commands and no feature
+header covers them. Declared scope is not a proof of what the command exercises.
+Record document-valid, scaffold-complete and behavior-verified separately in handoffs;
+see [acceptance artifacts and controls](../docs/verification.md).
 
 Both Python scripts take `--verbose`. Without it the validator prints one line per section that had
 nothing to report, and the applier prints only the tasks that failed; with it, every check and every
@@ -275,7 +282,7 @@ The copy starts **without this blueprint's declared-new files**. In `guide scaff
 
 - `--build` — run the project's build in the copy and report its exit code. The command comes from a `**Build**: <command>` line in the blueprint header if there is one; otherwise the script picks the first of `tools/build.sh`, `gradlew`, `package.json`, `Makefile` it finds, falling back to `python3 -m unittest discover` for a tree with tests. If nothing matches, the build is skipped with a warning
 - `--keep` — print the copy's path instead of deleting it, so you can inspect the applied result
-- `--verify` — run every task's `**Verification**` command against a copy of the working tree: the developer's code, with nothing applied to it and nothing removed. A backticked span that begins with a runner (`python3`, `bash`, `node`, `mvn`, `go`, `./gradlew`, …) is a command; everything else in the line is prose and is left alone, and a command inside a sentence that predicts its own failure is not run. Identical commands run once, reported as `ran N distinct command(s) covering M task(s)`, with an optional `**Test**:` header suite reported separately. A task naming no runnable command is counted, not failed. `--verify` alone (including `--through`) does not apply historical hunks; combining it with `--build`, `--scaffold`, or `--require-anchors` does. Any verification that exits non-zero fails the run
+- `--verify` — run every task's `**Verification**` command against a copy of the working tree: the developer's code, with nothing applied to it and nothing removed. A backticked span or whole fenced shell script under Verification that begins with a runner (`python3`, `bash`, `node`, `mvn`, `go`, `./gradlew`, …) is a command; everything else in the line is prose and is left alone, and a command inside a sentence that predicts its own failure is not run. Identical commands run once, reported as `ran N distinct command(s) covering M task(s)`, with an optional `**Test**:` header suite reported separately. A task naming no runnable command is counted, not failed. `--verify` alone (including `--through`) does not apply historical hunks; combining it with `--build`, `--scaffold`, or `--require-anchors` does. Any verification that exits non-zero fails the run
 - `--verbose` — print the per-task line for every task, not only the failures
 
 **A failure on a tree at the blueprint's commit means the blueprint is wrong, not the applier.** The header's `**Sources**` line stamps that commit; on a tree that has moved past it, a Before that no longer matches in a file git says has changed is reported as implemented since, not as a failure. Applying is deterministic and unforgiving on purpose: a `**Before**` block that is not in the file verbatim, or is there twice, is reported as a defect and never repaired by guesswork. Silent repair is what lets a lossy hunk reach a reader as if it were sound. When the applier reports `T0NN FAILED`, fix that task's Before block against the real file and run it again.

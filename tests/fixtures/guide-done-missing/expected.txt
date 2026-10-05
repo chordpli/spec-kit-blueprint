@@ -4,7 +4,7 @@ validate --typo: ERROR: unknown option(s): --strict-guied
 validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
 validate --typo: exit 2
 apply: exit 0
-apply --verify: ✗ T001  $ python3 -c "import pkg.store" — exit 1
+apply --verify: ✗ specs/012-clean/T001  $ python3 -c "import pkg.store" — exit 1
 apply --verify: exit 1
 apply --typo: ERROR: unknown option(s): --verfy
 apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]

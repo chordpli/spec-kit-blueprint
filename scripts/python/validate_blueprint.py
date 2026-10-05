@@ -40,6 +40,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     parse_mode,
     repo_root,
     resolve_feature_dir,
+    scan,
     section_events,
     split_tasks,
     stamped_head,
@@ -261,6 +262,13 @@ def main() -> int:
             + f" — {len(chain_ids)} task(s) live in them",
         )
 
+    for _, line, in_fence, _ in scan(bp):
+        if not in_fence and line.startswith("**Test Scope**:"):
+            scope_value = line.split(":", 1)[1].strip().strip("`")
+            if scope_value not in ("feature", "repository"):
+                record("fail", "invalid **Test Scope**; use feature or repository",
+                       f"declared {scope_value!r}; omitted metadata means unspecified")
+
     # 1. Coverage — every task id in tasks.md reaches the blueprint
     section("[1] Task coverage", first=True)
     if os.path.isfile(tasks_path):
@@ -318,7 +326,7 @@ def main() -> int:
                    for k in ("new", "modified", "deleted")
                    if k in claimed and claimed[k] != actual[k]]
             if off:
-                record("warn", "the header's file counts do not match the tasks",
+                record("fail" if strict_guide else "warn", "the header's file counts do not match the tasks",
                        "\n".join(off) + "\na file declared new by one task and modified by later ones counts once, as new")
             else:
                 record("pass", "the header's file counts match the tasks")

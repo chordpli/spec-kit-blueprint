@@ -276,7 +276,7 @@ Every flag the three scripts take, since until now they were documented only in 
 | `--keep` | apply | Leave the copy on disk and print its path |
 | `--scaffold` | apply | After a clean apply, copy the declared-new files into your tree — only files the blueprint declares new and only where nothing is already there |
 | `--require-anchors` | apply | Exit non-zero when a task anchors nothing, or when tasks were skipped as already-applied. Useful on the commit that has a blueprint and no code yet; from the first implemented task onward it is red on every commit, so it is not a standing CI gate |
-| `--verify` | apply | Run every task's `**Verification**` command against a copy of **your working tree** — your code, nothing applied, nothing removed. This is the flag that answers "does what I typed do what the document asked". Identical commands run once. Only backticked commands that begin with a runner (`python3`, `bash`, `mvn`, `npm`, …) are run, and a sentence that predicts its own failure ("fails until T003 supplies an implementation") is not run at all. Before the bodies are written a guide blueprint is red here by design; after they are, a failure is the failure. Non-zero on any failure |
+| `--verify` | apply | Run every task's `**Verification**` command against a copy of **your working tree** — your code, nothing applied, nothing removed. This is the flag that answers "does what I typed do what the document asked". Identical commands run once. Backticked commands and whole fenced scripts under `**Verification**` that begin with a runner (`python3`, `bash`, `mvn`, `npm`, …) are run, and a sentence that predicts its own failure ("fails until T003 supplies an implementation") is not run at all. Before the bodies are written a guide blueprint is red here by design; after they are, a failure is the failure. Non-zero on any failure |
 | `--verbose` | apply | Print the per-task line for every task. Without it only failures print, and the state of the rest is the summary |
 | `--strict-guide` | validate | Turn the guide-mode body findings into failures rather than warnings |
 | `--verbose` | validate | Print a line for every check that passed. Without it a section with nothing to report is one line |
@@ -300,6 +300,24 @@ turn two failures into a warning and exit 1 into exit 0.
 | 1 | a real failure: a task did not apply, a check failed, the build broke on a tree that still matches the stamp, a `--verify` command failed |
 | 2 | the tool could not start — feature directory not resolved, unknown flag |
 | 3 | (applier) the build failed on a tree that has moved past the blueprint's stamp, so nothing here says the document is wrong. `--require-anchors` promotes it to 1 |
+
+### Focused acceptance and completion evidence
+
+Generate executable acceptance assertions under a fenced blueprint `**Verification**`
+block, or invoke an assertion artifact the project already owns: assert a known
+valid CLI's exact result, exit and stderr, and preserve file bytes for read-only
+commands. Prove it rejects unimplemented/no-op behavior before relying on a green
+result. The [verification guide and Node example](docs/verification.md) show the
+reusable red/green controls and a three-state handoff table.
+
+Optional `**Test Scope**: feature` labels a focused header test; `repository` labels
+a whole suite, and omission means unspecified. Default `--verify` retains all
+commands. `--verify --verify-scope feature` separates selected-task proof from Base
+commands and repository header suites, reporting omissions; an unspecified header
+is rejected with exit 2. A scoped
+header declaration is the author's claim, not a semantic guarantee. Run the
+repository suite separately. Record document-valid, scaffold-complete and
+behavior-verified as separate pass/fail/not-run states with commands and scope.
 
 ### What these scripts do not check
 
