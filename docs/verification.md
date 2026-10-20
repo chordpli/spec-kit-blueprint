@@ -68,8 +68,9 @@ the `Proof summary:` line and requires `shared-only 0`, `human evidence not supp
 `test files unmeasured 0`.
 
 Every run prints `Repository root:`. A project copy without its own `.git` inside another
-repository is read as that repository; the applier and the scaffold validator warn when the
-directory you are in holds its own copy of the feature but the root above it is used.
+repository has that repository as its root, so its blueprint would be judged against the
+enclosing project's files. All three tools refuse that run with exit 2: the feature directory
+must be in the root's `specs/`. Run `git init` in the copy, or run from the root you mean.
 
 ## Reusable generation recipe
 

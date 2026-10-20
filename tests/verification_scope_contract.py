@@ -211,8 +211,12 @@ class ScopeContracts(unittest.TestCase):
         self.assertFalse(applier.runs_file(['./tools/test-cancellation.sh ledger.CancellationSuccessTestX'], java))
         self.assertFalse(applier.runs_file(['node test/report.js'], 'test/report.test.js'))
 
-    def test_nested_copy_names_the_root_it_read(self):
+    def test_nested_copy_is_refused_by_all_three_tools(self):
         # A copy inside a repository, with no .git of its own, belongs to that repository.
+        # R17 printed the root and warned; R18 guru measured the warning beside exit 0 and
+        # 12 of 12 on an unimplemented copy inside a finished project. All three refuse.
+        validator = MODULE.with_name('validate_blueprint.py')
+        scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
         with tempfile.TemporaryDirectory() as outer:
             outer = os.path.realpath(outer)
             subprocess.run(['git', 'init', '-q'], cwd=outer, check=True)
@@ -220,26 +224,39 @@ class ScopeContracts(unittest.TestCase):
                 Path(base, 'specs/a').mkdir(parents=True)
                 Path(base, 'specs/a/blueprint.md').write_text(
                     '**Mode**: guide\n### T001: Check\n**Verification**: `python3 -c "print(1)"`\n')
+            Path(outer, 'src').mkdir()
             inner = os.path.join(outer, 'copy')
-            apply = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
-                                   cwd=inner, capture_output=True, text=True)
-            self.assertIn(f'Repository root: {outer}', apply.stdout)
-            self.assertIn('git resolved the repository root to an enclosing directory', apply.stdout)
-            own = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
-                                 cwd=outer, capture_output=True, text=True)
-            self.assertNotIn('enclosing directory', own.stdout)
-            scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+            py = [('apply', [sys.executable, str(MODULE), 'specs/a', '--verify']),
+                  ('validate', [sys.executable, str(validator), 'specs/a'])]
+            for name, cmd in py:
+                with self.subTest(tool=name):
+                    nested = subprocess.run(cmd, cwd=inner, capture_output=True, text=True)
+                    self.assertEqual(nested.returncode, 2, nested.stdout)
+                    self.assertIn(f'Repository root: {outer}', nested.stdout)
+                    self.assertIn(f'the feature directory is in {inner}/specs', nested.stdout)
+                    # Controls: the root itself, a subdirectory naming the feature from the
+                    # root, and a subdirectory naming it relative to where it stands.
+                    for cwd, arg in ((outer, 'specs/a'), (os.path.join(outer, 'src'), 'specs/a'),
+                                     (os.path.join(outer, 'src'), '../specs/a')):
+                        own = subprocess.run([c if c != 'specs/a' else arg for c in cmd],
+                                             cwd=cwd, capture_output=True, text=True)
+                        self.assertNotEqual(own.returncode, 2, (cwd, arg, own.stdout))
+                        self.assertNotIn('the feature directory is in', own.stdout)
             for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
                 if not Path(shell).exists():
                     continue
                 with self.subTest(shell=shell):
                     nested = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=inner,
                                             capture_output=True, text=True)
+                    self.assertEqual(nested.returncode, 2, nested.stdout + nested.stderr)
                     self.assertIn(f'Repository root: {outer}', nested.stdout)
-                    self.assertIn('declared files are read from the repository root', nested.stdout)
-                    plain = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=outer,
-                                           capture_output=True, text=True)
-                    self.assertNotIn('declared files are read from the repository root', plain.stdout)
+                    self.assertIn(f'the feature directory is in {inner}/specs', nested.stderr)
+                    for cwd, arg in ((outer, 'specs/a'), (os.path.join(outer, 'src'), 'specs/a'),
+                                     (os.path.join(outer, 'src'), '../specs/a')):
+                        plain = subprocess.run([shell, str(scaffold), arg], cwd=cwd,
+                                               capture_output=True, text=True)
+                        self.assertEqual(plain.returncode, 0, (cwd, arg, plain.stdout + plain.stderr))
+                        self.assertNotIn('the feature directory is in', plain.stderr)
 
     # --- R18: declarations are read without comments, in any binding form ------------
 

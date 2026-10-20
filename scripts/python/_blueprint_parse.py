@@ -34,7 +34,14 @@ def repo_root() -> str:
 
 def resolve_feature_dir(root: str, arg: str | None) -> str:
     if arg:
-        return arg if os.path.isabs(arg) else os.path.join(root, arg)
+        if os.path.isabs(arg):
+            return arg
+        # The directory a shell would read first, then the root's. The scaffold validator
+        # read a relative path from the current directory and these tools read it from the
+        # root, so inside a copy without its own .git the two read two different blueprints
+        # in the same run. Both now read the same one, and foreign_feature_dir refuses it.
+        here = os.path.join(os.getcwd(), arg)
+        return here if os.path.isdir(here) else os.path.join(root, arg)
     try:
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, check=True
@@ -48,6 +55,29 @@ def resolve_feature_dir(root: str, arg: str | None) -> str:
             if name.startswith(m.group(1)):
                 return os.path.join(specs, name)
     return ""
+
+
+def foreign_feature_dir(root: str, feature_dir: str) -> str:
+    """The feature's parent directory when it is not the root's `specs/`, else "".
+
+    The root comes from `git rev-parse --show-toplevel`, and every file a blueprint
+    declares is read from it. A project copy with no `.git` of its own inside another
+    repository has its root ABOVE it: its blueprint and the enclosing project's files.
+    That run was a warning and exit 0, and an unimplemented copy inside a finished
+    project verified 12 of 12. A document and a tree from two different places is not a
+    result, so the callers refuse it with exit 2.
+    """
+    parent = os.path.realpath(os.path.dirname(os.path.abspath(feature_dir).rstrip(os.sep)))
+    return "" if parent == os.path.realpath(os.path.join(root, "specs")) else parent
+
+
+def foreign_feature_message(root: str, parent: str) -> list[str]:
+    return [
+        f"ERROR: the feature directory is in {parent}, but the repository root is {os.path.realpath(root)}"
+        " and every declared file would be read from there.",
+        "  A copy without its own .git belongs to the repository around it: run `git init` in the copy,"
+        " or run from the root whose specs/ holds the feature.",
+    ]
 
 
 # --- Document parsing -------------------------------------------------------------

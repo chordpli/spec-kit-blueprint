@@ -289,6 +289,10 @@ fi
 
 if [[ -n "${ARGS[0]:-}" ]]; then
     FEATURE_DIR="${ARGS[0]}"
+    # The current directory first, then the root, as the two Python tools read it.
+    if [[ "$FEATURE_DIR" != /* ]] && [[ ! -d "$FEATURE_DIR" ]] && [[ -d "$REPO_ROOT/$FEATURE_DIR" ]]; then
+        FEATURE_DIR="$REPO_ROOT/$FEATURE_DIR"
+    fi
 else
     BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
     if [[ "$BRANCH" =~ ^([0-9]{3})- ]]; then
@@ -314,12 +318,15 @@ echo "Blueprint: $GUIDE"
 echo "Repository root: $REPO_ROOT"
 # The blueprint is read from the path as given and the files it declares from the git
 # root. Inside a copy that has no .git of its own those are two different trees: the
-# copy's document, judged against the enclosing project's files.
+# copy's document, judged against the enclosing project's files. That was a warning and
+# exit 0, which a pipeline reads as a pass over a tree nobody checked; it is refused
+# with exit 2, the same refusal and the same code as the two Python tools.
 FEATURE_PARENT_REAL="$(cd "$FEATURE_DIR/.." 2>/dev/null && pwd -P || true)"
 REPO_ROOT_REAL="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P || true)"
-ROOT_MISMATCH=""
 if [[ -n "$FEATURE_PARENT_REAL" && "$FEATURE_PARENT_REAL" != "$REPO_ROOT_REAL/specs" ]]; then
-    ROOT_MISMATCH="$FEATURE_PARENT_REAL"
+    echo -e "${RED}ERROR: the feature directory is in $FEATURE_PARENT_REAL, but the repository root is $REPO_ROOT_REAL and every declared file would be read from there.${NC}" >&2
+    echo "  A copy without its own .git belongs to the repository around it: run \`git init\` in the copy, or run from the root whose specs/ holds the feature." >&2
+    exit 2
 fi
 
 # === Detect the mode the blueprint was generated in ===
@@ -369,9 +376,6 @@ fi
 # CHECK 1: blueprint.md existence
 # =============================================
 header "1. Blueprint Document"
-if [[ -n "$ROOT_MISMATCH" ]]; then
-    warn "the blueprint is read from $ROOT_MISMATCH but declared files are read from the repository root $REPO_ROOT_REAL — a copy without its own .git belongs to the repository around it; run git init in the copy, or run from the root you mean to check"
-fi
 
 if [[ -f "$GUIDE" ]]; then
     pass "blueprint.md exists"

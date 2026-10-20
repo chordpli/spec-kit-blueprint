@@ -49,9 +49,9 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 # document rules still apply after implementation; guide modes make body findings strict
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR" --strict-guide
-# every task's **Verification** line, against YOUR working tree; check the printed
-# `Repository root:` is the tree you mean (a copy with no .git of its own is read as the
-# repository around it, and the run warns)
+# every task's **Verification** line, against YOUR working tree. All three tools print
+# `Repository root:` and refuse (exit 2) a feature directory that is not in that root's
+# specs/ — a copy with no .git of its own inside another repository
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
 # read its two axes before the exit code: `Feature behavior proof` (command results) and
 # `Task proof` (task-specific / shared / human evidence not supplied / test files unmeasured).
@@ -340,7 +340,17 @@ All three scripts output color-coded results:
 - Yellow warnings for non-critical issues
 - Red failures for problems that must be fixed
 
-Exit code 0 means pass (possibly with warnings), exit code 1 means failure, exit code 2 (Python scripts) means the feature directory could not be resolved.
+| Exit | `validate_blueprint.py` | `apply_blueprint.py` | `validate-scaffold.sh` |
+|---|---|---|---|
+| 0 | pass, possibly with warnings | applied (and built, and verified) cleanly | pass, possibly with warnings |
+| 1 | a check failed | a task did not apply, the build failed, or a `--verify` command failed or proof is missing | a check failed, or the feature directory was not found |
+| 2 | feature directory not resolved, or refused | feature directory not resolved, refused, or a refused `--verify` gate (unspecified `**Test**` scope) | unknown option, contradictory flags, or refused |
+| 3 | — | `--build` failed on a tree that has moved past the blueprint's stamp, so the failure says nothing about the document | — |
+
+"Refused" is the same rule in all three: the feature directory is not in the repository root's
+`specs/`, which is what a project copy with no `.git` of its own inside another repository looks
+like — its blueprint, and the enclosing project's files. A relative feature path is read from the
+current directory when it exists there, else from the root, in all three tools.
 
 ## Troubleshooting
 

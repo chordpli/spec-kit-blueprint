@@ -35,6 +35,8 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     count_path_labels,
     file_kinds,
     file_paths,
+    foreign_feature_dir,
+    foreign_feature_message,
     looks_like_path,
     outside_fences,
     parse_mode,
@@ -198,6 +200,12 @@ def main() -> int:
     if not feature_dir or not os.path.isdir(feature_dir):
         print(f"{RED}ERROR: feature directory not found.{NC}")
         print("Usage: validate_blueprint.py [specs/NNN-feature-name]")
+        return 2
+    foreign = foreign_feature_dir(root, feature_dir)
+    if foreign:
+        print(f"Repository root: {root}")
+        for line in foreign_feature_message(root, foreign):
+            print(f"{RED}{line}{NC}" if line.startswith("ERROR") else line)
         return 2
 
     bp_path = os.path.join(feature_dir, "blueprint.md")

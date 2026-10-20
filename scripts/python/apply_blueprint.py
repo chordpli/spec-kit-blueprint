@@ -45,6 +45,8 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     dependent_slices,
     in_commit,
     file_kinds,
+    foreign_feature_dir,
+    foreign_feature_message,
     outside_fences,
     parse_mode,
     section_events,
@@ -994,29 +996,6 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
     return failures
 
 
-def root_warning(root: str, arg: str | None) -> None:
-    """Say so when git resolved a repository above the directory the caller is in.
-
-    The root comes from `git rev-parse --show-toplevel`. A copy of a project made
-    inside it without its own `.git` resolves to the ENCLOSING repository, so a
-    no-op mutant copied below a finished feature was verified against the finished
-    feature and passed. Measured in an evaluation: three mutation controls all green,
-    and nothing in the output said which tree had been read.
-    """
-    cwd = os.path.realpath(os.getcwd())
-    real_root = os.path.realpath(root)
-    if cwd == real_root or not arg or os.path.isabs(arg):
-        return
-    here = os.path.join(cwd, arg)
-    if os.path.isdir(here) and os.path.realpath(here) != os.path.realpath(os.path.join(root, arg)):
-        record("warn", f"the current directory has its own {arg}, but git resolved the repository root"
-               " to an enclosing directory — this run reads and verifies that root, not the current directory",
-               f"current directory: {cwd}\nrepository root:   {real_root}\n"
-               "a copy without its own .git belongs to the repository around it;"
-               " run `git init` in the copy, or run from the root you mean to test",
-               always=True)
-
-
 def run_build(tree: str, cmd: str) -> int:
     print(f"\n{CYAN}=== Build ==={NC}")
     # The command can come from the blueprint's own **Build**: line, so it is shown
@@ -1104,7 +1083,8 @@ def main() -> int:
         print("  --verify           run every task's **Verification** command against YOUR tree; alone, does not apply")
         print("  --verbose          print the per-task line for every task, not just the failures")
         print("  --through T0NN     limit application, or --verify commands, to that task — a build bisector")
-        print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved,")
+        print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved or")
+        print("     not in the repository root's specs/ (a copy without its own .git),")
         print("     3 the tree has moved past the stamp so the build failure says nothing about the document.")
         return 0
     global VERBOSE
@@ -1165,6 +1145,12 @@ def main() -> int:
         print(f"{RED}ERROR: feature directory not found.{NC}")
         print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
         return 2
+    foreign = foreign_feature_dir(root, feature_dir)
+    if foreign:
+        print(f"Repository root: {root}")
+        for line in foreign_feature_message(root, foreign):
+            print(f"{RED}{line}{NC}" if line.startswith("ERROR") else line)
+        return 2
 
     bp_path = os.path.join(feature_dir, "blueprint.md")
     if not os.path.isfile(bp_path):
@@ -1200,7 +1186,6 @@ def main() -> int:
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
     print(f"Repository root: {root}")
-    root_warning(root, args[0] if args else None)
     mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(tasks)} task sections"
           + (f" (+{len(base_tasks)} from {len(chain)} base blueprint(s))" if chain else ""))
