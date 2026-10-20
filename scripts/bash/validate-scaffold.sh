@@ -74,6 +74,25 @@ count_matches() {
 # the line that CALLS it passed, which is most names. Measured on one corpus, 101 of 146
 # declared symbols could be deleted without this check moving.
 DECL_AWK=$(cat <<'AWK'
+# opendepth: how many argument lists are still open at the end of the line, with string
+# literals blanked first. A declaration header closes its parameter list on its own line
+# before the body brace; a call whose last argument is a callback leaves its list open
+# until a later line, and so does a node:test or JUnit registration that passes a lambda.
+# Written without quote or paren characters in this comment: bash 3.2 parses a heredoc
+# inside a command substitution and an unbalanced one there breaks the whole script.
+function opendepth(t,   s, i, c, d, dq, q, b) {
+    s = t; dq = "\042"; q = "\047"; b = "\140"
+    gsub(dq "([^" dq "\\\\]|\\\\.)*" dq, "S", s)
+    gsub(q "([^" q "\\\\]|\\\\.)*" q, "S", s)
+    gsub(b "([^" b "\\\\]|\\\\.)*" b, "S", s)
+    d = 0
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "(") d++
+        else if (c == ")" && d > 0) d--
+    }
+    return d
+}
 function declname(t,   n, w, i, nm, head2, before) {
     if (match(t, /^(export[ \t]+)?(default[ \t]+)?(async[ \t]+)?(public|private|protected|internal|open|final|static|abstract|suspend)?[ \t]*(class|interface|struct|enum|object|record|trait)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
         n = split(t, w, /[ \t]+/)
@@ -106,6 +125,12 @@ function declname(t,   n, w, i, nm, head2, before) {
         # developer the blueprint "declares `println`". It does not; saying so is worse
         # than saying nothing.
         if (before ~ /\.[ \t]*$/) return ""
+        # An argument list still open at the end of the line is a call passing a
+        # callback, never a declaration header: grammar, not a list of names. The
+        # node:test registration call in a test skeleton was read as a declaration
+        # named test that every finished test file had to repeat, and a one-line
+        # finished test failed --done until someone reflowed it.
+        if (opendepth(t) > 0) return ""
         # Nothing at all in front of the name and a semicolon after it is a bare call
         # statement — `heldMerchantGetsNoPayout();`. A declaration carries a type, a
         # modifier or a keyword; only a body-opening `{` excuses having none (JS and
@@ -233,6 +258,16 @@ GUIDE="$FEATURE_DIR/blueprint.md"
 echo -e "${CYAN}=== Blueprint Scaffold Validator ${SCRIPT_VERSION} ===${NC}"
 echo "Feature: $FEATURE_DIR"
 echo "Blueprint: $GUIDE"
+echo "Repository root: $REPO_ROOT"
+# The blueprint is read from the path as given and the files it declares from the git
+# root. Inside a copy that has no .git of its own those are two different trees: the
+# copy's document, judged against the enclosing project's files.
+FEATURE_PARENT_REAL="$(cd "$FEATURE_DIR/.." 2>/dev/null && pwd -P || true)"
+REPO_ROOT_REAL="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P || true)"
+ROOT_MISMATCH=""
+if [[ -n "$FEATURE_PARENT_REAL" && "$FEATURE_PARENT_REAL" != "$REPO_ROOT_REAL/specs" ]]; then
+    ROOT_MISMATCH="$FEATURE_PARENT_REAL"
+fi
 
 # === Detect the mode the blueprint was generated in ===
 # doc-only and guide write nothing to disk, so "file missing" is the expected
@@ -281,6 +316,9 @@ fi
 # CHECK 1: blueprint.md existence
 # =============================================
 header "1. Blueprint Document"
+if [[ -n "$ROOT_MISMATCH" ]]; then
+    warn "the blueprint is read from $ROOT_MISMATCH but declared files are read from the repository root $REPO_ROOT_REAL — a copy without its own .git belongs to the repository around it; run git init in the copy, or run from the root you mean to check"
+fi
 
 if [[ -f "$GUIDE" ]]; then
     pass "blueprint.md exists"

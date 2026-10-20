@@ -412,11 +412,50 @@ assertions under `**Verification**` in a fenced shell block, for example a
 and expected results and supplies no application implementation. A standalone assertion
 file already owned by the project may instead be invoked as `node tools/verify-history.mjs`;
 guide/doc-only generation does not write that file. Every behavior task names its focused
-assertions or a focused suite asserting its contract. Identical blocks run once.
+assertions or a focused suite asserting its contract.
 A valid CLI assertion checks exit 0, exact parsed output and expected stderr; read-only
 operations also compare input file bytes. A bare invocation, redirected output, import,
-compile or help check is smoke coverage only. Use static assertions or a recorded human
-check for documentation tasks. Do not treat a smoke command as acceptance evidence.
+compile or help check is smoke coverage only. Do not treat a smoke command as acceptance evidence.
+
+**One oracle, named cases — never the same script under every task.** When several tasks
+would carry the same assertions, write them once as an acceptance oracle **in the feature
+directory** (`specs/NNN-feature/acceptance.mjs`, or the project's language) with one shared
+fixture and named cases (`library`, `cli`, `errors`, `readonly` …), and give each task the
+cases it owns. The oracle is a spec artifact beside the blueprint, not an application file.
+A script repeated under ten tasks fails all ten at its first assertion, so "library done,
+CLI not" and "nothing done" print the same; named cases print which contract is red.
+
+**What counts as proof depends on the task's kind** — `--verify` reports each kind apart:
+
+- *Behavior task*: the oracle case(s) for its contract.
+- *Test-writing task* (it declares a test file): run **that file** through the project's
+  runner, plus a static check that it asserts against the subject. The app oracle proves the
+  app, not the test — a test file emptied to one passing `test()` leaves the oracle green,
+  and `--verify` flags a test file no command runs as `test bodies are unmeasured`.
+- *Documentation task*: a static assertion on the text the spec fixes (exact invocation,
+  column list, names of states). Keep only judgement for a line that **starts with**
+  `Human review:` — nothing on that line is run, even a backticked example, and the task is
+  reported as `human evidence not supplied`, counted but not passed.
+
+````markdown
+### T004: Route CLI CSV
+**Verification**: `node specs/003-history-csv/acceptance.mjs cli readonly`
+
+### T005: Test fixed schema
+**Verification**:
+```bash
+node --test test/csv-schema.test.js
+node -e "const s=require('fs').readFileSync('test/csv-schema.test.js','utf8'); if(!/assert[.]\w+[(]/.test(s)||!/exportCsv/.test(s)) throw new Error('asserts nothing about exportCsv')"
+```
+
+### T011: Document CSV usage
+**Verification**:
+```bash
+node -e "const r=require('fs').readFileSync('README.md','utf8'); for (const t of ['--format csv','requestId,from,to']) if(!r.includes(t)) throw new Error('README lacks '+t)"
+```
+
+Human review: the quoting rules read correctly to an operator.
+````
 
 Run the verification block against the unimplemented/half state and record its expected
 failure. At implementation completion, record the same assertions passing; if a completed control
@@ -483,7 +522,7 @@ format; what remains is content.
 - `**Before** (lines N-M):` for a hunk, with the file in the label when the task declares more than one — `**Before** (`path`, lines N-M):` — or a `**`path`**:` label on the line above
 - `**`path`**:` above every code block in a task that declares more than one file
 - every id on a `**Requirements**:` line stated somewhere in the document, usually a Requirements Reference section
-- `**Verification**:` before a block of commands, so the block is not read as file content. **Write the command, not a description of it**: a backticked span that starts with a runner (`python3 -m unittest …`, `bash tools/test.sh`, `npm test`) is what `apply_blueprint.py --verify` runs against the developer's tree once the bodies are written; "check by eye that the help text matches" is fine prose but nothing settles it. Prefer a task-focused command: a shared whole suite can fail because another feature is red. For a known valid CLI case, assert its required output; when the command is read-only, also compare state before and after. A task whose verification genuinely needs a human says so and is counted, not failed. Do not write a command inside a sentence that predicts its own failure ("`bash tools/build.sh` fails until T003 supplies an implementation") — say it in the Why. Such a command is skipped rather than run, and a line whose only command is skipped verifies nothing
+- `**Verification**:` before a block of commands, so the block is not read as file content. **Write the command, not a description of it**: a backticked span that starts with a runner (`python3 -m unittest …`, `bash tools/test.sh`, `npm test`) is what `apply_blueprint.py --verify` runs against the developer's tree once the bodies are written; "check by eye that the help text matches" is fine prose but nothing settles it. Prefer a task-focused command: a shared whole suite can fail because another feature is red. For a known valid CLI case, assert its required output; when the command is read-only, also compare state before and after. A task whose verification genuinely needs a human starts that line with `Human review:` and is counted, not failed — and nothing on that line runs, so a command it should run goes on its own line or in a fenced block. Do not write a command inside a sentence that predicts its own failure ("`bash tools/build.sh` fails until T003 supplies an implementation") — say it in the Why. Such a command is skipped rather than run, and a line whose only command is skipped verifies nothing
 - `**Sources**:` and `**Build**:` in the header (Step 3-Sources)
 - in guide modes: every skeleton for a file with behavior carries a marker whose message begins with the task id, and no control flow beside it
 

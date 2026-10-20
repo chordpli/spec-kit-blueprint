@@ -156,6 +156,91 @@ class ScopeContracts(unittest.TestCase):
             self.assertIn('Base application: 1 of 2 task(s) wrote blocks; 1 no-op/reference; 0 not applied', out.getvalue())
             self.assertIn('does not prove behavior', out.getvalue())
 
+    # --- R17: task proof is not feature proof ---------------------------------------
+
+    def test_human_review_prose_is_not_executed(self):
+        # The backticked example a reviewer is told to look for is not a command.
+        section = ('**Verification**: Human review: confirm README contains '
+                   '`python3 b.py` and the exit code it prints.')
+        self.assertEqual(applier.verification_commands(section), [])
+        self.assertEqual(len(applier.human_reviews(section)), 1)
+        tasks = [('specs/a/T001', '**Verification**: `python3 a.py`'), ('specs/a/T002', section)]
+        rc, out = self.run_gate(tasks, scope='feature')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('human evidence not supplied', out)
+        self.assertIn('not counted as passed: specs/a/T002', out)
+        self.assertNotIn('B remains red', out)
+        # A static assertion beside a human line runs; the human part is still listed.
+        both = ('**Verification**: `python3 a.py`\n\nHuman review: the wording reads correctly.')
+        rc, out = self.run_gate([('specs/a/T003', both)], scope='feature')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Task-specific command results passed: specs/a/T003', out)
+        self.assertIn('not counted as passed: specs/a/T003', out)
+
+    def test_shared_command_is_claimed_coverage_not_task_status(self):
+        shared = '**Verification**: `python3 b.py`'
+        tasks = [('specs/a/T001', shared), ('specs/a/T002', shared),
+                 ('specs/a/T003', '**Verification**: `python3 a.py`')]
+        rc, out = self.run_gate(tasks, scope='feature')
+        self.assertEqual(rc, 1)
+        self.assertIn('Task-specific command results passed: specs/a/T003', out)
+        self.assertIn('Shared command results failed (one result for every claiming task;', out)
+        self.assertIn('specs/a/T001, specs/a/T002', out)
+        self.assertNotIn('Task-specific command results failed', out)
+        self.assertIn('Feature behavior proof: 1 of 2 distinct command(s) passed; 1 failed', out)
+
+    def test_test_file_not_run_by_its_proof_is_unmeasured(self):
+        writes_test = ('**File**: `tests/test_store.py` (new)\n\n'
+                       '**Verification**: `python3 a.py`')
+        rc, out = self.run_gate([('specs/a/T001', writes_test)], scope='feature')
+        self.assertEqual(rc, 0)
+        self.assertIn('test bodies are unmeasured', out)
+        self.assertIn('specs/a/T001 tests/test_store.py', out)
+        runs_it = writes_test.replace('`python3 a.py`', '`python3 a.py tests/test_store.py`')
+        self.assertNotIn('unmeasured', self.run_gate([('specs/a/T001', runs_it)], scope='feature')[1]
+                         .split('Proof summary')[0])
+        suite = writes_test.replace('`python3 a.py`', '`python3 -m unittest discover`')
+        self.assertTrue(applier.runs_file(applier.verification_commands(suite), 'tests/test_store.py'))
+        self.assertFalse(applier.runs_file(['python3 -m unittest tests/test_other.py'], 'tests/test_store.py'))
+
+    def test_test_file_run_by_class_name_is_measured(self):
+        # R14 senior: a project runner takes the test class, not the path.
+        java = 'src/test/java/ledger/CancellationSuccessTest.java'
+        self.assertTrue(applier.runs_file(['./tools/test-cancellation.sh ledger.CancellationSuccessTest'], java))
+        self.assertTrue(applier.runs_file(['python3 -m unittest tests.test_store'], 'tests/test_store.py'))
+        self.assertFalse(applier.runs_file(['./tools/test-cancellation.sh ledger.CancellationSuccessTestX'], java))
+        self.assertFalse(applier.runs_file(['node test/report.js'], 'test/report.test.js'))
+
+    def test_nested_copy_names_the_root_it_read(self):
+        # A copy inside a repository, with no .git of its own, belongs to that repository.
+        with tempfile.TemporaryDirectory() as outer:
+            outer = os.path.realpath(outer)
+            subprocess.run(['git', 'init', '-q'], cwd=outer, check=True)
+            for base in (outer, os.path.join(outer, 'copy')):
+                Path(base, 'specs/a').mkdir(parents=True)
+                Path(base, 'specs/a/blueprint.md').write_text(
+                    '**Mode**: guide\n### T001: Check\n**Verification**: `python3 -c "print(1)"`\n')
+            inner = os.path.join(outer, 'copy')
+            apply = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
+                                   cwd=inner, capture_output=True, text=True)
+            self.assertIn(f'Repository root: {outer}', apply.stdout)
+            self.assertIn('git resolved the repository root to an enclosing directory', apply.stdout)
+            own = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
+                                 cwd=outer, capture_output=True, text=True)
+            self.assertNotIn('enclosing directory', own.stdout)
+            scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+            for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
+                if not Path(shell).exists():
+                    continue
+                with self.subTest(shell=shell):
+                    nested = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=inner,
+                                            capture_output=True, text=True)
+                    self.assertIn(f'Repository root: {outer}', nested.stdout)
+                    self.assertIn('declared files are read from the repository root', nested.stdout)
+                    plain = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=outer,
+                                           capture_output=True, text=True)
+                    self.assertNotIn('declared files are read from the repository root', plain.stdout)
+
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')
         self.assertEqual(applier.test_scope('**Test Scope**: feature'), 'feature')

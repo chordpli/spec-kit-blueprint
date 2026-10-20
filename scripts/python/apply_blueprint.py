@@ -640,6 +640,72 @@ PREDICTS_FAILURE = re.compile(
 )
 
 
+# A Verification line that hands the check to a person. The generate rules have always
+# said such a task "says so and is counted, not failed", and the parser ran the command a
+# reviewer was told to look FOR: `Human review: confirm README contains the exact
+# invocation `node bin/ledger.js history …``. The README was cut to one line, the CLI
+# example still ran green, and two documentation tasks were reported passed. A sentence
+# addressed to a human is not a command, whatever it quotes.
+HUMAN_REVIEW = re.compile(
+    r"^\s*(?:[-*]\s+)?(?:\*\*|_)?(?:human|manual)[ -](?:review|check|inspection|verification|confirmation)\b",
+    re.I,
+)
+
+
+def _verification_lines(section: str) -> list[str]:
+    lines: list[str] = []
+    for m in re.finditer(r"^\*\*Verification\*\*:?(.*?)(?=^\*\*|^#|\Z)",
+                         outside_fences(section), re.M | re.S):
+        lines += m.group(1).split("\n")
+    return lines
+
+
+def human_reviews(section: str) -> list[str]:
+    """Verification lines that are addressed to a person, not to a shell."""
+    return [ln.strip() for ln in _verification_lines(section) if HUMAN_REVIEW.match(ln)]
+
+
+# A test file a task writes, by the conventions runners themselves use. `specs/` at the
+# root is spec-kit's own directory and never a test directory.
+TEST_PATH = re.compile(
+    r"(?:^|/)(?:tests?|__tests__|spec)/|[._-](?:test|spec)\.[A-Za-z0-9]+$"
+    r"|(?:^|/)test_[^/]+\.py$|Tests?\.(?:java|kt|cs|swift|scala)$"
+)
+
+# A command that runs a whole suite, and so runs any test file in it.
+SUITE_RUNNER = re.compile(
+    r"^(?:npm|yarn|pnpm)(?:\s+run)?\s+test\b|^npx\s+(?:jest|vitest|mocha)\b"
+    r"|^node\s+--test\s*$|^(?:python3?\s+-m\s+)?pytest\b(?!\s+\S+\.py)"
+    r"|^python3?\s+-m\s+unittest(?:\s+discover)?\b(?!\s+\S+\.py)"
+    r"|^(?:\./)?gradlew?\s+(?:\S+:)?test\b|^mvn\s+(?:-\S+\s+)*test\b|^go\s+test\b"
+    r"|^cargo\s+test\b|^make\s+test\b|^dotnet\s+test\b|^bash\s+tools/test\.sh\b"
+)
+
+
+def test_files(section: str) -> list[str]:
+    return [p for p, kind in file_kinds(section)
+            if kind in ("new", "modify") and not p.startswith("specs/") and TEST_PATH.search(p)]
+
+
+def runs_file(cmds: list[str], path: str) -> bool:
+    """Whether one of these commands names the file or runs the whole suite holding it.
+
+    A file is named by its path, its basename, or its stem as a class or module name —
+    `./tools/test-x.sh ledger.CancellationSuccessTest` runs CancellationSuccessTest.java.
+    """
+    base = os.path.basename(path)
+    stem = os.path.splitext(base)[0]
+    for cmd in cmds:
+        if path in cmd or re.search(r"(?<![\w.-])" + re.escape(base) + r"(?![\w.-])", cmd):
+            return True
+        if re.search(r"(?<![\w-])" + re.escape(stem) + r"(?![\w-])(?!\.\w)", cmd):
+            return True
+        body = cmd[len("set -e\n"):] if cmd.startswith("set -e\n") else cmd
+        if any(SUITE_RUNNER.match(ln.strip().lstrip("$ ").strip()) for ln in body.splitlines()):
+            return True
+    return False
+
+
 def verification_commands(section: str) -> list[str]:
     """Every runnable command a task's **Verification** line names, in order.
 
@@ -654,7 +720,7 @@ def verification_commands(section: str) -> list[str]:
         # Per line, so one sentence predicting failure does not silence the rest of a
         # Verification line that names three commands.
         for line in m.group(1).split("\n"):
-            if PREDICTS_FAILURE.search(line):
+            if PREDICTS_FAILURE.search(line) or HUMAN_REVIEW.match(line):
                 continue
             for cm in re.finditer(r"`([^`\n]+)`", line):
                 cmd = cm.group(1).strip()
@@ -750,10 +816,25 @@ def test_scope(blueprint: str) -> str:
     return "unspecified"
 
 
+def _ids(group) -> str:
+    shown = sorted(group)
+    return ", ".join(shown[:12]) + (f" (+{len(shown) - 12} more)" if len(shown) > 12 else "")
+
+
 def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                       scope: str = "all", base_tasks: list | None = None,
                       partial: bool = False) -> int:
-    """Run declared commands once, preserving their scope and qualified ownership."""
+    """Run declared commands once, preserving their scope and qualified ownership.
+
+    Two questions share this output and used to share its sentences. "Did the feature's
+    declared commands pass?" is what a command's exit code answers. "Did each task do its
+    work?" is a different question, and a command claimed by ten tasks answers it for
+    none of them: a guru blueprint repeated one 52-line acceptance script under ten
+    tasks, so a half-built feature (library done, CLI not) printed all ten red, and a
+    copy whose six test files were emptied printed six "Test …" tasks passed. The exit
+    code is still the command results; the task lines now say what a result is evidence
+    of, and what nothing here measured.
+    """
     base_tasks = base_tasks or []
     header_scope = test_scope(bp)
     print(f"\n{CYAN}=== Verification: {scope} command scope ==={NC}")
@@ -770,10 +851,15 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
               + ("included" if include_header else "omitted from feature gate"))
     if scope == "feature":
         print(f"  Base: {len(base_tasks)} referenced task(s); commands omitted from feature gate")
+    run_tasks = (base_tasks if scope == "all" else []) + tasks
+    task_cmds = {tid: verification_commands(section) for tid, section in run_tasks}
+    # Every task that leaves part of its check to a person, with or without a command
+    # beside it: a static README assertion does not settle the wording it cannot read.
+    humans = {tid for tid, section in run_tasks if human_reviews(section)}
     order, owners, silent = [], {}, []
-    for tid, section in ((base_tasks if scope == "all" else []) + tasks):
-        cmds = verification_commands(section)
-        if not cmds:
+    for tid, _section in run_tasks:
+        cmds = task_cmds[tid]
+        if not cmds and tid not in humans:
             silent.append(tid)
         for cmd in cmds:
             if cmd not in owners:
@@ -783,7 +869,11 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
     if include_header and test_cmd not in owners:
         owners[test_cmd] = []
         order.append(test_cmd)
-    selected_silent = [tid for tid, section in tasks if not verification_commands(section)]
+    # A task whose Verification is addressed to a person is counted, not failed — the
+    # generate rules have said so since they allowed it. It is not counted as passed
+    # either: it is listed below as evidence nobody supplied.
+    selected_silent = [tid for tid, section in tasks
+                       if not verification_commands(section) and not human_reviews(section)]
     proof_missing = scope == "feature" and bool(selected_silent) and not (
         include_header and header_scope == "feature")
     failures = 0
@@ -796,8 +886,9 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         return failures or 1
     tree = copy_tree(root)
     try:
-        print(f"  against a copy of your working tree ({tree})")
+        print(f"  against a copy of {root} ({tree})")
         passed_tasks, failed_tasks = set(), set()
+        code_of: dict[str, int] = {}
         header_code = None
         for cmd in order:
             who = owners[cmd]
@@ -810,6 +901,7 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             if len(display_lines) > 1:
                 display += f" (+{len(display_lines) - 1} script line(s))"
             code, tail = _run_one(cmd, tree)
+            code_of[cmd] = code
             if include_header and cmd == test_cmd:
                 header_code = code
             if code == 0:
@@ -826,7 +918,8 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         selected_ids = {tid for tid, _section in tasks}
         base_ids = {tid for tid, _section in base_tasks}
         selected_silent_ids = set(selected_silent)
-        base_silent_ids = {tid for tid, section in base_tasks if not verification_commands(section)}
+        base_silent_ids = {tid for tid, section in base_tasks
+                           if not verification_commands(section) and not human_reviews(section)}
         print(f"  Selected task proof: {len(selected_ids & covered_ids)} covered; "
               f"{len(selected_silent_ids)} without runnable commands; {len(tasks)} selected task section(s)")
         print(f"  Base task proof: {len(base_ids & covered_ids)} covered; "
@@ -835,12 +928,58 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         if header_code is not None:
             print(f"  Header result [{header_scope}]: "
                   + ("passed" if header_code == 0 else f"failed (exit {header_code})"))
-        for kind, group in (("passed", passed_tasks - failed_tasks), ("failed", failed_tasks)):
-            if group:
-                shown = sorted(group)
-                print(f"  Task command results {kind}: " + ", ".join(shown[:12])
-                      + (f" (+{len(shown) - 12} more)" if len(shown) > 12 else ""))
+
+        # Axis 1: the feature's behavior commands, one result per distinct command.
+        n_pass = sum(1 for c in order if code_of.get(c) == 0)
+        print(f"  Feature behavior proof: {n_pass} of {len(order)} distinct command(s) passed"
+              + (f"; {len(order) - n_pass} failed" if n_pass < len(order) else ""))
+        # Axis 2: what each task's OWN Verification measured.
+        shared = {c for c in order if len(owners[c]) > 1}
+        own_pass, own_fail, shared_pass, shared_fail = set(), set(), set(), set()
+        for tid, _section in run_tasks:
+            cmds = task_cmds[tid]
+            if not cmds:
+                continue
+            own = [c for c in cmds if c not in shared]
+            if own:
+                (own_fail if any(code_of.get(c) for c in own) else own_pass).add(tid)
+            else:
+                (shared_fail if any(code_of.get(c) for c in cmds) else shared_pass).add(tid)
+        print("  Task proof — what each task's own Verification measured:")
+        if own_pass:
+            print(f"    Task-specific command results passed: {_ids(own_pass)}")
+        if own_fail:
+            print(f"    Task-specific command results failed: {_ids(own_fail)}")
+        n_shared = len({c for c in shared if set(owners[c]) & (shared_pass | shared_fail)})
+        if shared_pass:
+            print(f"    Shared command results passed ({n_shared} command(s) claimed by several tasks;"
+                  f" claimed coverage, not per-task implementation status): {_ids(shared_pass)}")
+        if shared_fail:
+            print(f"    Shared command results failed (one result for every claiming task;"
+                  f" which of them are done is not measured): {_ids(shared_fail)}")
+        if silent:
+            print(f"    No runnable command: {_ids(silent)}")
+        if humans:
+            record("warn", f"human review declared, human evidence not supplied — the human part is not run, not counted as passed: {_ids(humans)}",
+                   always=True)
+        header_cmds = [test_cmd] if include_header else []
+        unexercised = []
+        for tid, section in run_tasks:
+            for path in test_files(section):
+                if not runs_file(task_cmds[tid] + header_cmds, path):
+                    unexercised.append(f"{tid} {path}")
+        if unexercised:
+            record("warn", f"{len(unexercised)} test file(s) a task writes are not run by its Verification or a"
+                   " feature-scoped header — their test bodies are unmeasured",
+                   "\n".join(unexercised[:8]) + (f"\n(+{len(unexercised) - 8} more)" if len(unexercised) > 8 else ""),
+                   always=True)
+        print(f"  Proof summary: commands passed {n_pass}/{len(order)}; task-specific {len(own_pass)} passed,"
+              f" {len(own_fail)} failed; shared-only {len(shared_pass) + len(shared_fail)};"
+              f" human evidence not supplied {len(humans)}; no command {len(silent)};"
+              f" test files unmeasured {len(unexercised)}")
         print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
+        print("  Exit status reflects command results and missing proof only; shared-only, human and"
+              " unmeasured-test rows above do not change it.")
         if partial:
             print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
         elif failures or selected_silent and not (include_header and header_scope == "feature"):
@@ -853,6 +992,29 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         else:
             shutil.rmtree(tree, ignore_errors=True)
     return failures
+
+
+def root_warning(root: str, arg: str | None) -> None:
+    """Say so when git resolved a repository above the directory the caller is in.
+
+    The root comes from `git rev-parse --show-toplevel`. A copy of a project made
+    inside it without its own `.git` resolves to the ENCLOSING repository, so a
+    no-op mutant copied below a finished feature was verified against the finished
+    feature and passed. Measured in an evaluation: three mutation controls all green,
+    and nothing in the output said which tree had been read.
+    """
+    cwd = os.path.realpath(os.getcwd())
+    real_root = os.path.realpath(root)
+    if cwd == real_root or not arg or os.path.isabs(arg):
+        return
+    here = os.path.join(cwd, arg)
+    if os.path.isdir(here) and os.path.realpath(here) != os.path.realpath(os.path.join(root, arg)):
+        record("warn", f"the current directory has its own {arg}, but git resolved the repository root"
+               " to an enclosing directory — this run reads and verifies that root, not the current directory",
+               f"current directory: {cwd}\nrepository root:   {real_root}\n"
+               "a copy without its own .git belongs to the repository around it;"
+               " run `git init` in the copy, or run from the root you mean to test",
+               always=True)
 
 
 def run_build(tree: str, cmd: str) -> int:
@@ -1037,6 +1199,8 @@ def main() -> int:
 
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
+    print(f"Repository root: {root}")
+    root_warning(root, args[0] if args else None)
     mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(tasks)} task sections"
           + (f" (+{len(base_tasks)} from {len(chain)} base blueprint(s))" if chain else ""))
