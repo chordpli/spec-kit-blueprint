@@ -156,6 +156,47 @@ class ScopeContracts(unittest.TestCase):
             self.assertIn('Base application: 1 of 2 task(s) wrote blocks; 1 no-op/reference; 0 not applied', out.getvalue())
             self.assertIn('does not prove behavior', out.getvalue())
 
+    # --- R17: task proof is not feature proof ---------------------------------------
+
+    def test_human_review_prose_is_not_executed(self):
+        # The backticked example a reviewer is told to look for is not a command.
+        section = ('**Verification**: Human review: confirm README contains '
+                   '`python3 b.py` and the exit code it prints.')
+        self.assertEqual(applier.verification_commands(section), [])
+        self.assertEqual(len(applier.human_reviews(section)), 1)
+        tasks = [('specs/a/T001', '**Verification**: `python3 a.py`'), ('specs/a/T002', section)]
+        rc, out = self.run_gate(tasks, scope='feature')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('human evidence not supplied', out)
+        self.assertIn('not counted as passed: specs/a/T002', out)
+        self.assertNotIn('B remains red', out)
+
+    def test_shared_command_is_claimed_coverage_not_task_status(self):
+        shared = '**Verification**: `python3 b.py`'
+        tasks = [('specs/a/T001', shared), ('specs/a/T002', shared),
+                 ('specs/a/T003', '**Verification**: `python3 a.py`')]
+        rc, out = self.run_gate(tasks, scope='feature')
+        self.assertEqual(rc, 1)
+        self.assertIn('Task-specific command results passed: specs/a/T003', out)
+        self.assertIn('Shared command results failed (one result for every claiming task;', out)
+        self.assertIn('specs/a/T001, specs/a/T002', out)
+        self.assertNotIn('Task-specific command results failed', out)
+        self.assertIn('Feature behavior proof: 1 of 2 distinct command(s) passed; 1 failed', out)
+
+    def test_test_file_not_run_by_its_proof_is_unmeasured(self):
+        writes_test = ('**File**: `tests/test_store.py` (new)\n\n'
+                       '**Verification**: `python3 a.py`')
+        rc, out = self.run_gate([('specs/a/T001', writes_test)], scope='feature')
+        self.assertEqual(rc, 0)
+        self.assertIn('test bodies are unmeasured', out)
+        self.assertIn('specs/a/T001 tests/test_store.py', out)
+        runs_it = writes_test.replace('`python3 a.py`', '`python3 a.py tests/test_store.py`')
+        self.assertNotIn('unmeasured', self.run_gate([('specs/a/T001', runs_it)], scope='feature')[1]
+                         .split('Proof summary')[0])
+        suite = writes_test.replace('`python3 a.py`', '`python3 -m unittest discover`')
+        self.assertTrue(applier.runs_file(applier.verification_commands(suite), 'tests/test_store.py'))
+        self.assertFalse(applier.runs_file(['python3 -m unittest tests/test_other.py'], 'tests/test_store.py'))
+
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')
         self.assertEqual(applier.test_scope('**Test Scope**: feature'), 'feature')
