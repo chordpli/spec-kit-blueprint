@@ -301,7 +301,7 @@ class CalcTest(unittest.TestCase):
     CALC_TEST = ("import unittest\nfrom pkg.calc import double\n\n\nclass CalcTest(unittest.TestCase):\n"
                  "    def test_double(self):\n        {body}\n")
 
-    def calc_repo(self, root, impl, body):
+    def calc_repo(self, root, impl, body, bp=None, extra=()):
         git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false']
         subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
         Path(root, 'pkg').mkdir()
@@ -310,13 +310,14 @@ class CalcTest(unittest.TestCase):
         subprocess.run(git + ['commit', '-qm', 'base'], cwd=root, check=True)
         head = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], cwd=root, text=True).strip()
         Path(root, 'specs/020-calc').mkdir(parents=True)
-        Path(root, 'specs/020-calc/blueprint.md').write_text(self.CALC_BP.format(head=head))
+        Path(root, 'specs/020-calc/blueprint.md').write_text((bp or self.CALC_BP).format(head=head))
         subprocess.run(['git', 'add', '.'], cwd=root, check=True)
         subprocess.run(git + ['commit', '-qm', 'blueprint'], cwd=root, check=True)
         Path(root, 'pkg/calc.py').write_text(f'def double(x):\n    return {impl}\n')
         Path(root, 'tests').mkdir()
         Path(root, 'tests/test_calc.py').write_text(self.CALC_TEST.format(body=body))
-        proc = subprocess.run([sys.executable, str(MODULE), 'specs/020-calc', '--verify', '--verify-scope', 'feature'],
+        proc = subprocess.run([sys.executable, str(MODULE), 'specs/020-calc', '--verify', '--verify-scope', 'feature',
+                               *extra],
                               cwd=root, capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
         return proc.returncode, proc.stdout
 
@@ -336,6 +337,28 @@ class CalcTest(unittest.TestCase):
             self.assertIn('Task-specific command results passed: specs/020-calc/T001\n', out)
             self.assertIn('task-specific 1 passed, 0 failed', out)
             self.assertIn('test tasks non-discriminating 1', out)
+
+    def test_skeleton_probe_runs_only_the_script_lines_naming_the_test_file(self):
+        # A fenced script that also runs the feature's oracle is red on the skeleton because
+        # of the oracle line; run whole, it called an empty test discriminating.
+        script = ('**Verification**:\n```bash\n'
+                  'python3 -c "from pkg.calc import double; assert double(2) == 4"\n'
+                  'python3 -m unittest tests.test_calc\n```\n')
+        bp = self.CALC_BP.replace('**Verification**: `python3 -m unittest tests.test_calc`\n', script)
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)', bp=bp)
+            self.assertIn('test tasks non-discriminating 1, not measured 0', out)
+        heredoc = script.replace('python3 -m unittest tests.test_calc\n',
+                                 "python3 -m unittest tests.test_calc\ncat <<'EOF'\nok\nEOF\n")
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)',
+                                     bp=self.CALC_BP.replace('**Verification**: `python3 -m unittest tests.test_calc`\n', heredoc))
+            self.assertIn('test tasks non-discriminating 0, not measured 1', out)
+
+    def test_partial_selection_does_not_probe_the_skeleton(self):
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)', extra=('--through', 'T002'))
+            self.assertIn('test tasks non-discriminating 0, not measured 1', out)
 
     def test_red_test_task_behind_a_red_dependency_is_not_its_own_failure(self):
         # R18 guru: a finished test task was reported failed because the code it tests was.
