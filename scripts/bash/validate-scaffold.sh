@@ -140,6 +140,59 @@ function declname(t,   n, w, i, nm, head2, before) {
     }
     return ""
 }
+# uncomment: the line without its comments. A file read for what it declares must not
+# count a name that survives only in a comment: a declared function deleted and left
+# behind as a one-line comment of its own header passed --done while the application
+# could not import it. Line comments start at two slashes or at a hash followed by a
+# blank; a block comment is carried across lines in inblk. Quotes are tracked so a URL
+# inside a string literal is not a comment. A hash glued to a word is kept, because
+# that is a preprocessor line, an attribute or a private field rather than a comment.
+function uncomment(t,   i, n, c, nx, q, out) {
+    out = ""; q = ""; n = length(t)
+    for (i = 1; i <= n; i++) {
+        c = substr(t, i, 1); nx = substr(t, i + 1, 1)
+        if (inblk) {
+            if (c == "*" && nx == "/") { inblk = 0; i++ }
+            continue
+        }
+        if (q != "") {
+            out = out c
+            if (c == "\\") { out = out nx; i++ }
+            else if (c == q) q = ""
+            continue
+        }
+        if (c == "\042" || c == "\047" || c == "\140") { q = c; out = out c; continue }
+        if (c == "/" && nx == "/") break
+        if (c == "/" && nx == "*") { inblk = 1; i++; continue }
+        if (c == "#" && (i == 1 || substr(t, i - 1, 1) ~ /[ \t]/) && (nx == "" || nx ~ /[ \t#!]/)) break
+        out = out c
+    }
+    return out
+}
+# declbinding: a name bound to a function by assignment. Read on the file side only,
+# where the question is whether the file still declares a name in ANY form; the
+# document side keeps declname alone, so no new name is demanded of a finished tree.
+# An exported binding counts whatever it holds; an unexported one only when it holds
+# a function expression or an arrow, so a local variable that happens to share a
+# declared name does not stand in for it.
+function declbinding(t,   nm, rhs, k, lp, rp) {
+    if (match(t, /^(module[.])?exports[.][A-Za-z_$][A-Za-z0-9_$]*[ \t]*=[^=]/)) {
+        nm = t; sub(/^(module[.])?exports[.]/, "", nm); sub(/[^A-Za-z0-9_$].*$/, "", nm)
+        return nm
+    }
+    if (!match(t, /^(export[ \t]+)?(const|let|var)[ \t]+[A-Za-z_$][A-Za-z0-9_$]*[ \t]*(:[^=]*)?=[^=>]/)) return ""
+    nm = t; sub(/^(export[ \t]+)?(const|let|var)[ \t]+/, "", nm); sub(/[^A-Za-z0-9_$].*$/, "", nm)
+    if (t ~ /^export[ \t]/) return nm
+    rhs = t; sub(/^[^=]*=[ \t]*/, "", rhs); sub(/^async[ \t]+/, "", rhs)
+    if (rhs ~ /^function/ && rhs !~ /^function[A-Za-z0-9_$]/) return nm
+    if (rhs ~ /^[A-Za-z_$][A-Za-z0-9_$]*[ \t]*=>/) return nm
+    # A parameter list, then an arrow. The paren characters are octal escapes because
+    # bash 3.2 counts the ones it sees in this heredoc.
+    lp = "\050"; rp = "\051"
+    k = index(rhs, "=>")
+    if (substr(rhs, 1, 1) == lp && k > 0 && index(substr(rhs, 1, k - 1), rp) > 0) return nm
+    return ""
+}
 AWK
 )
 
@@ -1129,14 +1182,16 @@ file_declares() {
         DISK_SYMBOL_CACHE_KEY="$file"
         DISK_SYMBOL_CACHE=$(awk "$DECL_AWK"'
             {
-                t = $0; sub(/^[ \t]+/, "", t)
+                s = uncomment($0)
+                t = s; sub(/^[ \t]+/, "", t)
                 nm = declname(t)
+                if (nm != "") { print nm; next }
+                nm = declbinding(t)
                 if (nm != "") { print nm; next }
                 # A signature wrapped over several lines ends in neither `{` nor `;`, so
                 # declname cannot see it. A name immediately in front of "(" still counts
                 # unless what precedes it makes the line a call: a dot, an operator, an
                 # open paren or comma, one of the call keywords, or nothing at all.
-                s = $0
                 while (match(s, /[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
                     nm = substr(s, RSTART, RLENGTH)
                     sub(/[ \t]*\(?$/, "", nm)

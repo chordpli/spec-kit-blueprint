@@ -43,7 +43,7 @@ summary, and the number did not move at all:
    fail to warn without a single one being noticed.
 
 That historical expansion made the corpus run thirteen command lines per fixture, with
-three of its then six fixtures **red on purpose**. The current corpus has twenty-four
+three of its then six fixtures **red on purpose**. The current corpus has twenty-five
 fixtures and five behavioral regression oracles run by the default self-test. Historical
 46-case results are in the release notes; that lost harness and its denominator have not
 been reconstructed.
@@ -104,6 +104,7 @@ exists to replace.
 | `base-missing`, `base-cycle`, `base-valid-chain`, `quoted-base` | mixed | missing and cyclic predecessor chains fail before validation or verification; an existing chain and a fenced Base example remain valid |
 | `prose-subscript-call` | **yes** | a marker message whose only pasteable expression is `int(row[2])` keeps the subscripted-argument alternative observable |
 | `js-test-registration` | **yes** | a node:test `test("…", () => {` registration in a skeleton is a call, not a declaration: a finished one-line test passes `--done`, while a renamed declared function in the same feature still fails |
+| `js-declaration-forms` | **yes** | the file side of the declared-symbol check: `export const f = (…) =>` and `export const f = function (…)` declare `f`; a header that survives only in a `//`, `/* */` or `#` comment does not, so `--done` fails on exactly those two names |
 | `human-review-proof` | mixed | a `Human review:` line's backticked example is never run and the task is listed as human evidence not supplied; a test file only a shared import command covers is flagged as unmeasured |
 
 The default run also checks five contracts that finding-headline snapshots cannot express:

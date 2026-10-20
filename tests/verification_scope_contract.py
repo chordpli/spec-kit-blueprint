@@ -241,6 +241,27 @@ class ScopeContracts(unittest.TestCase):
                                            capture_output=True, text=True)
                     self.assertNotIn('declared files are read from the repository root', plain.stdout)
 
+    # --- R18: declarations are read without comments, in any binding form ------------
+
+    def test_declaration_forms_and_comments_both_bash_versions(self):
+        # R18 guru: `export const f = (…) =>` failed --done; a header left in a comment passed.
+        fixture = MODULE.parents[2] / 'tests/fixtures/js-declaration-forms'
+        scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+        for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
+            if not Path(shell).exists():
+                continue
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                shutil.copytree(fixture, root, dirs_exist_ok=True)
+                result = subprocess.run([shell, str(scaffold), 'specs/018-forms', '--done'],
+                                        cwd=root, capture_output=True, text=True,
+                                        env=dict(os.environ, NO_COLOR='1'))
+                out = result.stdout
+                self.assertEqual(result.returncode, 1, out)
+                self.assertIn('declares `halved` and the file does not declare it', out)
+                self.assertIn('declares `negated` and the file does not declare it', out)
+                self.assertNotIn('`doubled`', out)
+                self.assertNotIn('`tripled`', out)
+
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')
         self.assertEqual(applier.test_scope('**Test Scope**: feature'), 'feature')

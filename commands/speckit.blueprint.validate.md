@@ -223,6 +223,11 @@ The declared-symbol check reads `(modify)` hooks as well as new files: what a ho
 its `**After**` has and its `**Before**` does not. The two have different lifecycles, so a hook's
 declarations are not judged under `--fresh` (the developer has not typed them yet) and are judged
 under `--done`. Misses are reported as one finding with names and a count, not one line per symbol.
+The file side is read with its comments removed (`//`, `/* … */`, and `#` followed by a blank),
+so a name that survives only in a comment is missing. It also accepts a name bound by
+assignment: `export const f = …`, `const f = (…) =>`, `const f = function (…)` and
+`exports.f = …` declare `f`. The blueprint side is unchanged: a binding written in a code
+block is not demanded of the file.
 
 The Checklist is read too. A task ticked `- [X]` whose own marker is still sitting in the file is a
 claim the tree contradicts — reported as a warning, and a failure under `--done`. Both halves have to
