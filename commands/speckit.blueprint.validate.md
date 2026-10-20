@@ -49,14 +49,16 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 # document rules still apply after implementation; guide modes make body findings strict
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR" --strict-guide
-# every task's **Verification** line, against YOUR working tree; check the printed
-# `Repository root:` is the tree you mean (a copy with no .git of its own is read as the
-# repository around it, and the run warns)
+# every task's **Verification** line, against YOUR working tree. All three tools print
+# `Repository root:` and refuse (exit 2) a feature directory that is not in that root's
+# specs/ — a copy with no .git of its own inside another repository
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
 # read its two axes before the exit code: `Feature behavior proof` (command results) and
-# `Task proof` (task-specific / shared / human evidence not supplied / test files unmeasured).
-# Exit 0 = the commands passed, not every task proven; a script reads the `Proof summary:` line.
-# no declared file still carries a marker, no declared name is missing, no ticked row lies
+# `Task proof` (task-specific, behind a failed dependency, non-discriminating test tasks,
+# shared, human evidence, unmeasured test files). Exit 0 = the commands passed, not every
+# task proven; a script reads the `Proof summary:` line.
+# no declared file still carries a marker, no declared name is missing, no ticked row lies,
+# and no existing file a (modify) task changes is byte-identical to the blueprint's HEAD stamp
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
 # and the same question about the whole repository, not just this feature
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
@@ -119,19 +121,26 @@ Verification measured, and it is a different question:
 
 | Line | Means | Does not mean |
 |---|---|---|
-| `Task-specific command results passed/failed` | a command only this task names passed or failed | that the command's assertions cover the whole task |
+| `Task-specific command results passed/failed` | a command only this task names passed or failed; a test task counts as passed only when its test also discriminates (next row) | that the command's assertions cover the whole task |
+| `Test tasks red on the blueprint's skeleton and green here` | the lines that name the task's test file were rerun on the skeleton — this feature's declared files at the stamped commit, the blueprint applied over them — and failed there | that the test is strong: a test a no-op implementation also passes is still listed here |
+| `⚠ N test task(s) pass on the blueprint's skeleton as well as here` | the test passes without the feature: an emptied body, `assert.ok(true)`. **Not counted as passed** | that the test is wrong when it tests something the skeleton writes complete, or behavior the feature leaves unchanged — those pass on the skeleton by design |
+| `⚠ … whether their tests discriminate was not measured` | no `| HEAD` stamp, a stamp this clone lacks, a blueprint that does not apply to its stamp, a `--through` run, or no line of the task's own that names its test file. Counted as passed, with the reason | — |
+| `failed behind a failed dependency (… <- T003)` | the task is red and a task its `**Dependencies**` reach is red too | that it is done, or not done: its result cannot be told apart from the dependency's |
 | `Shared command results …` | one command claimed by several tasks; its result is the suite's | that each claiming task is implemented — a half-built feature shows every claimant red, and an emptied test file shows its task green |
-| `⚠ human review declared, human evidence not supplied` | the task's Verification hands a check to a person; that part is **not run and not counted as passed** | that the task failed — it is counted, not failed. A backticked example inside a `Human review:` line is never executed |
+| `⚠ human review declared, human evidence not supplied` | the task's Verification hands a check to a person and the feature's `human-evidence.md` has no line for it; that part is **not run and not counted as passed**. The evidence line prints the exact line to record | that the task failed — it is counted, not failed. A backticked example inside a `Human review:` line is never executed |
+| `Human evidence supplied: T010 (alice 2026-10-20)` / `⚠ human evidence is stale` | a line `T010: <reviewer> <YYYY-MM-DD> path@sha …` names every file the task declares at its current `git hash-object`; stale when a file changed since | that the review was good — only that a person recorded one for these bytes |
 | `⚠ N test file(s) a task writes are not run by its Verification …` | the task writes a test file that neither its own command nor a feature-scoped header runs: its test bodies are unmeasured | that the tests are wrong |
 | `Proof summary: …` | the counts above on one line, for scripts | — |
 
 **Exit policy, for automation.** Exit 1 means a command failed, or (with `--verify-scope
 feature`) a selected task has neither a command nor a human review line and no feature-scoped
-header covers it. Exit 2 is a refused gate (an unspecified `**Test**` scope). Shared-only,
-human-evidence and unmeasured-test rows **never change the exit code**: exit 0 says the
-commands passed, not that every task is proven. A pipeline that needs per-task proof reads the
-`Proof summary` line and requires `shared-only 0`, `human evidence not supplied 0` (or records
-the human evidence itself) and `test files unmeasured 0`.
+header covers it. Exit 2 is a refused gate (an unspecified `**Test**` scope, a feature directory
+outside the root's `specs/`). Shared-only, non-discriminating, human-evidence and unmeasured-test
+rows **never change the exit code**: exit 0 says the commands passed, not that every task is
+proven. A pipeline that needs per-task proof reads the `Proof summary` line and requires
+`test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0` and
+`test files unmeasured 0` — each of them reachable on a finished tree, the human one by
+recording the review in `human-evidence.md`.
 
 A failed verification is reported as a fact about **your tree**, on its own line, and never as
 `Blueprint did NOT apply cleanly`: the document placed and compiled, and telling a developer
@@ -205,6 +214,14 @@ carries a not-implemented marker is a failure, and so is a declaration the bluep
 the file does not have. Run it on the commit that closes the feature; the two flags contradict each
 other and passing both is an error.
 
+A `(modify)` task that was never started leaves neither: in guide mode nobody pasted its marker,
+and a hunk that adds a usage string or an import declares nothing. So `--done` also asks whether
+each existing file a `(modify)` task changes has moved at all since the commit the `**Sources**`
+line stamps (`| HEAD <sha>`). A file byte-identical to that commit fails, naming the file. A file
+the stamped commit does not have (this feature created it) is not asked. With no stamp, or a clone
+that does not contain the stamped commit, the line says "not measured" and nothing fails. The
+check cannot tell a task never done from a blueprint stamped after the work; the failure says so.
+
 `--all` asks the same question of every `specs/*/` that has a blueprint, and fails if any of them
 does. Every check here is scoped to the files one blueprint declares, so "is anything in this
 repository still unfinished" needed one run per feature — and to know which feature to ask about you
@@ -223,6 +240,11 @@ The declared-symbol check reads `(modify)` hooks as well as new files: what a ho
 its `**After**` has and its `**Before**` does not. The two have different lifecycles, so a hook's
 declarations are not judged under `--fresh` (the developer has not typed them yet) and are judged
 under `--done`. Misses are reported as one finding with names and a count, not one line per symbol.
+The file side is read with its comments removed (`//`, `/* … */`, and `#` followed by a blank),
+so a name that survives only in a comment is missing. It also accepts a name bound by
+assignment: `export const f = …`, `const f = (…) =>`, `const f = function (…)` and
+`exports.f = …` declare `f`. The blueprint side is unchanged: a binding written in a code
+block is not demanded of the file.
 
 The Checklist is read too. A task ticked `- [X]` whose own marker is still sitting in the file is a
 claim the tree contradicts — reported as a warning, and a failure under `--done`. Both halves have to
@@ -335,7 +357,17 @@ All three scripts output color-coded results:
 - Yellow warnings for non-critical issues
 - Red failures for problems that must be fixed
 
-Exit code 0 means pass (possibly with warnings), exit code 1 means failure, exit code 2 (Python scripts) means the feature directory could not be resolved.
+| Exit | `validate_blueprint.py` | `apply_blueprint.py` | `validate-scaffold.sh` |
+|---|---|---|---|
+| 0 | pass, possibly with warnings | applied (and built, and verified) cleanly | pass, possibly with warnings |
+| 1 | a check failed | a task did not apply, the build failed, or a `--verify` command failed or proof is missing | a check failed, or the feature directory was not found |
+| 2 | feature directory not resolved, or refused | feature directory not resolved, refused, or a refused `--verify` gate (unspecified `**Test**` scope) | unknown option, contradictory flags, or refused |
+| 3 | — | `--build` failed on a tree that has moved past the blueprint's stamp, so the failure says nothing about the document | — |
+
+"Refused" is the same rule in all three: the feature directory is not in the repository root's
+`specs/`, which is what a project copy with no `.git` of its own inside another repository looks
+like — its blueprint, and the enclosing project's files. A relative feature path is read from the
+current directory when it exists there, else from the root, in all three tools.
 
 ## Troubleshooting
 

@@ -334,6 +334,7 @@ In `guide` mode, Step 3a's completeness rule applies to **guidance, not code**: 
 - **No application body logic**: no branches, queries, transaction code, or application-test assertion bodies in file-content blocks, not in a `// TODO(blueprint):` comment, not in the implementation notes, not spelled out in prose so literally that typing it is transcription. If a body is genuinely one obvious line (a delegation, a constant), say so in the notes instead of coding it. Completed acceptance assertions are allowed only under the separate `**Verification**` heading (Step 4b), never as an application implementation. Shapes the validator reports: a boolean operator, a comparison with a call on one side, an arithmetic formula over identifiers (`spent/elapsed_days`, `avg*days_in_month`), a call carrying two or more keyword arguments, a subscripted call, an identifier compared against a number. Naming an API mid-sentence is what the mode asks for and passes.
 - **Test skeletons carry their framework**: in guide mode, test-file skeletons must include the project's real test imports and annotations (`@Test`, class-level framework annotations, fixtures wiring) exactly as the project's existing tests do — a test skeleton without its framework does not compile and fails the skeleton rule. Only the method bodies are not-implemented markers.
 - **Test tasks**: name the scenarios, the fixtures/preconditions, and *what each assertion must establish* — never write the given/when/then bodies. Designing assertions is the developer's work.
+- **Contracts fix what is observed, not the steps that produce it.** A Contract Reference table, a marker message or an implementation note that lists the order of internal checks ("1. validate shape, 2. look up the replay, 3. look up the original …") is the algorithm with the code taken out, and the developer is left to transcribe it. State precedence as observable cases instead — "a replay of the same reversal wins over `ALREADY_REVERSED`", "an unknown id is `REQUEST_NOT_FOUND` even when the reversal id is empty" — and let the oracle pin each one. The body-logic check reads code blocks, markers and notes; it does not read tables, so this one is yours to keep. If the spec leaves nothing to design once its observable cases are fixed, say so and recommend `doc-only`.
 - **Structural files** (schemas, config, wiring, DTO/type declarations with no logic): complete content is allowed even in guide mode — there is no design learning in transcribing a config file. Mark the boundary honestly: anything with behavior gets a skeleton, not content.
 - **Byte-exact artifacts** (golden files, snapshots, recorded fixtures, anything a test compares byte for byte — `.csv`, `.golden`, `.snap`, binaries): a code block states **text**, not bytes. It cannot say CRLF, it cannot say "no trailing newline", it cannot say an encoding. Do not declare such a file as `(new)` with its content in a block and expect the bytes to be right — one blueprint did, `--scaffold` wrote LF where the writer emits CRLF per RFC 4180, all three document tools passed, and the `diff` that finally caught it showed three lines that looked identical. Instead, give the task the **command that produces the artifact** (`BLESS_GOLDEN=1 bash tools/test.sh`, `npm run snapshot -- -u`) in its `**Verification**` line, and say in the task's prose that the file is generated rather than typed. `--scaffold` names any file it writes whose suffix is in that family, but naming it after the fact is the second-best outcome.
 - The Why rules (Step 3b) and comment rules (Step 3c) apply unchanged — guide mode leans on them hardest.
@@ -429,13 +430,39 @@ CLI not" and "nothing done" print the same; named cases print which contract is 
 
 - *Behavior task*: the oracle case(s) for its contract.
 - *Test-writing task* (it declares a test file): run **that file** through the project's
-  runner, plus a static check that it asserts against the subject. The app oracle proves the
-  app, not the test — a test file emptied to one passing `test()` leaves the oracle green,
-  and `--verify` flags a test file no command runs as `test bodies are unmeasured`.
+  runner, naming its path, on a line of its own — not inside a heredoc, and not as a whole
+  suite. `--verify` proves such a task by running exactly those lines a second time on the
+  blueprint's skeleton (the declared files at the stamped commit with this document applied
+  over them, every body its marker): red there and green on the tree means the test
+  measures what the feature adds; green on both is reported as `non-discriminating` and the
+  task is not counted as passed. A static "the file asserts something" check is not proof —
+  `assert.ok(true)` beside the subject's name in a comment satisfies it — so do not offer it
+  as one; it may stay as a cheap guard against an emptied file. Do not make a separate
+  test-writing task for behavior the feature must leave **unchanged**: such a test passes on
+  the skeleton by design. Put regression checks in the oracle (below).
 - *Documentation task*: a static assertion on the text the spec fixes (exact invocation,
-  column list, names of states). Keep only judgement for a line that **starts with**
-  `Human review:` — nothing on that line is run, even a backticked example, and the task is
-  reported as `human evidence not supplied`, counted but not passed.
+  column list, names of states), **and every example command the text shows, run as the
+  reader would run it**: a README example that names `--file examples/ledger.json --request
+  req-001` must name a request that file holds, or the task adds the fixture. Keep only
+  judgement for a line that **starts with** `Human review:` — nothing on that line is run,
+  even a backticked example. The reviewer records the result in the feature's
+  `human-evidence.md` (`T011: <reviewer> <YYYY-MM-DD> README.md@<git hash-object>`); until
+  then the task is reported as `human evidence not supplied`, counted but not passed, and a
+  later edit to the reviewed file makes the record stale.
+
+**Every "unchanged" in the spec gets an oracle case.** For each sentence that says existing
+behavior stays as it is ("transfer, history and CSV behavior is unchanged"), add a named
+regression case that fixes it, owned by the behavior task that could break it — the
+[example oracle](../docs/examples/verification/acceptance-cases.mjs)'s `compat` case is one.
+To find what to check, list every existing reader of each stored structure the feature
+writes a new field into: a reversal that adds `reversedBy` to a stored transfer record also
+reaches every command that replays or prints that record, not only the one the plan names.
+
+**Product documentation documents the product.** A documentation task writes what the spec
+asks the product's readers to know. This extension's own commands (`apply_blueprint.py`,
+`validate-scaffold.sh`, `--verify-scope`, completion states) belong in the blueprint and the
+handoff, not in the product's README; a task whose only requirement id does not ask for that
+text is not a task.
 
 ````markdown
 ### T004: Route CLI CSV
@@ -445,13 +472,13 @@ CLI not" and "nothing done" print the same; named cases print which contract is 
 **Verification**:
 ```bash
 node --test test/csv-schema.test.js
-node -e "const s=require('fs').readFileSync('test/csv-schema.test.js','utf8'); if(!/assert[.]\w+[(]/.test(s)||!/exportCsv/.test(s)) throw new Error('asserts nothing about exportCsv')"
 ```
 
 ### T011: Document CSV usage
 **Verification**:
 ```bash
 node -e "const r=require('fs').readFileSync('README.md','utf8'); for (const t of ['--format csv','requestId,from,to']) if(!r.includes(t)) throw new Error('README lacks '+t)"
+node bin/ledger.js history --file examples/ledger.json --format csv
 ```
 
 Human review: the quoting rules read correctly to an operator.
@@ -531,7 +558,12 @@ What no script can check, and what you must therefore check yourself before fina
 - **Secrets**: no API key, password, token, or connection string that looks real — placeholders only.
 - **Guide-mode bodies**: skeleton bodies are not-implemented markers carrying self-contained
   instructions. Flag any skeleton with real body logic (branches, queries, assertions), and any marker
-  message missing the what, the reference, or the pitfall when one is known.
+  message missing the what, the reference, or the pitfall when one is known. Read the Contract
+  Reference too: a table of numbered internal steps is body logic the validator does not see.
+- **Unchanged behavior**: every "unchanged" sentence in the spec has an oracle case, and every
+  existing reader of a structure the feature adds a field to is covered by one.
+- **Documentation examples**: every command a documentation After shows runs, as written, against
+  files the repository holds — and its task's Verification runs it.
 - **Narration**: no comment inside a code block that merely restates the adjacent line (Step 3c).
 - **Invention**: every task whose basis is absent from the artifacts is marked blocked and listed in
   Open Questions rather than filled with a plausible design (Step 3d).

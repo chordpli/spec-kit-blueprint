@@ -140,6 +140,59 @@ function declname(t,   n, w, i, nm, head2, before) {
     }
     return ""
 }
+# uncomment: the line without its comments. A file read for what it declares must not
+# count a name that survives only in a comment: a declared function deleted and left
+# behind as a one-line comment of its own header passed --done while the application
+# could not import it. Line comments start at two slashes or at a hash followed by a
+# blank; a block comment is carried across lines in inblk. Quotes are tracked so a URL
+# inside a string literal is not a comment. A hash glued to a word is kept, because
+# that is a preprocessor line, an attribute or a private field rather than a comment.
+function uncomment(t,   i, n, c, nx, q, out) {
+    out = ""; q = ""; n = length(t)
+    for (i = 1; i <= n; i++) {
+        c = substr(t, i, 1); nx = substr(t, i + 1, 1)
+        if (inblk) {
+            if (c == "*" && nx == "/") { inblk = 0; i++ }
+            continue
+        }
+        if (q != "") {
+            out = out c
+            if (c == "\\") { out = out nx; i++ }
+            else if (c == q) q = ""
+            continue
+        }
+        if (c == "\042" || c == "\047" || c == "\140") { q = c; out = out c; continue }
+        if (c == "/" && nx == "/") break
+        if (c == "/" && nx == "*") { inblk = 1; i++; continue }
+        if (c == "#" && (i == 1 || substr(t, i - 1, 1) ~ /[ \t]/) && (nx == "" || nx ~ /[ \t#!]/)) break
+        out = out c
+    }
+    return out
+}
+# declbinding: a name bound to a function by assignment. Read on the file side only,
+# where the question is whether the file still declares a name in ANY form; the
+# document side keeps declname alone, so no new name is demanded of a finished tree.
+# An exported binding counts whatever it holds; an unexported one only when it holds
+# a function expression or an arrow, so a local variable that happens to share a
+# declared name does not stand in for it.
+function declbinding(t,   nm, rhs, k, lp, rp) {
+    if (match(t, /^(module[.])?exports[.][A-Za-z_$][A-Za-z0-9_$]*[ \t]*=[^=]/)) {
+        nm = t; sub(/^(module[.])?exports[.]/, "", nm); sub(/[^A-Za-z0-9_$].*$/, "", nm)
+        return nm
+    }
+    if (!match(t, /^(export[ \t]+)?(const|let|var)[ \t]+[A-Za-z_$][A-Za-z0-9_$]*[ \t]*(:[^=]*)?=[^=>]/)) return ""
+    nm = t; sub(/^(export[ \t]+)?(const|let|var)[ \t]+/, "", nm); sub(/[^A-Za-z0-9_$].*$/, "", nm)
+    if (t ~ /^export[ \t]/) return nm
+    rhs = t; sub(/^[^=]*=[ \t]*/, "", rhs); sub(/^async[ \t]+/, "", rhs)
+    if (rhs ~ /^function/ && rhs !~ /^function[A-Za-z0-9_$]/) return nm
+    if (rhs ~ /^[A-Za-z_$][A-Za-z0-9_$]*[ \t]*=>/) return nm
+    # A parameter list, then an arrow. The paren characters are octal escapes because
+    # bash 3.2 counts the ones it sees in this heredoc.
+    lp = "\050"; rp = "\051"
+    k = index(rhs, "=>")
+    if (substr(rhs, 1, 1) == lp && k > 0 && index(substr(rhs, 1, k - 1), rp) > 0) return nm
+    return ""
+}
 AWK
 )
 
@@ -236,6 +289,10 @@ fi
 
 if [[ -n "${ARGS[0]:-}" ]]; then
     FEATURE_DIR="${ARGS[0]}"
+    # The current directory first, then the root, as the two Python tools read it.
+    if [[ "$FEATURE_DIR" != /* ]] && [[ ! -d "$FEATURE_DIR" ]] && [[ -d "$REPO_ROOT/$FEATURE_DIR" ]]; then
+        FEATURE_DIR="$REPO_ROOT/$FEATURE_DIR"
+    fi
 else
     BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
     if [[ "$BRANCH" =~ ^([0-9]{3})- ]]; then
@@ -261,12 +318,15 @@ echo "Blueprint: $GUIDE"
 echo "Repository root: $REPO_ROOT"
 # The blueprint is read from the path as given and the files it declares from the git
 # root. Inside a copy that has no .git of its own those are two different trees: the
-# copy's document, judged against the enclosing project's files.
+# copy's document, judged against the enclosing project's files. That was a warning and
+# exit 0, which a pipeline reads as a pass over a tree nobody checked; it is refused
+# with exit 2, the same refusal and the same code as the two Python tools.
 FEATURE_PARENT_REAL="$(cd "$FEATURE_DIR/.." 2>/dev/null && pwd -P || true)"
 REPO_ROOT_REAL="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P || true)"
-ROOT_MISMATCH=""
 if [[ -n "$FEATURE_PARENT_REAL" && "$FEATURE_PARENT_REAL" != "$REPO_ROOT_REAL/specs" ]]; then
-    ROOT_MISMATCH="$FEATURE_PARENT_REAL"
+    echo -e "${RED}ERROR: the feature directory is in $FEATURE_PARENT_REAL, but the repository root is $REPO_ROOT_REAL and every declared file would be read from there.${NC}" >&2
+    echo "  A copy without its own .git belongs to the repository around it: run \`git init\` in the copy, or run from the root whose specs/ holds the feature." >&2
+    exit 2
 fi
 
 # === Detect the mode the blueprint was generated in ===
@@ -316,9 +376,6 @@ fi
 # CHECK 1: blueprint.md existence
 # =============================================
 header "1. Blueprint Document"
-if [[ -n "$ROOT_MISMATCH" ]]; then
-    warn "the blueprint is read from $ROOT_MISMATCH but declared files are read from the repository root $REPO_ROOT_REAL — a copy without its own .git belongs to the repository around it; run git init in the copy, or run from the root you mean to check"
-fi
 
 if [[ -f "$GUIDE" ]]; then
     pass "blueprint.md exists"
@@ -334,6 +391,7 @@ fi
 header "2. File Existence (NEW files from blueprint)"
 
 NEW_FILES=()
+MODIFY_FILES=()
 # A blueprint quotes markdown templates, ADRs and properties files inside its code
 # blocks, so `**File**:` lines and file tables appear *inside* fences as often as
 # outside them. Blank the fenced lines first, the way the Python parser does, or a task
@@ -396,6 +454,8 @@ while IFS= read -r line; do
                 token_kind="$(echo "$token_kind" | tr '"'"'[:upper:]'"'"' '"'"'[:lower:]'"'"')"
                 if [[ "$token_kind" == new* ]] || [[ "$token_kind" == "all new"* ]]; then
                     for pp in "${pending[@]}"; do NEW_FILES+=("$pp"); done
+                elif [[ "$token_kind" == modify* ]]; then
+                    for pp in "${pending[@]}"; do MODIFY_FILES+=("$pp"); done
                 fi
                 pending=()
             fi
@@ -1005,6 +1065,46 @@ if [[ "$DONE" == true ]]; then
     else
         pass "no declared file carries a not-implemented marker"
     fi
+
+    # A (modify) task that was never started leaves nothing behind: no marker, because in
+    # guide mode nobody pasted the hunk, and no declaration, because the hunk adds a usage
+    # string and an import rather than a function. A reviewer removed the whole CLI task
+    # of a feature and --done said "All checks passed" — every check above reads what is
+    # in a file, and an untouched file has nothing in it to read. The one question that
+    # sees an absence is whether the file moved at all since the commit the blueprint
+    # stamps. Measured over 22 controls and six real trees: it fires on the five controls
+    # that leave a (modify) file untouched and on two of the three half-finished trees, and
+    # on none of the seven format controls or the three complete trees.
+    STAMP=$(grep -iE '^\*\*sources\*\*' "$GUIDE" 2>/dev/null | head -1 | grep -oE 'HEAD[[:space:]]+[0-9a-f]{6,40}' | grep -oE '[0-9a-f]{6,40}$' || true)
+    if [[ ${#MODIFY_FILES[@]} -gt 0 ]]; then
+        if [[ -z "$STAMP" ]]; then
+            echo "    (modify) files against the stamp: not measured — the blueprint has no \`| HEAD\` stamp"
+        elif ! git -C "$REPO_ROOT" rev-parse --verify --quiet "$STAMP^{commit}" >/dev/null 2>&1; then
+            echo "    (modify) files against the stamp: not measured — this clone does not contain HEAD $STAMP"
+        else
+            UNTOUCHED=()
+            MOD_CHECKED=0
+            for f in "${MODIFY_FILES[@]}"; do
+                dup=false
+                for q in "${UNTOUCHED[@]}"; do [[ "$q" == "$f" ]] && dup=true && break; done
+                [[ "$dup" == true ]] && continue
+                [[ -f "$REPO_ROOT/$f" ]] || continue
+                # A file the stamped commit does not have was created by this feature, and
+                # "unchanged since" means nothing for it.
+                git -C "$REPO_ROOT" cat-file -e "$STAMP:$f" 2>/dev/null || continue
+                MOD_CHECKED=$((MOD_CHECKED + 1))
+                if git -C "$REPO_ROOT" diff --quiet "$STAMP" -- "$f" 2>/dev/null; then
+                    UNTOUCHED+=("$f")
+                fi
+            done
+            if [[ ${#UNTOUCHED[@]} -gt 0 ]]; then
+                fail "${#UNTOUCHED[@]} file(s) a (modify) task changes are byte-identical to HEAD $STAMP: $(printf '%s, ' "${UNTOUCHED[@]}" | sed 's/, $//')"
+                echo "      The task that modifies them was never done — or the blueprint was stamped after the work, and its stamp is what is wrong."
+            elif [[ "$MOD_CHECKED" -gt 0 ]]; then
+                pass "all $MOD_CHECKED existing file(s) a (modify) task changes have changed since HEAD $STAMP"
+            fi
+        fi
+    fi
 fi
 
 # =============================================
@@ -1129,14 +1229,16 @@ file_declares() {
         DISK_SYMBOL_CACHE_KEY="$file"
         DISK_SYMBOL_CACHE=$(awk "$DECL_AWK"'
             {
-                t = $0; sub(/^[ \t]+/, "", t)
+                s = uncomment($0)
+                t = s; sub(/^[ \t]+/, "", t)
                 nm = declname(t)
+                if (nm != "") { print nm; next }
+                nm = declbinding(t)
                 if (nm != "") { print nm; next }
                 # A signature wrapped over several lines ends in neither `{` nor `;`, so
                 # declname cannot see it. A name immediately in front of "(" still counts
                 # unless what precedes it makes the line a call: a dot, an operator, an
                 # open paren or comma, one of the call keywords, or nothing at all.
-                s = $0
                 while (match(s, /[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
                     nm = substr(s, RSTART, RLENGTH)
                     sub(/[ \t]*\(?$/, "", nm)

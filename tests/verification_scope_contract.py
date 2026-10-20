@@ -211,8 +211,12 @@ class ScopeContracts(unittest.TestCase):
         self.assertFalse(applier.runs_file(['./tools/test-cancellation.sh ledger.CancellationSuccessTestX'], java))
         self.assertFalse(applier.runs_file(['node test/report.js'], 'test/report.test.js'))
 
-    def test_nested_copy_names_the_root_it_read(self):
+    def test_nested_copy_is_refused_by_all_three_tools(self):
         # A copy inside a repository, with no .git of its own, belongs to that repository.
+        # R17 printed the root and warned; R18 guru measured the warning beside exit 0 and
+        # 12 of 12 on an unimplemented copy inside a finished project. All three refuse.
+        validator = MODULE.with_name('validate_blueprint.py')
+        scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
         with tempfile.TemporaryDirectory() as outer:
             outer = os.path.realpath(outer)
             subprocess.run(['git', 'init', '-q'], cwd=outer, check=True)
@@ -220,26 +224,229 @@ class ScopeContracts(unittest.TestCase):
                 Path(base, 'specs/a').mkdir(parents=True)
                 Path(base, 'specs/a/blueprint.md').write_text(
                     '**Mode**: guide\n### T001: Check\n**Verification**: `python3 -c "print(1)"`\n')
+            Path(outer, 'src').mkdir()
             inner = os.path.join(outer, 'copy')
-            apply = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
-                                   cwd=inner, capture_output=True, text=True)
-            self.assertIn(f'Repository root: {outer}', apply.stdout)
-            self.assertIn('git resolved the repository root to an enclosing directory', apply.stdout)
-            own = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
-                                 cwd=outer, capture_output=True, text=True)
-            self.assertNotIn('enclosing directory', own.stdout)
-            scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+            py = [('apply', [sys.executable, str(MODULE), 'specs/a', '--verify']),
+                  ('validate', [sys.executable, str(validator), 'specs/a'])]
+            for name, cmd in py:
+                with self.subTest(tool=name):
+                    nested = subprocess.run(cmd, cwd=inner, capture_output=True, text=True)
+                    self.assertEqual(nested.returncode, 2, nested.stdout)
+                    self.assertIn(f'Repository root: {outer}', nested.stdout)
+                    self.assertIn(f'the feature directory is in {inner}/specs', nested.stdout)
+                    # Controls: the root itself, a subdirectory naming the feature from the
+                    # root, and a subdirectory naming it relative to where it stands.
+                    for cwd, arg in ((outer, 'specs/a'), (os.path.join(outer, 'src'), 'specs/a'),
+                                     (os.path.join(outer, 'src'), '../specs/a')):
+                        own = subprocess.run([c if c != 'specs/a' else arg for c in cmd],
+                                             cwd=cwd, capture_output=True, text=True)
+                        self.assertNotEqual(own.returncode, 2, (cwd, arg, own.stdout))
+                        self.assertNotIn('the feature directory is in', own.stdout)
             for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
                 if not Path(shell).exists():
                     continue
                 with self.subTest(shell=shell):
                     nested = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=inner,
                                             capture_output=True, text=True)
+                    self.assertEqual(nested.returncode, 2, nested.stdout + nested.stderr)
                     self.assertIn(f'Repository root: {outer}', nested.stdout)
-                    self.assertIn('declared files are read from the repository root', nested.stdout)
-                    plain = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=outer,
-                                           capture_output=True, text=True)
-                    self.assertNotIn('declared files are read from the repository root', plain.stdout)
+                    self.assertIn(f'the feature directory is in {inner}/specs', nested.stderr)
+                    for cwd, arg in ((outer, 'specs/a'), (os.path.join(outer, 'src'), 'specs/a'),
+                                     (os.path.join(outer, 'src'), '../specs/a')):
+                        plain = subprocess.run([shell, str(scaffold), arg], cwd=cwd,
+                                               capture_output=True, text=True)
+                        self.assertEqual(plain.returncode, 0, (cwd, arg, plain.stdout + plain.stderr))
+                        self.assertNotIn('the feature directory is in', plain.stderr)
+
+    # --- R18: a test task is proven against the skeleton, not by the app's state -------
+
+    CALC_BP = """# Blueprint: calc
+
+**Mode**: guide — signatures and markers; the developer types the bodies
+**Sources**: HEAD {head}
+
+### T001: Double a number
+
+**File**: `pkg/calc.py` (new)
+
+**Why**: one function doubles.
+
+```python
+def double(x):
+    raise NotImplementedError("T001: return twice x")
+```
+
+**Verification**: `python3 -c "from pkg.calc import double; assert double(2) == 4"`
+
+### T002: Test doubling
+
+**File**: `tests/test_calc.py` (new)
+
+**Dependencies**: T001
+
+**Why**: the test fixes the contract.
+
+```python
+import unittest
+from pkg.calc import double
+
+
+class CalcTest(unittest.TestCase):
+    def test_double(self):
+        raise NotImplementedError("T002: assert double(3) is 6")
+```
+
+**Verification**: `python3 -m unittest tests.test_calc`
+"""
+    CALC_TEST = ("import unittest\nfrom pkg.calc import double\n\n\nclass CalcTest(unittest.TestCase):\n"
+                 "    def test_double(self):\n        {body}\n")
+
+    def calc_repo(self, root, impl, body, bp=None, extra=()):
+        git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false']
+        subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+        Path(root, 'pkg').mkdir()
+        Path(root, 'pkg/__init__.py').write_text('')
+        subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+        subprocess.run(git + ['commit', '-qm', 'base'], cwd=root, check=True)
+        head = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], cwd=root, text=True).strip()
+        Path(root, 'specs/020-calc').mkdir(parents=True)
+        Path(root, 'specs/020-calc/blueprint.md').write_text((bp or self.CALC_BP).format(head=head))
+        subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+        subprocess.run(git + ['commit', '-qm', 'blueprint'], cwd=root, check=True)
+        Path(root, 'pkg/calc.py').write_text(f'def double(x):\n    return {impl}\n')
+        Path(root, 'tests').mkdir()
+        Path(root, 'tests/test_calc.py').write_text(self.CALC_TEST.format(body=body))
+        proc = subprocess.run([sys.executable, str(MODULE), 'specs/020-calc', '--verify', '--verify-scope', 'feature',
+                               *extra],
+                              cwd=root, capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+        return proc.returncode, proc.stdout
+
+    def test_test_task_is_proven_against_the_skeleton(self):
+        real = 'self.assertEqual(double(3), 6)'
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', real)
+            self.assertEqual(rc, 0, out)
+            self.assertIn('red on the blueprint\'s skeleton and green here (the test discriminates): specs/020-calc/T002', out)
+            self.assertIn('task-specific 2 passed, 0 failed', out)
+            self.assertIn('test tasks non-discriminating 0, not measured 0', out)
+        # R18 guru: `assert.ok(true)` beside the subject's name passed as task proof.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)  # double(3) == 6')
+            self.assertEqual(rc, 0, out)
+            self.assertIn('1 test task(s) pass on the blueprint\'s skeleton as well as here', out)
+            self.assertIn('Task-specific command results passed: specs/020-calc/T001\n', out)
+            self.assertIn('task-specific 1 passed, 0 failed', out)
+            self.assertIn('test tasks non-discriminating 1', out)
+
+    def test_skeleton_probe_runs_only_the_script_lines_naming_the_test_file(self):
+        # A fenced script that also runs the feature's oracle is red on the skeleton because
+        # of the oracle line; run whole, it called an empty test discriminating.
+        script = ('**Verification**:\n```bash\n'
+                  'python3 -c "from pkg.calc import double; assert double(2) == 4"\n'
+                  'python3 -m unittest tests.test_calc\n```\n')
+        bp = self.CALC_BP.replace('**Verification**: `python3 -m unittest tests.test_calc`\n', script)
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)', bp=bp)
+            self.assertIn('test tasks non-discriminating 1, not measured 0', out)
+        heredoc = script.replace('python3 -m unittest tests.test_calc\n',
+                                 "python3 -m unittest tests.test_calc\ncat <<'EOF'\nok\nEOF\n")
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)',
+                                     bp=self.CALC_BP.replace('**Verification**: `python3 -m unittest tests.test_calc`\n', heredoc))
+            self.assertIn('test tasks non-discriminating 0, not measured 1', out)
+
+    def test_partial_selection_does_not_probe_the_skeleton(self):
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)', extra=('--through', 'T002'))
+            self.assertIn('test tasks non-discriminating 0, not measured 1', out)
+
+    def test_red_test_task_behind_a_red_dependency_is_not_its_own_failure(self):
+        # R18 guru: a finished test task was reported failed because the code it tests was.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 3', 'self.assertEqual(double(3), 6)')
+            self.assertEqual(rc, 1, out)
+            self.assertIn('Task-specific command results failed: specs/020-calc/T001\n', out)
+            self.assertIn('failed behind a failed dependency (not separable from it): specs/020-calc/T002 <- T001', out)
+            self.assertIn('2 failed (1 behind a failed dependency)', out)
+        self.assertEqual(applier.blocked_by([('a/T001', ''), ('a/T002', '**Dependencies**: T001')],
+                                            {'a/T002'}), {})
+
+    def test_human_evidence_is_tied_to_the_bytes_reviewed(self):
+        section = '**File**: `README.md` (modify)\n\n**Verification**: Human review: reads well.'
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, 'specs/020-calc').mkdir(parents=True)
+            Path(root, 'README.md').write_text('# calc\n')
+            state, template = applier.human_evidence(root, 'specs/020-calc/T003', section)
+            self.assertEqual(state, 'missing')
+            sha = applier._blob_sha(os.path.join(root, 'README.md'))
+            self.assertEqual(sha, subprocess.check_output(['git', 'hash-object', 'README.md'], cwd=root, text=True).strip())
+            self.assertIn(f'T003: <reviewer> <YYYY-MM-DD> README.md@{sha[:12]}', template)
+            evidence = Path(root, 'specs/020-calc', applier.HUMAN_EVIDENCE_FILE)
+            evidence.write_text(f'T003: rev 2026-10-20 README.md@{sha[:7]}\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section),
+                             ('supplied', 'rev 2026-10-20'))
+            Path(root, 'README.md').write_text('# calc, edited\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
+            evidence.write_text('T003: rev 2026-10-20\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
+
+    # --- R18: declarations are read without comments, in any binding form ------------
+
+    def test_declaration_forms_and_comments_both_bash_versions(self):
+        # R18 guru: `export const f = (…) =>` failed --done; a header left in a comment passed.
+        fixture = MODULE.parents[2] / 'tests/fixtures/js-declaration-forms'
+        scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+        for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
+            if not Path(shell).exists():
+                continue
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                shutil.copytree(fixture, root, dirs_exist_ok=True)
+                result = subprocess.run([shell, str(scaffold), 'specs/018-forms', '--done'],
+                                        cwd=root, capture_output=True, text=True,
+                                        env=dict(os.environ, NO_COLOR='1'))
+                out = result.stdout
+                self.assertEqual(result.returncode, 1, out)
+                self.assertIn('declares `halved` and the file does not declare it', out)
+                self.assertIn('declares `negated` and the file does not declare it', out)
+                self.assertNotIn('`doubled`', out)
+                self.assertNotIn('`tripled`', out)
+
+    def test_untouched_modify_file_fails_done_both_bash_versions(self):
+        # R18 guru: a (modify)-only task never typed leaves no marker and no declaration,
+        # and --done passed over it.
+        bp = ("# Blueprint: cli\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+              "### T001: Add the verb\n\n**File**: `pkg/cli.py` (modify)\n\n"
+              "**Before**:\n```python\nUSAGE = \"calc double N\"\n```\n\n"
+              "**After**:\n```python\nUSAGE = \"calc double N | calc halve N\"\n```\n")
+        scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+        git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false']
+        for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
+            if not Path(shell).exists():
+                continue
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+                Path(root, 'pkg').mkdir()
+                Path(root, 'pkg/cli.py').write_text('USAGE = "calc double N"\n')
+                subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+                subprocess.run(git + ['commit', '-qm', 'base'], cwd=root, check=True)
+                head = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], cwd=root, text=True).strip()
+                Path(root, 'specs/021-cli').mkdir(parents=True)
+                Path(root, 'specs/021-cli/blueprint.md').write_text(bp.format(head=head))
+
+                def done():
+                    r = subprocess.run([shell, str(scaffold), 'specs/021-cli', '--done'], cwd=root,
+                                       capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+                    return r.returncode, r.stdout
+                rc, out = done()
+                self.assertEqual(rc, 1, out)
+                self.assertIn(f'1 file(s) a (modify) task changes are byte-identical to HEAD {head}: pkg/cli.py', out)
+                Path(root, 'pkg/cli.py').write_text('USAGE = "calc double N | calc halve N"\n')
+                rc, out = done()
+                self.assertEqual(rc, 0, out)
+                self.assertIn(f'all 1 existing file(s) a (modify) task changes have changed since HEAD {head}', out)
+                Path(root, 'specs/021-cli/blueprint.md').write_text(bp.format(head='0123456789ab'))
+                rc, out = done()
+                self.assertIn('not measured — this clone does not contain HEAD 0123456789ab', out)
 
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')

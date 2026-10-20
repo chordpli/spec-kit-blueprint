@@ -45,6 +45,8 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     dependent_slices,
     in_commit,
     file_kinds,
+    foreign_feature_dir,
+    foreign_feature_message,
     outside_fences,
     parse_mode,
     section_events,
@@ -687,18 +689,22 @@ def test_files(section: str) -> list[str]:
             if kind in ("new", "modify") and not p.startswith("specs/") and TEST_PATH.search(p)]
 
 
+def names_file(cmd: str, path: str) -> bool:
+    """Whether a command names this file by its path, basename, or stem as a class or module."""
+    base = os.path.basename(path)
+    stem = os.path.splitext(base)[0]
+    return (path in cmd or bool(re.search(r"(?<![\w.-])" + re.escape(base) + r"(?![\w.-])", cmd))
+            or bool(re.search(r"(?<![\w-])" + re.escape(stem) + r"(?![\w-])(?!\.\w)", cmd)))
+
+
 def runs_file(cmds: list[str], path: str) -> bool:
     """Whether one of these commands names the file or runs the whole suite holding it.
 
     A file is named by its path, its basename, or its stem as a class or module name —
     `./tools/test-x.sh ledger.CancellationSuccessTest` runs CancellationSuccessTest.java.
     """
-    base = os.path.basename(path)
-    stem = os.path.splitext(base)[0]
     for cmd in cmds:
-        if path in cmd or re.search(r"(?<![\w.-])" + re.escape(base) + r"(?![\w.-])", cmd):
-            return True
-        if re.search(r"(?<![\w-])" + re.escape(stem) + r"(?![\w-])(?!\.\w)", cmd):
+        if names_file(cmd, path):
             return True
         body = cmd[len("set -e\n"):] if cmd.startswith("set -e\n") else cmd
         if any(SUITE_RUNNER.match(ln.strip().lstrip("$ ").strip()) for ln in body.splitlines()):
@@ -819,6 +825,136 @@ def test_scope(blueprint: str) -> str:
 def _ids(group) -> str:
     shown = sorted(group)
     return ", ".join(shown[:12]) + (f" (+{len(shown) - 12} more)" if len(shown) > 12 else "")
+
+
+def dependencies(section: str) -> list[str]:
+    """The task ids a section's `**Dependencies**:` line names, in order."""
+    m = re.search(r"^\*\*Dependencies\*\*:?(.*)$", outside_fences(section), re.M)
+    return re.findall(r"\bT\d{3,}\b", m.group(1)) if m else []
+
+
+def blocked_by(tasks: list, red: set) -> dict:
+    """Each red task that depends, directly or through others, on another red task.
+
+    A test task's command runs the code its dependency writes, so when that code is red
+    the test is red too, written or not. Reported against the test, the behavior task's
+    failure was counted twice and the test was called unfinished: a tree whose CLI alone
+    was missing printed two finished test tasks failed, and a library off by one printed
+    three. The result is still a failure. What changes is the claim: it cannot be told
+    apart from the red task it depends on.
+    """
+    prefix = {tid: tid.rsplit("/", 1)[0] + "/" if "/" in tid else "" for tid, _s in tasks}
+    deps = {tid: [prefix[tid] + d for d in dependencies(sec)] for tid, sec in tasks}
+    out: dict[str, list[str]] = {}
+    for tid in red:
+        seen, stack, hit = set(), list(deps.get(tid, [])), []
+        while stack:
+            d = stack.pop()
+            if d in seen or d == tid:
+                continue
+            seen.add(d)
+            if d in red:
+                hit.append(d)
+            stack.extend(deps.get(d, []))
+        if hit:
+            out[tid] = sorted(hit)
+    return out
+
+
+def _blob_sha(path: str) -> str:
+    """What `git hash-object` prints for this file, so a reviewer can produce it too."""
+    import hashlib
+    with open(path, "rb") as f:
+        data = f.read()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+HUMAN_EVIDENCE_FILE = "human-evidence.md"
+HUMAN_EVIDENCE_LINE = re.compile(
+    r"^\s*(?:[-*]\s+)?(?P<tid>T\d{3,}):\s+(?P<who>\S+)\s+(?P<date>\d{4}-\d{2}-\d{2})(?P<rest>.*)$")
+
+
+def human_evidence(root: str, tid: str, section: str) -> tuple[str, str]:
+    """('supplied' | 'stale' | 'missing', detail) for a task with a `Human review:` line.
+
+    The applier had no way to receive a person's result, so `human evidence not
+    supplied` printed the same number on an empty tree and a finished one, while the
+    docs told pipelines to require 0. A person records the review in the feature's
+    `human-evidence.md` as `T010: <reviewer> <YYYY-MM-DD> README.md@<sha>`, one
+    `path@sha` per file the task declares, the sha being `git hash-object <path>`. The
+    record is tied to the bytes reviewed: change the file and it is stale again.
+    """
+    feature, _, bare = tid.rpartition("/")
+    files = [p for p, k in file_kinds(section) if k in ("new", "modify", "unknown")]
+    want = {p: (_blob_sha(os.path.join(root, p)) if os.path.isfile(os.path.join(root, p)) else "")
+            for p in files}
+    suggestion = " ".join(f"{p}@{sha[:12]}" for p, sha in want.items() if sha)
+    template = f"{bare}: <reviewer> <YYYY-MM-DD>" + (f" {suggestion}" if suggestion else "")
+    path = os.path.join(root, feature, HUMAN_EVIDENCE_FILE) if feature else ""
+    if not path or not os.path.isfile(path):
+        return "missing", template
+    with open(path, encoding="utf-8", errors="replace") as f:
+        lines = f.read().split("\n")
+    for line in lines:
+        m = HUMAN_EVIDENCE_LINE.match(line.rstrip("\n"))
+        if not m or m.group("tid") != bare:
+            continue
+        given = dict(re.findall(r"(\S+)@([0-9a-f]{7,40})\b", m.group("rest")))
+        moved = [p for p, sha in want.items() if not sha or not sha.startswith(given.get(p, "-"))]
+        if moved:
+            return "stale", f"{', '.join(moved)} — record again as: {template}"
+        return "supplied", f"{m.group('who')} {m.group('date')}"
+    return "missing", template
+
+
+def skeleton_tree(root: str, bp: str, tasks: list) -> tuple[str | None, str]:
+    """A copy of the tree as the blueprint leaves it before anyone implements it.
+
+    The files this feature's tasks declare are put back as the stamped commit had them,
+    and the tasks are applied over them: every declaration in place, every body its
+    marker. A test that passes here passes without the feature, so it measures nothing
+    the feature adds. The stamped commit alone is the wrong baseline, measured: a test
+    file there fails on its import of a name the feature has not declared yet, so four
+    of six emptied test files read as red-then-green. Returns (tree, "") or (None, why).
+    """
+    global _tree
+    head = stamped_head(bp)
+    if not head:
+        return None, "the blueprint has no `| HEAD` stamp to rebuild the skeleton from"
+    if not commit_known(root, head):
+        return None, f"this clone does not contain the stamped commit {head}"
+    tree = copy_tree(root)
+    saved = _tree
+    _tree = os.path.realpath(tree)
+    try:
+        for _tid, section in tasks:
+            for path, _kind in file_kinds(section):
+                full = inside(tree, path)
+                if in_commit(root, head, path):
+                    blob = subprocess.run(["git", "-C", root, "show", f"{head}:{path}"],
+                                          capture_output=True, timeout=60)
+                    if blob.returncode == 0:
+                        os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
+                        with open(full, "wb") as f:
+                            f.write(blob.stdout)
+                        continue
+                if os.path.isfile(full):
+                    os.remove(full)
+        failed = []
+        for tid, section in tasks:
+            try:
+                apply_task(tree, section)
+            except (Defect, AlreadyApplied, Ambiguous) as exc:
+                failed.append(f"{tid.rsplit('/', 1)[-1]} ({str(exc).splitlines()[0][:80]})")
+    except (Defect, OSError, subprocess.SubprocessError) as exc:
+        shutil.rmtree(tree, ignore_errors=True)
+        return None, f"the skeleton could not be rebuilt: {exc}"
+    finally:
+        _tree = saved
+    if failed:
+        shutil.rmtree(tree, ignore_errors=True)
+        return None, "the blueprint does not apply to its stamped commit: " + "; ".join(failed[:3])
+    return tree, ""
 
 
 def run_verifications(root: str, tasks: list, bp: str, keep: bool,
@@ -945,11 +1081,81 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                 (own_fail if any(code_of.get(c) for c in own) else own_pass).add(tid)
             else:
                 (shared_fail if any(code_of.get(c) for c in cmds) else shared_pass).add(tid)
+        # A test task's own command passing says the test passes, which an empty body and
+        # `assert.ok(true)` beside the subject's name in a comment both do. What says the
+        # test was written is that it FAILS on the tree the blueprint leaves before
+        # implementation and passes here. Only the commands that name the task's test
+        # file are rerun there; an oracle case beside them would be red on the skeleton
+        # whatever the test file holds.
+        discriminating, non_discriminating, undiscriminated = set(), set(), {}
+        selected_sections = dict(tasks)
+        probes = {}
+        for tid in sorted(own_pass & set(selected_sections)):
+            files = test_files(selected_sections[tid])
+            if not files:
+                continue
+            naming, unsplit = [], False
+            for c in (c for c in task_cmds[tid] if c not in shared):
+                if not c.startswith("set -e\n"):
+                    naming += [c] if any(names_file(c, f) for f in files) else []
+                    continue
+                # A fenced script runs the oracle and the test file in one command; on the
+                # skeleton only its lines that name the test file are run.
+                lines = c.split("\n")[1:]
+                if any("<<" in ln or ln.rstrip().endswith("\\") for ln in lines):
+                    unsplit = unsplit or any(names_file(c, f) for f in files)
+                    continue
+                keep_lines = [ln for ln in lines if any(names_file(ln, f) for f in files)]
+                if keep_lines:
+                    naming.append("set -e\n" + "\n".join(keep_lines))
+            if naming:
+                probes[tid] = (files, naming)
+            elif unsplit:
+                undiscriminated[tid] = "its test file is run inside a script with a heredoc, which cannot be split"
+            else:
+                undiscriminated[tid] = "no command of its own names its test file"
+        if probes and partial:
+            # The skeleton is built from the selected tasks, and --through cut the later ones
+            # off: a test importing what they declare would fail there for that reason alone.
+            for tid in probes:
+                undiscriminated[tid] = "--through selects part of the document, so the skeleton would be partial"
+        elif probes:
+            skeleton, why = skeleton_tree(root, bp, tasks)
+            if skeleton is None:
+                for tid in probes:
+                    undiscriminated[tid] = why
+            else:
+                try:
+                    for tid, (files, _naming) in probes.items():
+                        for path in files:
+                            src = os.path.join(root, path)
+                            if os.path.isfile(src):
+                                dst = inside(skeleton, path)
+                                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                                shutil.copyfile(src, dst)
+                    for tid, (_files, naming) in probes.items():
+                        red = any(_run_one(c, skeleton)[0] != 0 for c in naming)
+                        (discriminating if red else non_discriminating).add(tid)
+                finally:
+                    if keep:
+                        print(f"  Skeleton tree kept at: {skeleton}")
+                    else:
+                        shutil.rmtree(skeleton, ignore_errors=True)
+        task_passed = own_pass - non_discriminating
+        behind = blocked_by(run_tasks, own_fail | shared_fail)
+        own_blocked = {t for t in own_fail if t in behind}
         print("  Task proof — what each task's own Verification measured:")
-        if own_pass:
-            print(f"    Task-specific command results passed: {_ids(own_pass)}")
-        if own_fail:
-            print(f"    Task-specific command results failed: {_ids(own_fail)}")
+        if task_passed:
+            print(f"    Task-specific command results passed: {_ids(task_passed)}")
+        if discriminating:
+            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating)}")
+        if own_fail - own_blocked:
+            print(f"    Task-specific command results failed: {_ids(own_fail - own_blocked)}")
+        if own_blocked:
+            print("    Task-specific command results failed behind a failed dependency (not separable from it): "
+                  + ", ".join(f"{t} <- {'/'.join(d.rsplit('/', 1)[-1] for d in behind[t])}"
+                              for t in sorted(own_blocked)[:12])
+                  + (f" (+{len(own_blocked) - 12} more)" if len(own_blocked) > 12 else ""))
         n_shared = len({c for c in shared if set(owners[c]) & (shared_pass | shared_fail)})
         if shared_pass:
             print(f"    Shared command results passed ({n_shared} command(s) claimed by several tasks;"
@@ -959,9 +1165,29 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                   f" which of them are done is not measured): {_ids(shared_fail)}")
         if silent:
             print(f"    No runnable command: {_ids(silent)}")
-        if humans:
-            record("warn", f"human review declared, human evidence not supplied — the human part is not run, not counted as passed: {_ids(humans)}",
+        if non_discriminating:
+            record("warn", f"{len(non_discriminating)} test task(s) pass on the blueprint's skeleton as well as"
+                   " here — their tests measure nothing this feature adds, so they are not counted as passed: "
+                   + _ids(non_discriminating), always=True)
+        if undiscriminated:
+            record("warn", f"{len(undiscriminated)} test task(s) passed, and whether their tests discriminate"
+                   " was not measured", "\n".join(f"{t}: {why}" for t, why in sorted(undiscriminated.items())[:6]),
                    always=True)
+        evidence = {tid: human_evidence(root, tid, section) for tid, section in run_tasks if tid in humans}
+        supplied = {t for t, (state, _d) in evidence.items() if state == "supplied"}
+        stale = {t for t, (state, _d) in evidence.items() if state == "stale"}
+        missing = set(humans) - supplied - stale
+        if supplied:
+            print(f"    Human evidence supplied: "
+                  + ", ".join(f"{t} ({evidence[t][1]})" for t in sorted(supplied)))
+        if missing:
+            record("warn", f"human review declared, human evidence not supplied — the human part is not run, not counted as passed: {_ids(missing)}",
+                   "record a review in the feature's " + HUMAN_EVIDENCE_FILE + ", one line per task:\n"
+                   + "\n".join(evidence[t][1] for t in sorted(missing)[:4]),
+                   always=True)
+        if stale:
+            record("warn", f"human evidence is stale — a reviewed file changed after the review, so it is not supplied: {_ids(stale)}",
+                   "\n".join(f"{t}: {evidence[t][1]}" for t in sorted(stale)[:4]), always=True)
         header_cmds = [test_cmd] if include_header else []
         unexercised = []
         for tid, section in run_tasks:
@@ -973,13 +1199,15 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                    " feature-scoped header — their test bodies are unmeasured",
                    "\n".join(unexercised[:8]) + (f"\n(+{len(unexercised) - 8} more)" if len(unexercised) > 8 else ""),
                    always=True)
-        print(f"  Proof summary: commands passed {n_pass}/{len(order)}; task-specific {len(own_pass)} passed,"
-              f" {len(own_fail)} failed; shared-only {len(shared_pass) + len(shared_fail)};"
-              f" human evidence not supplied {len(humans)}; no command {len(silent)};"
-              f" test files unmeasured {len(unexercised)}")
+        print(f"  Proof summary: commands passed {n_pass}/{len(order)}; task-specific {len(task_passed)} passed,"
+              f" {len(own_fail)} failed ({len(own_blocked)} behind a failed dependency);"
+              f" test tasks non-discriminating {len(non_discriminating)}, not measured {len(undiscriminated)};"
+              f" shared-only {len(shared_pass) + len(shared_fail)};"
+              f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale)};"
+              f" no command {len(silent)}; test files unmeasured {len(unexercised)}")
         print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
-        print("  Exit status reflects command results and missing proof only; shared-only, human and"
-              " unmeasured-test rows above do not change it.")
+        print("  Exit status reflects command results and missing proof only; shared-only, human,"
+              " non-discriminating and unmeasured-test rows above do not change it.")
         if partial:
             print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
         elif failures or selected_silent and not (include_header and header_scope == "feature"):
@@ -992,29 +1220,6 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         else:
             shutil.rmtree(tree, ignore_errors=True)
     return failures
-
-
-def root_warning(root: str, arg: str | None) -> None:
-    """Say so when git resolved a repository above the directory the caller is in.
-
-    The root comes from `git rev-parse --show-toplevel`. A copy of a project made
-    inside it without its own `.git` resolves to the ENCLOSING repository, so a
-    no-op mutant copied below a finished feature was verified against the finished
-    feature and passed. Measured in an evaluation: three mutation controls all green,
-    and nothing in the output said which tree had been read.
-    """
-    cwd = os.path.realpath(os.getcwd())
-    real_root = os.path.realpath(root)
-    if cwd == real_root or not arg or os.path.isabs(arg):
-        return
-    here = os.path.join(cwd, arg)
-    if os.path.isdir(here) and os.path.realpath(here) != os.path.realpath(os.path.join(root, arg)):
-        record("warn", f"the current directory has its own {arg}, but git resolved the repository root"
-               " to an enclosing directory — this run reads and verifies that root, not the current directory",
-               f"current directory: {cwd}\nrepository root:   {real_root}\n"
-               "a copy without its own .git belongs to the repository around it;"
-               " run `git init` in the copy, or run from the root you mean to test",
-               always=True)
 
 
 def run_build(tree: str, cmd: str) -> int:
@@ -1104,7 +1309,8 @@ def main() -> int:
         print("  --verify           run every task's **Verification** command against YOUR tree; alone, does not apply")
         print("  --verbose          print the per-task line for every task, not just the failures")
         print("  --through T0NN     limit application, or --verify commands, to that task — a build bisector")
-        print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved,")
+        print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved or")
+        print("     not in the repository root's specs/ (a copy without its own .git),")
         print("     3 the tree has moved past the stamp so the build failure says nothing about the document.")
         return 0
     global VERBOSE
@@ -1165,6 +1371,12 @@ def main() -> int:
         print(f"{RED}ERROR: feature directory not found.{NC}")
         print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
         return 2
+    foreign = foreign_feature_dir(root, feature_dir)
+    if foreign:
+        print(f"Repository root: {root}")
+        for line in foreign_feature_message(root, foreign):
+            print(f"{RED}{line}{NC}" if line.startswith("ERROR") else line)
+        return 2
 
     bp_path = os.path.join(feature_dir, "blueprint.md")
     if not os.path.isfile(bp_path):
@@ -1200,7 +1412,6 @@ def main() -> int:
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
     print(f"Repository root: {root}")
-    root_warning(root, args[0] if args else None)
     mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(tasks)} task sections"
           + (f" (+{len(base_tasks)} from {len(chain)} base blueprint(s))" if chain else ""))

@@ -39,15 +39,28 @@ measured, and a shared command measures no single task:
   tasks to cases. A script copied under ten tasks fails all ten at its first assertion,
   so a half-built feature and an untouched one print the same. The
   [named-case example](examples/verification/acceptance-cases.mjs) is the prototype measured below.
-- **Test-writing tasks** run the test file they write through the project's runner, plus
-  a static check that the file asserts against its subject. An app oracle stays green when
-  every test body is emptied; `--verify` flags a test file no command runs
-  (`test bodies are unmeasured`).
-- **Documentation tasks** get a static assertion on the text the spec fixes. Judgement
-  goes on a line that starts with `Human review:`. Nothing on that line is executed — a
-  backticked example in it is a thing to look for, not a command — and the task is listed
-  as `human evidence not supplied`: counted, not failed, never passed. Record the human
-  result yourself in the handoff.
+- **Test-writing tasks** run the test file they write through the project's runner, naming
+  its path on a line of its own. A test that passes proves nothing by itself: an emptied body
+  passes, and so does `assert.ok(true)` with the subject's name in a comment beside it. So
+  `--verify` reruns exactly the lines that name the test file on the blueprint's **skeleton**
+  — the files this feature declares, restored to the stamped commit, with the blueprint
+  applied over them so every declaration is in place and every body is its marker — with
+  the current test file copied in. Red there and green on the tree: the test discriminates,
+  and the task is passed. Green on both: `non-discriminating`, warned about and not counted
+  as passed. A test file no command runs is flagged as unmeasured.
+- **A red task that depends on a red task** (its `**Dependencies**` line, followed through)
+  is listed as failed *behind* that dependency. A test of the CLI is red when the CLI is
+  missing, whether or not the test was written; the result is still a failure, but it cannot
+  be told apart from the task it depends on, and the output no longer claims it can.
+- **Documentation tasks** get a static assertion on the text the spec fixes, and their
+  example commands are run. Judgement goes on a line that starts with `Human review:`.
+  Nothing on that line is executed — a backticked example in it is a thing to look for, not
+  a command. The reviewer records the review in the feature's `human-evidence.md`, one line
+  per task: `T010: <reviewer> <YYYY-MM-DD> README.md@<sha>`, one `path@sha` for each file
+  the task declares, the sha being `git hash-object <path>` (seven or more characters; the
+  warning prints the exact line). Without it the task is `human evidence not supplied`:
+  counted, not failed, never passed. When a recorded file changes, the record is `stale`
+  and counts as not supplied again.
 
 Measured on the R17 guru CSV feature (886-line blueprint, one 52-line script under ten
 tasks; prototype hand-converted to the form above, 398 lines plus a 78-line oracle). Same
@@ -62,14 +75,26 @@ instead of all ten red. The converted blueprint was written by hand, not by the 
 
 Exit 1: a command failed, or under `--verify-scope feature` a selected task has neither a
 command nor a `Human review:` line and no feature-scoped header covers it. Exit 2: a refused
-gate. Shared-only results, human evidence not supplied and unmeasured test files never change
-the exit code — exit 0 means the commands passed. A pipeline that needs per-task proof reads
-the `Proof summary:` line and requires `shared-only 0`, `human evidence not supplied 0` and
-`test files unmeasured 0`.
+gate. Shared-only results, non-discriminating test tasks, human evidence not supplied and
+unmeasured test files never change the exit code — exit 0 means the commands passed. A
+pipeline that needs per-task proof reads the `Proof summary:` line and requires
+`test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0` (each
+`Human review:` recorded in `human-evidence.md`) and `test files unmeasured 0`.
+
+Why non-discriminating is not exit 1: measured on the R18 guru feature's 22 control copies
+and on 16 feature runs of three earlier projects, it fired only on the copy whose tests were
+`assert.ok(true)` (six of six test tasks) and never on a finished or reformatted tree. But a
+test of a structural file the skeleton writes complete, or of behavior the feature leaves
+unchanged, passes on the skeleton by design, and no corpus here has one to measure the cost
+on. The proof discriminates against the skeleton only: a weak test that a no-op
+implementation also passes is still counted as proven — measured, a CLI test comparing
+stdout to itself stayed "discriminating" on a copy whose `reverse` command returned 0 and
+did nothing.
 
 Every run prints `Repository root:`. A project copy without its own `.git` inside another
-repository is read as that repository; the applier and the scaffold validator warn when the
-directory you are in holds its own copy of the feature but the root above it is used.
+repository has that repository as its root, so its blueprint would be judged against the
+enclosing project's files. All three tools refuse that run with exit 2: the feature directory
+must be in the root's `specs/`. Run `git init` in the copy, or run from the root you mean.
 
 ## Reusable generation recipe
 
@@ -122,7 +147,7 @@ still exercise more than that prefix, so report its declared scope separately.
 | State | Evidence | Guarantee |
 |---|---|---|
 | document-valid | document validator command and exit | document structure; no runtime behavior |
-| scaffold-complete | feature `--done` command and exit | declared files/symbols and no remaining markers; no runtime behavior |
+| scaffold-complete | feature `--done` command and exit | declared files/symbols, no remaining markers, and every existing `(modify)` file changed since the stamp; no runtime behavior |
 | behavior-verified | focused assertion command, exit, tested scope and unmeasured contracts | the named assertions passed against the working tree |
 
 Record **pass**, **fail**, or **not run** for each state, with the actual command.

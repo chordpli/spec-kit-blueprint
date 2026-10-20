@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R18 — a test task is proven against the skeleton
+
+- `--verify` runs each passing test-writing task's own command once more on the
+  blueprint's skeleton (the declared files restored to the stamped commit with the
+  blueprint applied over them, the current test files copied in). Red there and green
+  here is listed as discriminating. Green on both is warned about as non-discriminating
+  and no longer counted as `task-specific passed`. Only the lines of a fenced script that
+  name the test file are run there; a script with a heredoc or a line continuation, a
+  `--through` selection, no stamp, or a blueprint that does not apply to its stamp is
+  reported as "not measured". The exit code is unchanged: legitimate structure and
+  regression tests pass on a skeleton by design, and how many do was not measured.
+- A red task that depends (through `**Dependencies**`, transitively) on another red task
+  is reported as failed behind that dependency rather than as its own failure. It is
+  still a failure.
+- Human evidence has a supply path: `specs/NNN/human-evidence.md` with
+  `T010: <reviewer> <YYYY-MM-DD> <path>@<git hash-object sha>`. The record goes stale
+  when the reviewed file changes. The applier prints the line to record.
+- `Proof summary:` gains `(N behind a failed dependency)`, `test tasks non-discriminating
+  N, not measured N`, and `human evidence supplied N, not supplied N`.
+- `validate-scaffold.sh` reads declarations on disk with `//`, `/* */` and `# ` comments
+  removed, and accepts `export const f = (…) =>`, `const f = function`, `exports.f =`.
+  Fixture `js-declaration-forms`.
+- `--done` fails an existing file a `(modify)` task changes that is byte-identical to the
+  blueprint's `| HEAD` stamp. Without a resolvable stamp it says "not measured".
+- A feature directory whose parent is not the repository root's `specs/` (a copy without
+  its own `.git` inside another repository) is refused with exit 2 by all three tools;
+  it was a warning and exit 0.
+- `validate.md` lists every exit code of the three tools, including the applier's 3.
+- Generation guidance: the regex static check beside a test command is no longer called
+  proof; each "unchanged" in the spec gets an oracle case; product documentation does not
+  describe this extension's commands; documentation examples must run; guide-mode
+  contracts fix what is observed, not the order of steps.
+- Measured this round (R18 guru 004 controls, 22 copies plus 003 complete, old 2b8f41b
+  against new): feature-axis results and verify exit codes are identical on every
+  control except the nested copy (0 → 2). `trivial-asserts` goes from task-specific 11
+  passed to 5 passed and 6 non-discriminating, with exit still 0. `half-no-cli` reports
+  T003 failed and T005, T006, T009 behind it. `--done`: `fmt-arrow` and `fmt-const-fn`
+  1 → 0; `decl-comment-only`, `half-no-cli`, `readme-missing` and 003 `readme-missing`
+  0 → 1; the other format controls stay 0. Not changed: the 003 (original) form still
+  gives byte-identical Proof summaries for complete, empty tests and README missing,
+  because its test tasks have no command of their own; a weak test that a no-op also
+  passes (`noop-silent` T006) is still listed as discriminating. Whether the generator
+  follows the new guidance is not measured.
+
 ### R17 — task proof is not feature proof
 
 - `--verify` reports two axes: `Feature behavior proof` (distinct command results, which
