@@ -54,8 +54,9 @@ python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEA
 # specs/ — a copy with no .git of its own inside another repository
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
 # read its two axes before the exit code: `Feature behavior proof` (command results) and
-# `Task proof` (task-specific / shared / human evidence not supplied / test files unmeasured).
-# Exit 0 = the commands passed, not every task proven; a script reads the `Proof summary:` line.
+# `Task proof` (task-specific, behind a failed dependency, non-discriminating test tasks,
+# shared, human evidence, unmeasured test files). Exit 0 = the commands passed, not every
+# task proven; a script reads the `Proof summary:` line.
 # no declared file still carries a marker, no declared name is missing, no ticked row lies
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
 # and the same question about the whole repository, not just this feature
@@ -119,19 +120,26 @@ Verification measured, and it is a different question:
 
 | Line | Means | Does not mean |
 |---|---|---|
-| `Task-specific command results passed/failed` | a command only this task names passed or failed | that the command's assertions cover the whole task |
+| `Task-specific command results passed/failed` | a command only this task names passed or failed; a test task counts as passed only when its test also discriminates (next row) | that the command's assertions cover the whole task |
+| `Test tasks red on the blueprint's skeleton and green here` | the lines that name the task's test file were rerun on the skeleton — this feature's declared files at the stamped commit, the blueprint applied over them — and failed there | that the test is strong: a test a no-op implementation also passes is still listed here |
+| `⚠ N test task(s) pass on the blueprint's skeleton as well as here` | the test passes without the feature: an emptied body, `assert.ok(true)`. **Not counted as passed** | that the test is wrong when it tests something the skeleton writes complete, or behavior the feature leaves unchanged — those pass on the skeleton by design |
+| `⚠ … whether their tests discriminate was not measured` | no `| HEAD` stamp, a stamp this clone lacks, a blueprint that does not apply to its stamp, a `--through` run, or no line of the task's own that names its test file. Counted as passed, with the reason | — |
+| `failed behind a failed dependency (… <- T003)` | the task is red and a task its `**Dependencies**` reach is red too | that it is done, or not done: its result cannot be told apart from the dependency's |
 | `Shared command results …` | one command claimed by several tasks; its result is the suite's | that each claiming task is implemented — a half-built feature shows every claimant red, and an emptied test file shows its task green |
-| `⚠ human review declared, human evidence not supplied` | the task's Verification hands a check to a person; that part is **not run and not counted as passed** | that the task failed — it is counted, not failed. A backticked example inside a `Human review:` line is never executed |
+| `⚠ human review declared, human evidence not supplied` | the task's Verification hands a check to a person and the feature's `human-evidence.md` has no line for it; that part is **not run and not counted as passed**. The evidence line prints the exact line to record | that the task failed — it is counted, not failed. A backticked example inside a `Human review:` line is never executed |
+| `Human evidence supplied: T010 (alice 2026-10-20)` / `⚠ human evidence is stale` | a line `T010: <reviewer> <YYYY-MM-DD> path@sha …` names every file the task declares at its current `git hash-object`; stale when a file changed since | that the review was good — only that a person recorded one for these bytes |
 | `⚠ N test file(s) a task writes are not run by its Verification …` | the task writes a test file that neither its own command nor a feature-scoped header runs: its test bodies are unmeasured | that the tests are wrong |
 | `Proof summary: …` | the counts above on one line, for scripts | — |
 
 **Exit policy, for automation.** Exit 1 means a command failed, or (with `--verify-scope
 feature`) a selected task has neither a command nor a human review line and no feature-scoped
-header covers it. Exit 2 is a refused gate (an unspecified `**Test**` scope). Shared-only,
-human-evidence and unmeasured-test rows **never change the exit code**: exit 0 says the
-commands passed, not that every task is proven. A pipeline that needs per-task proof reads the
-`Proof summary` line and requires `shared-only 0`, `human evidence not supplied 0` (or records
-the human evidence itself) and `test files unmeasured 0`.
+header covers it. Exit 2 is a refused gate (an unspecified `**Test**` scope, a feature directory
+outside the root's `specs/`). Shared-only, non-discriminating, human-evidence and unmeasured-test
+rows **never change the exit code**: exit 0 says the commands passed, not that every task is
+proven. A pipeline that needs per-task proof reads the `Proof summary` line and requires
+`test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0` and
+`test files unmeasured 0` — each of them reachable on a finished tree, the human one by
+recording the review in `human-evidence.md`.
 
 A failed verification is reported as a fact about **your tree**, on its own line, and never as
 `Blueprint did NOT apply cleanly`: the document placed and compiled, and telling a developer
