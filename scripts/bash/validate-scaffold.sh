@@ -1072,9 +1072,9 @@ if [[ "$DONE" == true ]]; then
     # of a feature and --done said "All checks passed" — every check above reads what is
     # in a file, and an untouched file has nothing in it to read. The one question that
     # sees an absence is whether the file moved at all since the commit the blueprint
-    # stamps. Measured over 22 controls and six real trees: it fires on the four controls
-    # that leave a (modify) file untouched and on the two half-finished trees, and on none
-    # of the five format controls or the complete trees.
+    # stamps. Measured over 22 controls and six real trees: it fires on the five controls
+    # that leave a (modify) file untouched and on two of the three half-finished trees, and
+    # on none of the seven format controls or the three complete trees.
     STAMP=$(grep -iE '^\*\*sources\*\*' "$GUIDE" 2>/dev/null | head -1 | grep -oE 'HEAD[[:space:]]+[0-9a-f]{6,40}' | grep -oE '[0-9a-f]{6,40}$' || true)
     if [[ ${#MODIFY_FILES[@]} -gt 0 ]]; then
         if [[ -z "$STAMP" ]]; then
