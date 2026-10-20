@@ -197,6 +197,36 @@ class ScopeContracts(unittest.TestCase):
         self.assertTrue(applier.runs_file(applier.verification_commands(suite), 'tests/test_store.py'))
         self.assertFalse(applier.runs_file(['python3 -m unittest tests/test_other.py'], 'tests/test_store.py'))
 
+    def test_nested_copy_names_the_root_it_read(self):
+        # A copy inside a repository, with no .git of its own, belongs to that repository.
+        with tempfile.TemporaryDirectory() as outer:
+            outer = os.path.realpath(outer)
+            subprocess.run(['git', 'init', '-q'], cwd=outer, check=True)
+            for base in (outer, os.path.join(outer, 'copy')):
+                Path(base, 'specs/a').mkdir(parents=True)
+                Path(base, 'specs/a/blueprint.md').write_text(
+                    '**Mode**: guide\n### T001: Check\n**Verification**: `python3 -c "print(1)"`\n')
+            inner = os.path.join(outer, 'copy')
+            apply = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
+                                   cwd=inner, capture_output=True, text=True)
+            self.assertIn(f'Repository root: {outer}', apply.stdout)
+            self.assertIn('git resolved the repository root to an enclosing directory', apply.stdout)
+            own = subprocess.run([sys.executable, str(MODULE), 'specs/a', '--verify'],
+                                 cwd=outer, capture_output=True, text=True)
+            self.assertNotIn('enclosing directory', own.stdout)
+            scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+            for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
+                if not Path(shell).exists():
+                    continue
+                with self.subTest(shell=shell):
+                    nested = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=inner,
+                                            capture_output=True, text=True)
+                    self.assertIn(f'Repository root: {outer}', nested.stdout)
+                    self.assertIn('declared files are read from the repository root', nested.stdout)
+                    plain = subprocess.run([shell, str(scaffold), 'specs/a'], cwd=outer,
+                                           capture_output=True, text=True)
+                    self.assertNotIn('declared files are read from the repository root', plain.stdout)
+
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')
         self.assertEqual(applier.test_scope('**Test Scope**: feature'), 'feature')

@@ -985,6 +985,29 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
     return failures
 
 
+def root_warning(root: str, arg: str | None) -> None:
+    """Say so when git resolved a repository above the directory the caller is in.
+
+    The root comes from `git rev-parse --show-toplevel`. A copy of a project made
+    inside it without its own `.git` resolves to the ENCLOSING repository, so a
+    no-op mutant copied below a finished feature was verified against the finished
+    feature and passed. Measured in an evaluation: three mutation controls all green,
+    and nothing in the output said which tree had been read.
+    """
+    cwd = os.path.realpath(os.getcwd())
+    real_root = os.path.realpath(root)
+    if cwd == real_root or not arg or os.path.isabs(arg):
+        return
+    here = os.path.join(cwd, arg)
+    if os.path.isdir(here) and os.path.realpath(here) != os.path.realpath(os.path.join(root, arg)):
+        record("warn", f"the current directory has its own {arg}, but git resolved the repository root"
+               " to an enclosing directory — this run reads and verifies that root, not the current directory",
+               f"current directory: {cwd}\nrepository root:   {real_root}\n"
+               "a copy without its own .git belongs to the repository around it;"
+               " run `git init` in the copy, or run from the root you mean to test",
+               always=True)
+
+
 def run_build(tree: str, cmd: str) -> int:
     print(f"\n{CYAN}=== Build ==={NC}")
     # The command can come from the blueprint's own **Build**: line, so it is shown
@@ -1167,6 +1190,8 @@ def main() -> int:
 
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
+    print(f"Repository root: {root}")
+    root_warning(root, args[0] if args else None)
     mode = parse_mode(bp)
     print(f"Mode: {mode} | {len(tasks)} task sections"
           + (f" (+{len(base_tasks)} from {len(chain)} base blueprint(s))" if chain else ""))

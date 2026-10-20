@@ -258,6 +258,16 @@ GUIDE="$FEATURE_DIR/blueprint.md"
 echo -e "${CYAN}=== Blueprint Scaffold Validator ${SCRIPT_VERSION} ===${NC}"
 echo "Feature: $FEATURE_DIR"
 echo "Blueprint: $GUIDE"
+echo "Repository root: $REPO_ROOT"
+# The blueprint is read from the path as given and the files it declares from the git
+# root. Inside a copy that has no .git of its own those are two different trees: the
+# copy's document, judged against the enclosing project's files.
+FEATURE_PARENT_REAL="$(cd "$FEATURE_DIR/.." 2>/dev/null && pwd -P || true)"
+REPO_ROOT_REAL="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P || true)"
+ROOT_MISMATCH=""
+if [[ -n "$FEATURE_PARENT_REAL" && "$FEATURE_PARENT_REAL" != "$REPO_ROOT_REAL/specs" ]]; then
+    ROOT_MISMATCH="$FEATURE_PARENT_REAL"
+fi
 
 # === Detect the mode the blueprint was generated in ===
 # doc-only and guide write nothing to disk, so "file missing" is the expected
@@ -306,6 +316,9 @@ fi
 # CHECK 1: blueprint.md existence
 # =============================================
 header "1. Blueprint Document"
+if [[ -n "$ROOT_MISMATCH" ]]; then
+    warn "the blueprint is read from $ROOT_MISMATCH but declared files are read from the repository root $REPO_ROOT_REAL — a copy without its own .git belongs to the repository around it; run git init in the copy, or run from the root you mean to check"
+fi
 
 if [[ -f "$GUIDE" ]]; then
     pass "blueprint.md exists"
