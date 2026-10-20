@@ -4,6 +4,7 @@ validate --typo: ERROR: unknown option(s): --strict-guied
 validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
 validate --typo: exit 2
 apply: exit 0
+apply --verify: ⚠ 1 test task(s) passed, and whether their tests discriminate was not measured
 apply --verify: exit 0
 apply --typo: ERROR: unknown option(s): --verfy
 apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]

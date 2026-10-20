@@ -258,6 +258,115 @@ class ScopeContracts(unittest.TestCase):
                         self.assertEqual(plain.returncode, 0, (cwd, arg, plain.stdout + plain.stderr))
                         self.assertNotIn('the feature directory is in', plain.stderr)
 
+    # --- R18: a test task is proven against the skeleton, not by the app's state -------
+
+    CALC_BP = """# Blueprint: calc
+
+**Mode**: guide — signatures and markers; the developer types the bodies
+**Sources**: HEAD {head}
+
+### T001: Double a number
+
+**File**: `pkg/calc.py` (new)
+
+**Why**: one function doubles.
+
+```python
+def double(x):
+    raise NotImplementedError("T001: return twice x")
+```
+
+**Verification**: `python3 -c "from pkg.calc import double; assert double(2) == 4"`
+
+### T002: Test doubling
+
+**File**: `tests/test_calc.py` (new)
+
+**Dependencies**: T001
+
+**Why**: the test fixes the contract.
+
+```python
+import unittest
+from pkg.calc import double
+
+
+class CalcTest(unittest.TestCase):
+    def test_double(self):
+        raise NotImplementedError("T002: assert double(3) is 6")
+```
+
+**Verification**: `python3 -m unittest tests.test_calc`
+"""
+    CALC_TEST = ("import unittest\nfrom pkg.calc import double\n\n\nclass CalcTest(unittest.TestCase):\n"
+                 "    def test_double(self):\n        {body}\n")
+
+    def calc_repo(self, root, impl, body):
+        git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false']
+        subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+        Path(root, 'pkg').mkdir()
+        Path(root, 'pkg/__init__.py').write_text('')
+        subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+        subprocess.run(git + ['commit', '-qm', 'base'], cwd=root, check=True)
+        head = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], cwd=root, text=True).strip()
+        Path(root, 'specs/020-calc').mkdir(parents=True)
+        Path(root, 'specs/020-calc/blueprint.md').write_text(self.CALC_BP.format(head=head))
+        subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+        subprocess.run(git + ['commit', '-qm', 'blueprint'], cwd=root, check=True)
+        Path(root, 'pkg/calc.py').write_text(f'def double(x):\n    return {impl}\n')
+        Path(root, 'tests').mkdir()
+        Path(root, 'tests/test_calc.py').write_text(self.CALC_TEST.format(body=body))
+        proc = subprocess.run([sys.executable, str(MODULE), 'specs/020-calc', '--verify', '--verify-scope', 'feature'],
+                              cwd=root, capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+        return proc.returncode, proc.stdout
+
+    def test_test_task_is_proven_against_the_skeleton(self):
+        real = 'self.assertEqual(double(3), 6)'
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', real)
+            self.assertEqual(rc, 0, out)
+            self.assertIn('red on the blueprint\'s skeleton and green here (the test discriminates): specs/020-calc/T002', out)
+            self.assertIn('task-specific 2 passed, 0 failed', out)
+            self.assertIn('test tasks non-discriminating 0, not measured 0', out)
+        # R18 guru: `assert.ok(true)` beside the subject's name passed as task proof.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)  # double(3) == 6')
+            self.assertEqual(rc, 0, out)
+            self.assertIn('1 test task(s) pass on the blueprint\'s skeleton as well as here', out)
+            self.assertIn('Task-specific command results passed: specs/020-calc/T001\n', out)
+            self.assertIn('task-specific 1 passed, 0 failed', out)
+            self.assertIn('test tasks non-discriminating 1', out)
+
+    def test_red_test_task_behind_a_red_dependency_is_not_its_own_failure(self):
+        # R18 guru: a finished test task was reported failed because the code it tests was.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 3', 'self.assertEqual(double(3), 6)')
+            self.assertEqual(rc, 1, out)
+            self.assertIn('Task-specific command results failed: specs/020-calc/T001\n', out)
+            self.assertIn('failed behind a failed dependency (not separable from it): specs/020-calc/T002 <- T001', out)
+            self.assertIn('2 failed (1 behind a failed dependency)', out)
+        self.assertEqual(applier.blocked_by([('a/T001', ''), ('a/T002', '**Dependencies**: T001')],
+                                            {'a/T002'}), {})
+
+    def test_human_evidence_is_tied_to_the_bytes_reviewed(self):
+        section = '**File**: `README.md` (modify)\n\n**Verification**: Human review: reads well.'
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, 'specs/020-calc').mkdir(parents=True)
+            Path(root, 'README.md').write_text('# calc\n')
+            state, template = applier.human_evidence(root, 'specs/020-calc/T003', section)
+            self.assertEqual(state, 'missing')
+            sha = applier._blob_sha(os.path.join(root, 'README.md'))
+            self.assertEqual(sha, subprocess.check_output(['git', 'hash-object', 'README.md'], cwd=root, text=True).strip())
+            self.assertIn(f'T003: <reviewer> <YYYY-MM-DD> README.md@{sha[:12]}', template)
+            evidence = Path(root, 'specs/020-calc', applier.HUMAN_EVIDENCE_FILE)
+            evidence.write_text(f'T003: rev 2026-10-20 README.md@{sha[:7]}\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section),
+                             ('supplied', 'rev 2026-10-20'))
+            Path(root, 'README.md').write_text('# calc, edited\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
+            evidence.write_text('T003: rev 2026-10-20\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
+
     # --- R18: declarations are read without comments, in any binding form ------------
 
     def test_declaration_forms_and_comments_both_bash_versions(self):
