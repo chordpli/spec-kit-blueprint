@@ -25,8 +25,51 @@ from the spec, not by copying the current output.
 For a known valid CLI case, assert its exit status, exact parsed output, and
 expected stderr. For read-only work, compare the input file bytes before and
 after. A bare CLI invocation, redirected output, import, compile, or help command
-is a smoke check; it cannot establish behavior completion. Documentation tasks
-can use a focused static assertion or an explicitly recorded human check.
+is a smoke check; it cannot establish behavior completion.
+
+## Task proof is not feature proof
+
+`--verify` reports two axes. **Feature behavior proof** is the result of each distinct
+command; the exit code is made of it. **Task proof** is what each task's own Verification
+measured, and a shared command measures no single task:
+
+- **Behavior tasks** get the oracle case for their contract. When several tasks would
+  repeat one script, write a single oracle in the feature directory
+  (`specs/NNN-feature/acceptance.mjs`) with a shared fixture and named cases, and map
+  tasks to cases. A script copied under ten tasks fails all ten at its first assertion,
+  so a half-built feature and an untouched one print the same. The
+  [named-case example](examples/verification/acceptance-cases.mjs) is the prototype measured below.
+- **Test-writing tasks** run the test file they write through the project's runner, plus
+  a static check that the file asserts against its subject. An app oracle stays green when
+  every test body is emptied; `--verify` flags a test file no command runs
+  (`test bodies are unmeasured`).
+- **Documentation tasks** get a static assertion on the text the spec fixes. Judgement
+  goes on a line that starts with `Human review:`. Nothing on that line is executed — a
+  backticked example in it is a thing to look for, not a command — and the task is listed
+  as `human evidence not supplied`: counted, not failed, never passed. Record the human
+  result yourself in the handoff.
+
+Measured on the R17 guru CSV feature (886-line blueprint, one 52-line script under ten
+tasks; prototype hand-converted to the form above, 398 lines plus a 78-line oracle). Same
+eight trees, old and new tools: with the original form, emptied tests and a one-line
+README exited 0 under both tools (the new tool now labels them shared-only, human evidence
+not supplied and test bodies unmeasured instead of `passed`); with the oracle form both
+exited 1 under both tools, the three app mutations still exited 1, the finished tree exited
+0, and the half-built tree showed library and its tests passing with the CLI tasks red
+instead of all ten red. The converted blueprint was written by hand, not by the generator.
+
+## Exit policy for automation
+
+Exit 1: a command failed, or under `--verify-scope feature` a selected task has neither a
+command nor a `Human review:` line and no feature-scoped header covers it. Exit 2: a refused
+gate. Shared-only results, human evidence not supplied and unmeasured test files never change
+the exit code — exit 0 means the commands passed. A pipeline that needs per-task proof reads
+the `Proof summary:` line and requires `shared-only 0`, `human evidence not supplied 0` and
+`test files unmeasured 0`.
+
+Every run prints `Repository root:`. A project copy without its own `.git` inside another
+repository is read as that repository; the applier and the scaffold validator warn when the
+directory you are in holds its own copy of the feature but the root above it is used.
 
 ## Reusable generation recipe
 

@@ -43,7 +43,7 @@ summary, and the number did not move at all:
    fail to warn without a single one being noticed.
 
 That historical expansion made the corpus run thirteen command lines per fixture, with
-three of its then six fixtures **red on purpose**. The current corpus has twenty-two
+three of its then six fixtures **red on purpose**. The current corpus has twenty-four
 fixtures and five behavioral regression oracles run by the default self-test. Historical
 46-case results are in the release notes; that lost harness and its denominator have not
 been reconstructed.
@@ -103,6 +103,8 @@ exists to replace.
 | `dotless-source`, `mixed-dotless-source` | mixed | an extensionless source file has a valid current stamp; mixing it with `Makefile@CURRENT` fails rather than ignoring the malformed token |
 | `base-missing`, `base-cycle`, `base-valid-chain`, `quoted-base` | mixed | missing and cyclic predecessor chains fail before validation or verification; an existing chain and a fenced Base example remain valid |
 | `prose-subscript-call` | **yes** | a marker message whose only pasteable expression is `int(row[2])` keeps the subscripted-argument alternative observable |
+| `js-test-registration` | **yes** | a node:test `test("…", () => {` registration in a skeleton is a call, not a declaration: a finished one-line test passes `--done`, while a renamed declared function in the same feature still fails |
+| `human-review-proof` | mixed | a `Human review:` line's backticked example is never run and the task is listed as human evidence not supplied; a test file only a shared import command covers is flagged as unmeasured |
 
 The default run also checks five contracts that finding-headline snapshots cannot express:
 an unclaimed untracked marker file remains in the applier's copied tree, the first useful

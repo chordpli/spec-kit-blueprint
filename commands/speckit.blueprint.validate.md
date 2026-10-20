@@ -49,8 +49,13 @@ bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_D
 # document rules still apply after implementation; guide modes make body findings strict
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR"
 python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEATURE_DIR" --strict-guide
-# every task's **Verification** line, against YOUR working tree
+# every task's **Verification** line, against YOUR working tree; check the printed
+# `Repository root:` is the tree you mean (a copy with no .git of its own is read as the
+# repository around it, and the run warns)
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
+# read its two axes before the exit code: `Feature behavior proof` (command results) and
+# `Task proof` (task-specific / shared / human evidence not supplied / test files unmeasured).
+# Exit 0 = the commands passed, not every task proven; a script reads the `Proof summary:` line.
 # no declared file still carries a marker, no declared name is missing, no ticked row lies
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
 # and the same question about the whole repository, not just this feature
@@ -107,6 +112,26 @@ report says so: `ran 2 distinct command(s) covering 12 task(s) plus 1 header tes
 `--build` is: these are shell commands out of a generated document, and running them is a decision
 the caller makes — which is why block B above makes the decision explicitly rather than leaving it
 to whether the reader got this far. A failing verification exits non-zero.
+
+**Two axes, read separately.** `Feature behavior proof: N of M distinct command(s) passed` is
+the command results — what the exit code is made of. `Task proof` says what each task's *own*
+Verification measured, and it is a different question:
+
+| Line | Means | Does not mean |
+|---|---|---|
+| `Task-specific command results passed/failed` | a command only this task names passed or failed | that the command's assertions cover the whole task |
+| `Shared command results …` | one command claimed by several tasks; its result is the suite's | that each claiming task is implemented — a half-built feature shows every claimant red, and an emptied test file shows its task green |
+| `⚠ human review declared, human evidence not supplied` | the task's Verification hands a check to a person; that part is **not run and not counted as passed** | that the task failed — it is counted, not failed. A backticked example inside a `Human review:` line is never executed |
+| `⚠ N test file(s) a task writes are not run by its Verification …` | the task writes a test file that neither its own command nor a feature-scoped header runs: its test bodies are unmeasured | that the tests are wrong |
+| `Proof summary: …` | the counts above on one line, for scripts | — |
+
+**Exit policy, for automation.** Exit 1 means a command failed, or (with `--verify-scope
+feature`) a selected task has neither a command nor a human review line and no feature-scoped
+header covers it. Exit 2 is a refused gate (an unspecified `**Test**` scope). Shared-only,
+human-evidence and unmeasured-test rows **never change the exit code**: exit 0 says the
+commands passed, not that every task is proven. A pipeline that needs per-task proof reads the
+`Proof summary` line and requires `shared-only 0`, `human evidence not supplied 0` (or records
+the human evidence itself) and `test files unmeasured 0`.
 
 A failed verification is reported as a fact about **your tree**, on its own line, and never as
 `Blueprint did NOT apply cleanly`: the document placed and compiled, and telling a developer
