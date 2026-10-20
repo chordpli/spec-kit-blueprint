@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R17 — task proof is not feature proof
+
+- `--verify` reports two axes: `Feature behavior proof` (distinct command results, which
+  is what the exit code is made of) and `Task proof` (task-specific results, shared
+  commands as claimed coverage rather than per-task status, tasks without a command).
+  A one-line `Proof summary:` is printed for scripts. Exit codes are unchanged.
+- A Verification line starting `Human review:` (or `Manual check:` and similar) is no
+  longer mined for backticked commands. The task is counted, not failed, and listed as
+  `human evidence not supplied`, also when a static assertion runs beside it.
+- A test file a task writes that neither its Verification nor a feature-scoped header
+  runs is flagged: its test bodies are unmeasured.
+- `validate-scaffold.sh` no longer reads a call whose argument list is still open at the
+  end of the line — `test("…", () => {` — as a declaration. A finished one-line node:test
+  file failed `--done` with six `declares test` findings before this; a renamed declared
+  function still fails (fixture `js-test-registration`).
+- `apply_blueprint.py` and `validate-scaffold.sh` print `Repository root:` and warn when a
+  copy without its own `.git` is being read as the repository around it.
+- Generation guidance: one acceptance oracle in the feature directory with named cases
+  mapped to tasks instead of one script repeated under every task; test-writing tasks run
+  their own file plus a static assertion check; documentation tasks use a static assertion
+  and keep judgement on a `Human review:` line. Added the prototype oracle as
+  `docs/examples/verification/acceptance-cases.mjs`.
+- Measured (R17 guru CSV feature, eight trees, old and new tool, measured this round): with
+  the original 886-line blueprint, emptied CSV tests and a one-line README still exit 0
+  under the new tool — the change there is the output, which no longer calls those tasks
+  passed. With a hand-converted 398-line blueprint plus a 78-line oracle, both exit 1 under
+  both tools, no-op/amount+1/sidecar still exit 1, unimplemented and half-built exit 1, the
+  finished tree exits 0, and the half-built tree shows the library tasks passing and the
+  CLI tasks failing. The converted blueprint was not produced by the generator; whether the
+  generator follows the new guidance is not measured.
+
 ### R16 — observable feature acceptance
 
 - Verification executes whole fenced shell scripts, preserving heredoc assertions
