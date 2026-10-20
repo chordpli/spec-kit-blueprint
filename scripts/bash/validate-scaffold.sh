@@ -74,6 +74,25 @@ count_matches() {
 # the line that CALLS it passed, which is most names. Measured on one corpus, 101 of 146
 # declared symbols could be deleted without this check moving.
 DECL_AWK=$(cat <<'AWK'
+# opendepth: how many argument lists are still open at the end of the line, with string
+# literals blanked first. A declaration header closes its parameter list on its own line
+# before the body brace; a call whose last argument is a callback leaves its list open
+# until a later line, and so does a node:test or JUnit registration that passes a lambda.
+# Written without quote or paren characters in this comment: bash 3.2 parses a heredoc
+# inside a command substitution and an unbalanced one there breaks the whole script.
+function opendepth(t,   s, i, c, d, dq, q, b) {
+    s = t; dq = "\042"; q = "\047"; b = "\140"
+    gsub(dq "([^" dq "\\\\]|\\\\.)*" dq, "S", s)
+    gsub(q "([^" q "\\\\]|\\\\.)*" q, "S", s)
+    gsub(b "([^" b "\\\\]|\\\\.)*" b, "S", s)
+    d = 0
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "(") d++
+        else if (c == ")" && d > 0) d--
+    }
+    return d
+}
 function declname(t,   n, w, i, nm, head2, before) {
     if (match(t, /^(export[ \t]+)?(default[ \t]+)?(async[ \t]+)?(public|private|protected|internal|open|final|static|abstract|suspend)?[ \t]*(class|interface|struct|enum|object|record|trait)[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
         n = split(t, w, /[ \t]+/)
@@ -106,6 +125,12 @@ function declname(t,   n, w, i, nm, head2, before) {
         # developer the blueprint "declares `println`". It does not; saying so is worse
         # than saying nothing.
         if (before ~ /\.[ \t]*$/) return ""
+        # An argument list still open at the end of the line is a call passing a
+        # callback, never a declaration header: grammar, not a list of names. The
+        # node:test registration call in a test skeleton was read as a declaration
+        # named test that every finished test file had to repeat, and a one-line
+        # finished test failed --done until someone reflowed it.
+        if (opendepth(t) > 0) return ""
         # Nothing at all in front of the name and a semicolon after it is a bare call
         # statement — `heldMerchantGetsNoPayout();`. A declaration carries a type, a
         # modifier or a keyword; only a body-opening `{` excuses having none (JS and
