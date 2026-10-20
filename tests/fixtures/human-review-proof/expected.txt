@@ -4,7 +4,7 @@ validate --typo: ERROR: unknown option(s): --strict-guied
 validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
 validate --typo: exit 2
 apply: exit 0
-apply --verify: ⚠ human review declared, human evidence not supplied — not run, not counted as passed: specs/017-proof/T004
+apply --verify: ⚠ human review declared, human evidence not supplied — the human part is not run, not counted as passed: specs/017-proof/T004
 apply --verify: ⚠ 1 test file(s) a task writes are not run by its Verification or a feature-scoped header — their test bodies are unmeasured
 apply --verify: exit 0
 apply --typo: ERROR: unknown option(s): --verfy

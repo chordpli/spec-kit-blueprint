@@ -846,7 +846,9 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         print(f"  Base: {len(base_tasks)} referenced task(s); commands omitted from feature gate")
     run_tasks = (base_tasks if scope == "all" else []) + tasks
     task_cmds = {tid: verification_commands(section) for tid, section in run_tasks}
-    humans = {tid for tid, section in run_tasks if not task_cmds[tid] and human_reviews(section)}
+    # Every task that leaves part of its check to a person, with or without a command
+    # beside it: a static README assertion does not settle the wording it cannot read.
+    humans = {tid for tid, section in run_tasks if human_reviews(section)}
     order, owners, silent = [], {}, []
     for tid, _section in run_tasks:
         cmds = task_cmds[tid]
@@ -951,7 +953,7 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         if silent:
             print(f"    No runnable command: {_ids(silent)}")
         if humans:
-            record("warn", f"human review declared, human evidence not supplied — not run, not counted as passed: {_ids(humans)}",
+            record("warn", f"human review declared, human evidence not supplied — the human part is not run, not counted as passed: {_ids(humans)}",
                    always=True)
         header_cmds = [test_cmd] if include_header else []
         unexercised = []

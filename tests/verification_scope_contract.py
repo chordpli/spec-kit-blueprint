@@ -170,6 +170,12 @@ class ScopeContracts(unittest.TestCase):
         self.assertIn('human evidence not supplied', out)
         self.assertIn('not counted as passed: specs/a/T002', out)
         self.assertNotIn('B remains red', out)
+        # A static assertion beside a human line runs; the human part is still listed.
+        both = ('**Verification**: `python3 a.py`\n\nHuman review: the wording reads correctly.')
+        rc, out = self.run_gate([('specs/a/T003', both)], scope='feature')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('Task-specific command results passed: specs/a/T003', out)
+        self.assertIn('not counted as passed: specs/a/T003', out)
 
     def test_shared_command_is_claimed_coverage_not_task_status(self):
         shared = '**Verification**: `python3 b.py`'
