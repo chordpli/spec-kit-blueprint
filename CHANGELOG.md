@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer mined for backticked commands. The task is counted, not failed, and listed as
   `human evidence not supplied`, also when a static assertion runs beside it.
 - A test file a task writes that neither its Verification nor a feature-scoped header
-  runs is flagged: its test bodies are unmeasured.
+  runs is flagged: its test bodies are unmeasured. A command runs the file when it names its
+  path, its basename, or its stem as a class or module (`ledger.CancellationSuccessTest`);
+  without the last form all seven test classes of the R14 senior project were flagged
+  although their Verification ran each of them.
 - `validate-scaffold.sh` no longer reads a call whose argument list is still open at the
   end of the line — `test("…", () => {` — as a declaration. A finished one-line node:test
   file failed `--done` with six `declares test` findings before this; a renamed declared

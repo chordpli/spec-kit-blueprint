@@ -688,10 +688,17 @@ def test_files(section: str) -> list[str]:
 
 
 def runs_file(cmds: list[str], path: str) -> bool:
-    """Whether one of these commands names the file or runs the whole suite holding it."""
+    """Whether one of these commands names the file or runs the whole suite holding it.
+
+    A file is named by its path, its basename, or its stem as a class or module name —
+    `./tools/test-x.sh ledger.CancellationSuccessTest` runs CancellationSuccessTest.java.
+    """
     base = os.path.basename(path)
+    stem = os.path.splitext(base)[0]
     for cmd in cmds:
         if path in cmd or re.search(r"(?<![\w.-])" + re.escape(base) + r"(?![\w.-])", cmd):
+            return True
+        if re.search(r"(?<![\w-])" + re.escape(stem) + r"(?![\w-])(?!\.\w)", cmd):
             return True
         body = cmd[len("set -e\n"):] if cmd.startswith("set -e\n") else cmd
         if any(SUITE_RUNNER.match(ln.strip().lstrip("$ ").strip()) for ln in body.splitlines()):

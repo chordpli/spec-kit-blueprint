@@ -203,6 +203,14 @@ class ScopeContracts(unittest.TestCase):
         self.assertTrue(applier.runs_file(applier.verification_commands(suite), 'tests/test_store.py'))
         self.assertFalse(applier.runs_file(['python3 -m unittest tests/test_other.py'], 'tests/test_store.py'))
 
+    def test_test_file_run_by_class_name_is_measured(self):
+        # R14 senior: a project runner takes the test class, not the path.
+        java = 'src/test/java/ledger/CancellationSuccessTest.java'
+        self.assertTrue(applier.runs_file(['./tools/test-cancellation.sh ledger.CancellationSuccessTest'], java))
+        self.assertTrue(applier.runs_file(['python3 -m unittest tests.test_store'], 'tests/test_store.py'))
+        self.assertFalse(applier.runs_file(['./tools/test-cancellation.sh ledger.CancellationSuccessTestX'], java))
+        self.assertFalse(applier.runs_file(['node test/report.js'], 'test/report.test.js'))
+
     def test_nested_copy_names_the_root_it_read(self):
         # A copy inside a repository, with no .git of its own, belongs to that repository.
         with tempfile.TemporaryDirectory() as outer:
