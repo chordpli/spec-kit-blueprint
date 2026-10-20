@@ -388,6 +388,43 @@ class CalcTest(unittest.TestCase):
                 self.assertNotIn('`doubled`', out)
                 self.assertNotIn('`tripled`', out)
 
+    def test_untouched_modify_file_fails_done_both_bash_versions(self):
+        # R18 guru: a (modify)-only task never typed leaves no marker and no declaration,
+        # and --done passed over it.
+        bp = ("# Blueprint: cli\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+              "### T001: Add the verb\n\n**File**: `pkg/cli.py` (modify)\n\n"
+              "**Before**:\n```python\nUSAGE = \"calc double N\"\n```\n\n"
+              "**After**:\n```python\nUSAGE = \"calc double N | calc halve N\"\n```\n")
+        scaffold = MODULE.parents[1] / 'bash/validate-scaffold.sh'
+        git = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false']
+        for shell in ('/bin/bash', '/opt/homebrew/bin/bash'):
+            if not Path(shell).exists():
+                continue
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+                Path(root, 'pkg').mkdir()
+                Path(root, 'pkg/cli.py').write_text('USAGE = "calc double N"\n')
+                subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+                subprocess.run(git + ['commit', '-qm', 'base'], cwd=root, check=True)
+                head = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], cwd=root, text=True).strip()
+                Path(root, 'specs/021-cli').mkdir(parents=True)
+                Path(root, 'specs/021-cli/blueprint.md').write_text(bp.format(head=head))
+
+                def done():
+                    r = subprocess.run([shell, str(scaffold), 'specs/021-cli', '--done'], cwd=root,
+                                       capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+                    return r.returncode, r.stdout
+                rc, out = done()
+                self.assertEqual(rc, 1, out)
+                self.assertIn(f'1 file(s) a (modify) task changes are byte-identical to HEAD {head}: pkg/cli.py', out)
+                Path(root, 'pkg/cli.py').write_text('USAGE = "calc double N | calc halve N"\n')
+                rc, out = done()
+                self.assertEqual(rc, 0, out)
+                self.assertIn(f'all 1 existing file(s) a (modify) task changes have changed since HEAD {head}', out)
+                Path(root, 'specs/021-cli/blueprint.md').write_text(bp.format(head='0123456789ab'))
+                rc, out = done()
+                self.assertIn('not measured — this clone does not contain HEAD 0123456789ab', out)
+
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')
         self.assertEqual(applier.test_scope('**Test Scope**: feature'), 'feature')

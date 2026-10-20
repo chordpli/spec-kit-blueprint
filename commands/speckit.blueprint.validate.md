@@ -57,7 +57,8 @@ python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATUR
 # `Task proof` (task-specific, behind a failed dependency, non-discriminating test tasks,
 # shared, human evidence, unmeasured test files). Exit 0 = the commands passed, not every
 # task proven; a script reads the `Proof summary:` line.
-# no declared file still carries a marker, no declared name is missing, no ticked row lies
+# no declared file still carries a marker, no declared name is missing, no ticked row lies,
+# and no existing file a (modify) task changes is byte-identical to the blueprint's HEAD stamp
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
 # and the same question about the whole repository, not just this feature
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
@@ -212,6 +213,14 @@ production code, with `All checks passed` on every run. With `--done`, a declare
 carries a not-implemented marker is a failure, and so is a declaration the blueprint promised that
 the file does not have. Run it on the commit that closes the feature; the two flags contradict each
 other and passing both is an error.
+
+A `(modify)` task that was never started leaves neither: in guide mode nobody pasted its marker,
+and a hunk that adds a usage string or an import declares nothing. So `--done` also asks whether
+each existing file a `(modify)` task changes has moved at all since the commit the `**Sources**`
+line stamps (`| HEAD <sha>`). A file byte-identical to that commit fails, naming the file. A file
+the stamped commit does not have (this feature created it) is not asked. With no stamp, or a clone
+that does not contain the stamped commit, the line says "not measured" and nothing fails. The
+check cannot tell a task never done from a blueprint stamped after the work; the failure says so.
 
 `--all` asks the same question of every `specs/*/` that has a blueprint, and fails if any of them
 does. Every check here is scoped to the files one blueprint declares, so "is anything in this

@@ -147,7 +147,7 @@ still exercise more than that prefix, so report its declared scope separately.
 | State | Evidence | Guarantee |
 |---|---|---|
 | document-valid | document validator command and exit | document structure; no runtime behavior |
-| scaffold-complete | feature `--done` command and exit | declared files/symbols and no remaining markers; no runtime behavior |
+| scaffold-complete | feature `--done` command and exit | declared files/symbols, no remaining markers, and every existing `(modify)` file changed since the stamp; no runtime behavior |
 | behavior-verified | focused assertion command, exit, tested scope and unmeasured contracts | the named assertions passed against the working tree |
 
 Record **pass**, **fail**, or **not run** for each state, with the actual command.

@@ -391,6 +391,7 @@ fi
 header "2. File Existence (NEW files from blueprint)"
 
 NEW_FILES=()
+MODIFY_FILES=()
 # A blueprint quotes markdown templates, ADRs and properties files inside its code
 # blocks, so `**File**:` lines and file tables appear *inside* fences as often as
 # outside them. Blank the fenced lines first, the way the Python parser does, or a task
@@ -453,6 +454,8 @@ while IFS= read -r line; do
                 token_kind="$(echo "$token_kind" | tr '"'"'[:upper:]'"'"' '"'"'[:lower:]'"'"')"
                 if [[ "$token_kind" == new* ]] || [[ "$token_kind" == "all new"* ]]; then
                     for pp in "${pending[@]}"; do NEW_FILES+=("$pp"); done
+                elif [[ "$token_kind" == modify* ]]; then
+                    for pp in "${pending[@]}"; do MODIFY_FILES+=("$pp"); done
                 fi
                 pending=()
             fi
@@ -1061,6 +1064,46 @@ if [[ "$DONE" == true ]]; then
         echo "      --done says this feature is finished. Run /speckit.blueprint.cleanup, or drop --done."
     else
         pass "no declared file carries a not-implemented marker"
+    fi
+
+    # A (modify) task that was never started leaves nothing behind: no marker, because in
+    # guide mode nobody pasted the hunk, and no declaration, because the hunk adds a usage
+    # string and an import rather than a function. A reviewer removed the whole CLI task
+    # of a feature and --done said "All checks passed" — every check above reads what is
+    # in a file, and an untouched file has nothing in it to read. The one question that
+    # sees an absence is whether the file moved at all since the commit the blueprint
+    # stamps. Measured over 22 controls and six real trees: it fires on the four controls
+    # that leave a (modify) file untouched and on the two half-finished trees, and on none
+    # of the five format controls or the complete trees.
+    STAMP=$(grep -iE '^\*\*sources\*\*' "$GUIDE" 2>/dev/null | head -1 | grep -oE 'HEAD[[:space:]]+[0-9a-f]{6,40}' | grep -oE '[0-9a-f]{6,40}$' || true)
+    if [[ ${#MODIFY_FILES[@]} -gt 0 ]]; then
+        if [[ -z "$STAMP" ]]; then
+            echo "    (modify) files against the stamp: not measured — the blueprint has no \`| HEAD\` stamp"
+        elif ! git -C "$REPO_ROOT" rev-parse --verify --quiet "$STAMP^{commit}" >/dev/null 2>&1; then
+            echo "    (modify) files against the stamp: not measured — this clone does not contain HEAD $STAMP"
+        else
+            UNTOUCHED=()
+            MOD_CHECKED=0
+            for f in "${MODIFY_FILES[@]}"; do
+                dup=false
+                for q in "${UNTOUCHED[@]}"; do [[ "$q" == "$f" ]] && dup=true && break; done
+                [[ "$dup" == true ]] && continue
+                [[ -f "$REPO_ROOT/$f" ]] || continue
+                # A file the stamped commit does not have was created by this feature, and
+                # "unchanged since" means nothing for it.
+                git -C "$REPO_ROOT" cat-file -e "$STAMP:$f" 2>/dev/null || continue
+                MOD_CHECKED=$((MOD_CHECKED + 1))
+                if git -C "$REPO_ROOT" diff --quiet "$STAMP" -- "$f" 2>/dev/null; then
+                    UNTOUCHED+=("$f")
+                fi
+            done
+            if [[ ${#UNTOUCHED[@]} -gt 0 ]]; then
+                fail "${#UNTOUCHED[@]} file(s) a (modify) task changes are byte-identical to HEAD $STAMP: $(printf '%s, ' "${UNTOUCHED[@]}" | sed 's/, $//')"
+                echo "      The task that modifies them was never done — or the blueprint was stamped after the work, and its stamp is what is wrong."
+            elif [[ "$MOD_CHECKED" -gt 0 ]]; then
+                pass "all $MOD_CHECKED existing file(s) a (modify) task changes have changed since HEAD $STAMP"
+            fi
+        fi
     fi
 fi
 
