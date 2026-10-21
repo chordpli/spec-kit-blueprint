@@ -56,7 +56,11 @@ measured, and a shared command measures no single task:
   warned about and not counted as passed. Measured on the R19 guru copies: the three test
   tasks of the copy whose tests skip the limit (`t3`, `t3b`) are now named, the finished
   copy's are not. A dependency that only creates files is not probed this way — removing it
-  breaks the test's import, so red there would mean nothing.
+  breaks the test's import, so red there would mean nothing. The probe takes the
+  `**Dependencies**` line as the test's target. Where the line names something else, it
+  misfires: the finished R19 workspace's feature 004 has a library-rejection test whose line
+  names the CLI task and a history-compatibility test whose line names the same task, and both
+  are reported blind (2 of 6 test tasks; 0 on the six R18 trees).
 - **A red task that depends on a red task** (its `**Dependencies**` line, followed through)
   is listed as failed *behind* that dependency. A test of the CLI is red when the CLI is
   missing, whether or not the test was written; the result is still a failure, but it cannot

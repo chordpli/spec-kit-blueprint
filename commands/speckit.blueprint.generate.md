@@ -591,6 +591,11 @@ What no script can check, and what you must therefore check yourself before fina
   because it "lets the caller choose the day", and adopted a `LEDGER_NOW` variable that lets
   the caller choose the day; every gate passed and a limit could be bypassed by dating a
   transfer in 2030.
+- **Test targets**: a test-writing task's `**Dependencies**` names the task whose code its
+  test exercises, and nothing else. `--verify` reverts that task's regions alone and expects the
+  test to go red; a test of the library whose line names the CLI task, or a compatibility test
+  whose line names the feature it is compatible with, is reported as blind to its target.
+  Measured on the R19 workspace: two such lines in feature 004 (`T007 <- T003`, `T009 <- T003`).
 - **Narration**: no comment inside a code block that merely restates the adjacent line (Step 3c).
 - **Invention**: every task whose basis is absent from the artifacts is marked blocked and listed in
   Open Questions rather than filled with a plausible design (Step 3d).
