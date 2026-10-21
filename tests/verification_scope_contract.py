@@ -632,6 +632,29 @@ class CalcTest(unittest.TestCase):
             self.assertIn('Observed there, not necessarily caused there — a passed dependency wrote the same'
                           ' file(s): specs/022-two/T002 with T001 (pkg/calc.py)', out)
 
+    def test_date_rules_without_a_pinned_time_zone_are_warned_about(self):
+        # R19 guru m3a: a local-date bug passed every oracle case under TZ=UTC.
+        validator = MODULE.with_name('validate_blueprint.py')
+        bp = ("# Blueprint: day\n\n**Mode**: guide\n\n## Requirements Reference\n\n- **FR-001**: {rule}\n\n"
+              "### T001: Day\n\n**File**: `src/day.js` (new)\n\n**Requirements**: FR-001\n\n**Why**: one day rule.\n\n"
+              "**Verification**: `node specs/023-day/acceptance.mjs`\n")
+
+        def validate(rule, oracle):
+            with tempfile.TemporaryDirectory() as root:
+                subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+                Path(root, 'specs/023-day').mkdir(parents=True)
+                Path(root, 'specs/023-day/blueprint.md').write_text(bp.replace('{rule}', rule))
+                Path(root, 'specs/023-day/acceptance.mjs').write_text(oracle)
+                r = subprocess.run([sys.executable, str(validator), 'specs/023-day'], cwd=root,
+                                   capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+                return r.stdout
+        unpinned = "spawnSync(process.execPath, ['probe.mjs'], { env: process.env });\n"
+        pinned = "spawnSync(process.execPath, ['probe.mjs'], { env: { ...process.env, TZ: 'Pacific/Honolulu' } });\n"
+        out = validate('A day is a UTC calendar date.', unpinned)
+        self.assertIn('the document states date or time rules (calendar date, utc) and no check pins a time zone', out)
+        self.assertIn('[12] Time zones — 1 check(s) passed', validate('A day is a UTC calendar date.', pinned))
+        self.assertNotIn('[12] Time zones', validate('An amount is a positive integer.', unpinned))
+
     # --- R19: documentation examples run as the document on disk has them ---------------
 
     README_BP = ("# Blueprint: docs\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
