@@ -1439,6 +1439,31 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating - set(weak_against))}")
         if own_fail - own_blocked:
             print(f"    Task-specific command results failed: {_ids(own_fail - own_blocked)}")
+            # A failure is reported where it was observed. A reviewer put the defect in a
+            # helper an earlier task wrote, whose own cases did not reach it, and the
+            # output read "T006 failed" beside "T002 passed". Nothing here can tell which
+            # task's lines are wrong; it can say which passed tasks wrote the same files.
+            sections = dict(run_tasks)
+            passed_any = own_pass | shared_pass
+            shared_code = []
+            for tid in sorted(own_fail - own_blocked):
+                mine = {p for p, k in file_kinds(sections[tid]) if k in ("new", "modify")}
+                prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+                seen, stack, hits = set(), [prefix + d for d in dependencies(sections[tid])], []
+                while stack:
+                    d = stack.pop()
+                    if d in seen or d not in sections:
+                        continue
+                    seen.add(d)
+                    stack += [prefix + x for x in dependencies(sections[d])]
+                    common = sorted(mine & {p for p, k in file_kinds(sections[d]) if k in ("new", "modify")})
+                    if d in passed_any and common:
+                        hits.append(f"{d.rsplit('/', 1)[-1]} ({', '.join(common)})")
+                if hits:
+                    shared_code.append(f"{tid} with {', '.join(sorted(hits))}")
+            if shared_code:
+                print("    Observed there, not necessarily caused there — a passed dependency wrote the same file(s): "
+                      + "; ".join(shared_code[:6]) + (f" (+{len(shared_code) - 6} more)" if len(shared_code) > 6 else ""))
         if own_blocked:
             print("    Task-specific command results failed behind a failed dependency (not separable from it): "
                   + ", ".join(f"{t} <- {'/'.join(d.rsplit('/', 1)[-1] for d in behind[t])}"

@@ -615,6 +615,23 @@ class CalcTest(unittest.TestCase):
                     self.assertIn('task-specific 3 passed, 0 failed', out)
                     self.assertIn('test tasks blind to their target 0', out)
 
+    def test_failure_names_passed_dependencies_that_wrote_the_same_file(self):
+        # R19 guru m4b: the defect was in a helper T002 wrote and T006 was reported failed
+        # with nothing to say T002's code was in the path.
+        bp = self.SCALE_BP.replace("### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n",
+                                   "### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                                   "**Dependencies**: T001\n\n")
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'pkg/__init__.py': '', 'pkg/calc.py': self.SCALE_STAMPED}, bp)
+            Path(root, 'pkg/calc.py').write_text(self.SCALE_DONE.replace('x * k', 'x * k + 1'))
+            Path(root, 'tests').mkdir()
+            Path(root, 'tests/test_calc.py').write_text('import unittest\n')
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('Task-specific command results failed: specs/022-two/T002\n', out)
+            self.assertIn('Observed there, not necessarily caused there — a passed dependency wrote the same'
+                          ' file(s): specs/022-two/T002 with T001 (pkg/calc.py)', out)
+
     # --- R19: documentation examples run as the document on disk has them ---------------
 
     README_BP = ("# Blueprint: docs\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
