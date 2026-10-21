@@ -232,7 +232,10 @@ applied in order to the stamped files (`scripts/python/task_hunks.py`, which nee
 task's hunks are mapped to the stamped commit's line numbers, and a task none of whose regions
 differs from the stamp fails as `(modify) task(s) left every line their hunks change as HEAD … had
 it`. Blank and bracket-only lines around a region count as part of it, because a diff may place an
-inserted function above the `}` that closes the one before it. A task whose hunks do not apply to
+inserted function above the `}` that closes the one before it, and an insertion counts at every
+gap the diff could equally have put it — a method ending in `return true;` and `}` inserted after
+another that ends the same way. The same matching decides what the `--verify` probe of a test
+task's dependency puts back. A task whose hunks do not apply to
 the stamped files is listed as not measured. A task whose regions touch another task's (an
 insertion right beside an edit) can be read as done because its neighbour was: the check errs
 toward passing.
