@@ -524,6 +524,11 @@ class CalcTest(unittest.TestCase):
             done = stamped.replace('}\n\nexport function list', '}\n\nexport function b() {\n  return 2;\n}\n\nexport function list')
             Path(root, 'src/m.js').write_text(done)
             self.assertEqual(applier.untouched_tasks(root, head, tasks), ([], {}))
+            # Written as an arrow, the insertion is placed one line below the `}`, where the
+            # blueprint's was placed above it: two gaps that only blank and bracket lines part.
+            Path(root, 'src/m.js').write_text(stamped.replace('}\n\nexport function list',
+                                                              '}\n\nexport const b = () => 2;\n\nexport function list'))
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([], {}))
             Path(root, 'src/m.js').write_text(stamped.replace('return [];', 'return [1];'))
             self.assertEqual(applier.untouched_tasks(root, head, tasks), ([('T001', 'src/m.js')], {}))
 
