@@ -1,0 +1,26 @@
+validate: exit 0
+validate --strict-guide: exit 0
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
+apply: exit 0
+apply --verify: ⚠ 1 test task(s) passed, and whether their tests discriminate was not measured
+apply --verify: exit 0
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
+scaffold: exit 0
+scaffold --fresh: exit 0
+scaffold --done: ✗ src/format.js — the blueprint declares `formatRow` and the file does not declare it
+scaffold --done: exit 1
+scaffold --strict: ✗ src/format.js — the blueprint declares `formatRow`, the file does not declare it, and the file carries no marker: nothing here is unfinished, so the name was renamed or removed
+scaffold --strict: exit 1
+scaffold --markers:   (0 marker line(s) in 3 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ✗ src/format.js — the blueprint declares `formatRow` and the file does not declare it
+scaffold --done --all: ✗ 1 of 1 feature(s) did not pass: specs/016-registration
+scaffold --done --all: exit 1
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2

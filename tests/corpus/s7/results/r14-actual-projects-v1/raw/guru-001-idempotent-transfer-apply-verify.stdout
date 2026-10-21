@@ -1,0 +1,8 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/001-idempotent-transfer
+Mode: guide-scaffold | 7 task sections
+
+=== Verification ===
+  against a copy of your working tree (/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-6xjbs2y2)
+  ran 3 distinct command(s) covering 3 task(s): 3 passed, 0 failed; 4 task(s) name no runnable command
+  3 task(s) verify against your tree: T006, T009, T012

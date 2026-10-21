@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "executions.jsonl": {"required": ["schema", "run_id", "campaign_id", "scenario_id", "correlation_id", "state", "tool", "argv", "cwd", "exit", "timed_out", "duration_ms", "stdout", "stdout_sha256", "stderr", "stderr_sha256", "tool_sha256", "source_manifest", "headline_count", "nonheadline_failure"]},
+  "emissions.jsonl": {"required": ["schema", "emission_id", "run_id", "seq", "tool", "check_id", "kind", "mark", "headline", "stream", "line", "fingerprint"]},
+  "adjudications.jsonl": {"required": ["schema", "emission_id", "classification", "reason", "adjudicator", "evidence"], "classification": ["actionable", "informational", "noise", "unknown"]},
+  "states": ["baseline", "probe", "mutation"],
+  "note": "This is the ledger's documented manifest, not formal JSON Schema. Unknown is a completed, reasoned human classification. An absent adjudication is pending and invalid for a completed campaign."
+}

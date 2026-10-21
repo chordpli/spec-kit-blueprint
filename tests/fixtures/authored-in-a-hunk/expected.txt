@@ -1,0 +1,32 @@
+validate: ⚠ 1 identifier(s) inside code blocks carry no feature number
+validate: ⚠ prose in this task spells out the code it is standing in for
+validate: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate: exit 0
+validate --strict-guide: ⚠ 1 identifier(s) inside code blocks carry no feature number
+validate --strict-guide: ✗ prose in this task spells out the code it is standing in for
+validate --strict-guide: ⚠ no **Sources** stamp — staleness cannot be checked (regenerate to add one)
+validate --strict-guide: exit 1
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
+apply: exit 0
+apply --verify: exit 0
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
+scaffold: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold: exit 0
+scaffold --fresh: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --fresh: exit 0
+scaffold --done: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --done: exit 0
+scaffold --strict: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --strict: exit 0
+scaffold --markers:   (0 marker line(s) in 1 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ⚠ No NEW file paths detected in blueprint (check blueprint format)
+scaffold --done --all: exit 0
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2

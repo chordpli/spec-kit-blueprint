@@ -1,0 +1,34 @@
+=== Blueprint Document Validator 1.2.0 ===
+Feature: specs/002-monthly-summary
+Mode: guide | 206 lines | 9 task sections
+
+[0] Sibling slices
+  ✓ this feature is split across 2 blueprint(s)
+      base: specs/001-csv-import/blueprint.md | continued in: none — 12 task(s) live in them
+
+[1] Task coverage — 2 check(s) passed
+
+[2] Rationale (Why) — 1 check(s) passed
+
+[3] Working-tree claims — 9 check(s) passed
+
+[4] Multi-file task labels — 1 check(s) passed
+
+[5] Placeholder content — 2 check(s) passed
+
+[6] Guide-mode bodies — 1 check(s) passed
+
+[7] Regeneration — 1 check(s) passed
+
+[8] Freshness — 1 check(s) passed
+
+[9] Cited requirements reproduced — 1 check(s) passed
+
+[10] Forward references — 1 check(s) passed
+
+[11] Open questions — 1 check(s) passed
+
+=== Summary ===
+  PASS: 22  WARN: 0  FAIL: 0
+
+All checks passed

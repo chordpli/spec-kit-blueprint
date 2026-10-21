@@ -1,0 +1,52 @@
+{
+  "schema": "r15-repro-capsule-v1",
+  "source_round": "round-14",
+  "projects": {
+    "novice": {
+      "head": "1bb97526918b00c834d0fe6a5771c0cc0ecdc344",
+      "commits": {
+        "baseline": "8a7c239421595d4cfbc1279ab2c634655d8bb5a6",
+        "guide": "ad7fa43d5a9d7d0acc953567bc779e8a6a40b537",
+        "half": "7e9206acac5944421fe9b6c37cbe35422dcac134",
+        "complete": "88fb6f589f7848030ca066edb99d54038209d13e",
+        "evidence": "1bb97526918b00c834d0fe6a5771c0cc0ecdc344"
+      },
+      "repo_relative": "project-novice.bundle",
+      "bundle": "project-novice.bundle",
+      "bundle_bytes": 262037,
+      "bundle_sha256": "7e74e58637320cd226fe106165bd32d37e696ac9529733559ef80ea4b3101c62",
+      "bundle_verify": "project-novice.verify.txt"
+    },
+    "senior": {
+      "head": "751a30839d9741eabdebd476ae9ed05ab7bee4a6",
+      "commits": {
+        "baseline": "a9b46e889b6cec8741c79eae6fd235f85cb183e1",
+        "guide": "a9b46e889b6cec8741c79eae6fd235f85cb183e1",
+        "half": "8c69bc5033933376e85751eb6c3f56b924398519",
+        "complete": "39bd1f09d5771d670bf5cad110db5c030dcab59d",
+        "evidence": "751a30839d9741eabdebd476ae9ed05ab7bee4a6"
+      },
+      "repo_relative": "project-senior.bundle",
+      "bundle": "project-senior.bundle",
+      "bundle_bytes": 270596,
+      "bundle_sha256": "c56cace0b573d22955be7a7fb9f816be0ebe7cf64e55de87269b085f08fa197b",
+      "bundle_verify": "project-senior.verify.txt"
+    },
+    "guru": {
+      "head": "cf57436065292db3c1c5adc0173a7a40a78f129e",
+      "commits": {
+        "baseline": "617d83ff3bf3fcc6ace8d263a7e9a122b49cfe92",
+        "guide": "617d83ff3bf3fcc6ace8d263a7e9a122b49cfe92",
+        "half": "a3312ad985d9a763d3427e3703b91342869c13d6",
+        "complete": "bd8d9ec22a098fca3e4823e62be2a6a71ce2af02",
+        "evidence": "cf57436065292db3c1c5adc0173a7a40a78f129e"
+      },
+      "repo_relative": "project-guru.bundle",
+      "bundle": "project-guru.bundle",
+      "bundle_bytes": 290548,
+      "bundle_sha256": "eea5cf5d337c00b07f5bb25284d8d91a17dd1fd4990ed3f5b11c75d0d97eb0f5",
+      "bundle_verify": "project-guru.verify.txt"
+    }
+  },
+  "storage": "tests/corpus/s7/projects"
+}

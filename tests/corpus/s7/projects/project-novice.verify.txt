@@ -1,0 +1,5 @@
+/Users/pli/Desktop/side/spec-kit-blueprint/.omc/handoffs/blueprint-review-loop/round-15/reports/independent/repro-capsule/project-novice.bundle is okay
+The bundle contains this ref:
+1bb97526918b00c834d0fe6a5771c0cc0ecdc344 HEAD
+The bundle records a complete history.
+The bundle uses this hash algorithm: sha1

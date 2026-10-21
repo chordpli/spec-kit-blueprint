@@ -1,0 +1,2212 @@
+#!/usr/bin/env python3
+"""apply_blueprint.py — turn a blueprint's promise into machine evidence.
+
+`validate_blueprint.py` checks the document's shape. This checks its *content*: it
+copies the working tree aside, types every task's code into that copy the way a
+developer would, and then builds it. A blueprint that says "this compiles" either
+survives that or it does not.
+
+Applying is deterministic and unforgiving on purpose. A `**Before**` block is an
+anchor into a real file; if it is not there verbatim, or is there twice, the task is
+reported as a defect rather than repaired by guesswork. Silent repair is what lets a
+lossy hunk reach a reader as if it were sound.
+
+The throwaway tree is a plain recursive copy, not `git worktree add`. A worktree needs
+a git repo and a clean index, and the blueprint most worth checking is the one written
+against uncommitted work; a copy needs neither and cannot touch the original.
+
+Usage: python3 apply_blueprint.py [feature-dir] [--build] [--keep]
+  feature-dir: specs/{feature}/ (default: auto-detect from the current branch)
+  --build:     run the project's build in the copy and report its exit code
+  --keep:      print the copy's path instead of deleting it
+  --require-anchors:
+               fail when a task's code is not anchored, or when nothing anchored at
+               all. Off by default because a guide blueprint of pure instructions
+               legitimately applies nothing; on in CI, where "verified nothing" and
+               "verified everything" must not share an exit code.
+"""
+from __future__ import annotations
+
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True  # the copy lives in the user's .specify/, and a __pycache__ there lands in git status
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _blueprint_parse import (  # noqa: E402  (path set above)
+    base_chain,
+    BaseChainError,
+    body_replaced_by_marker,
+    changed_since,
+    code_blocks,
+    commit_known,
+    dependent_slices,
+    in_commit,
+    file_kinds,
+    foreign_feature_dir,
+    foreign_feature_message,
+    outside_fences,
+    parse_mode,
+    section_events,
+    stamped_head,
+    repo_root,
+    resolve_feature_dir,
+    scan,
+    split_tasks,
+)
+import tempfile
+
+GREEN, YELLOW, RED, CYAN, NC = "\033[0;32m", "\033[0;33m", "\033[0;31m", "\033[0;36m", "\033[0m"
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    GREEN = YELLOW = RED = CYAN = NC = ""
+
+SCRIPT_VERSION = "1.2.0"
+
+# Regenerated, never authored, so copying them only slows the run down; .git would make
+# the copy look like a second checkout. These names mean the same thing at any depth.
+SKIP_ANYWHERE = {".git", "node_modules", "__pycache__", ".venv", ".gradle"}
+# These are build output at the root of a project and ordinary package names below it.
+# Matching them at any depth dropped `src/com/example/build/` from the copy, and --build
+# then failed with "cannot find symbol" while the report blamed the blueprint.
+SKIP_AT_ROOT = {"build", "target", "out", "dist"}
+
+results: list[tuple[str, str, str]] = []  # (status, name, evidence)
+
+# Per-task ✓/⚠ lines are printed only with --verbose. Sixteen "applied" ticks and eight
+# "the tree has moved on" warnings say one thing between them, and the summary says it in
+# a line. Measured over one repository: 33 of the applier's 35 findings were the same two
+# facts repeated per task.
+VERBOSE = False
+
+
+def record(status: str, name: str, evidence: str = "", *, always: bool = False) -> None:
+    results.append((status, name, evidence))
+    if not (VERBOSE or always or status == "fail"):
+        return
+    mark = {"pass": f"{GREEN}✓{NC}", "warn": f"{YELLOW}⚠{NC}", "fail": f"{RED}✗{NC}"}[status]
+    print(f"  {mark} {name}")
+    if evidence:
+        for line in evidence.split("\n"):
+            print(f"      {line}")
+
+
+
+
+# --- Application ------------------------------------------------------------------
+
+
+class Defect(Exception):
+    """The blueprint cannot be applied as written. Never repaired, only reported."""
+
+
+class AlreadyApplied(Exception):
+    """The edit is already in the file — the tree has moved past this blueprint."""
+
+
+class Ambiguous(Exception):
+    """The file has moved since the stamp and this hunk's work is not visibly in it.
+
+    Neither "already applied" nor "the blueprint is wrong" can be shown, so the run says
+    so rather than counting the task as done or sending the reader after a defect.
+    """
+
+
+def replace_once(path: str, before: str, after: str) -> int:
+    """Replace the one occurrence of `before` with `after`; return its 1-based line."""
+    if not os.path.isfile(path):
+        raise Defect(f"{rel(path)}: Before block targets a file that does not exist")
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+
+    candidates = [(before, after)]
+    # The fence contributes the block's final newline; the quoted region may sit at the
+    # end of a file that has none. That end-of-file case is the whole justification, so
+    # it is the whole allowance: dropping the newline anywhere else un-anchors the block
+    # from a line boundary, and `    val fee = 0` then matches inside `    val fee = 0L`
+    # and writes `    val fee = feeOf(x)L` while reporting the task applied.
+    if before.endswith("\n") and text.endswith(before[:-1]):
+        candidates.append((before[:-1], after[:-1] if after.endswith("\n") else after))
+
+    # Lines this hunk would add, compared whole and stripped. Substring comparison made
+    # `def select_entries(` match inside the old signature and called an untouched task done.
+    file_lines = {ln.strip() for ln in text.split("\n") if ln.strip()}
+    added_now = [
+        ln.strip() for ln in after.split("\n")
+        if ln.strip() and ln.strip() not in before and re.search(r"[A-Za-z]", ln)
+        and not re.search(r"\bT\d{3,}:", ln) and ln.strip() not in ("{", "}", "};", ")", ");")
+    ]
+
+    # Would applying duplicate something? A hunk whose Before still matches can still be
+    # one the developer has already made their own way — the After registered three tests
+    # and they had registered one, so applying it registered that one twice. Test the harm
+    # directly rather than guessing from how many added lines happen to appear: a line the
+    # After adds once, already in the file once, becomes two.
+    # "Changed another way since HEAD" is a claim about the developer's file. A file the
+    # copy is building out of this document has no developer's edits in it, and reading one
+    # that way skipped a task nobody had typed — and then reported the run green.
+    editable = in_commit(_root, _stamped_head, rel(path)) if _stamped_head else True
+    # `None` means git could not answer — a shallow clone, a stamp from another machine.
+    # Treating that as "not changed" turned the guard off completely and the hook was
+    # applied a second time on top of itself, silently, under a green last line. The harm
+    # test below is a direct question about this file and does not need the stamp; what
+    # the stamp decides is only whether the answer is "you did this" or "I cannot tell".
+    _changed = changed_since_stamp(rel(path))
+    if editable and any(text.count(b) == 1 for b, _a in candidates):
+        # In the same class this hunk edits, not anywhere in the file. The harm being
+        # tested is "the developer already made this change here"; a new test class that
+        # copies a method from the class above it has the same line, the same line above
+        # that, and a different class — and was reported as already applied.
+        file_lines_seq = text.split("\n")
+        here_scope = None
+        for b, _a in candidates:
+            if text.count(b) == 1:
+                here_scope = _class_at(file_lines_seq, text[: text.index(b)].count("\n"))
+                break
+        would_duplicate = [
+            ln for ln in added_now
+            if after.count(ln) == 1 and ln in file_lines and text.count(ln) == 1
+            and ln not in ("pass", "return", "}", "});") and len(ln) > 12
+            and (here_scope is None
+                 or _class_at(file_lines_seq, next(i for i, x in enumerate(file_lines_seq) if x.strip() == ln)) == here_scope)
+            and _same_neighbour(text, after, ln)
+        ]
+        if would_duplicate:
+            # How much of this hunk is in the file decides the headline: "already applied"
+            # for a hunk that has landed, "partly" for one where a line or two has.
+            here = sum(1 for ln in added_now if ln in file_lines)
+            scope = "" if here == len(added_now) else f" of this task's {len(added_now)} added line(s), {here} present:"
+            if here < len(added_now):
+                # Some of the hunk is here and some is not. That is not evidence the
+                # developer made this change — it is evidence that nothing here can tell,
+                # and every attempt to sharpen the line-matching has been defeated by the
+                # next repository that writes the same idiom twice. Say so instead.
+                raise Ambiguous(
+                    f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r},"
+                    f" but {len(added_now) - here} of its added line(s) are not in the file — nothing was written"
+                )
+            if _changed is None:
+                raise Ambiguous(
+                    f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r},"
+                    f" and this clone cannot resolve HEAD {_stamped_head} to say whether the change is"
+                    f" already made or the file drifted — nothing was written"
+                )
+            # Not a failure when the file matches the stamp and the change is already in
+            # it: that is a blueprint regenerated after the work was typed, which the
+            # README treats as an ordinary thing to do. Calling it a defect turned a
+            # documented workflow red. What matters is that nothing gets written twice.
+            raise AlreadyApplied(
+                f"{rel(path)}:{scope} applying this hunk would duplicate {would_duplicate[0][:50]!r}, which is"
+                f" already in the file — the change has been made another way since HEAD {_stamped_head}"
+            )
+
+    for b, a in candidates:
+        n = text.count(b)
+        if n == 1:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text.replace(b, a, 1))
+            return text[: text.index(b)].count("\n") + 1
+        if n > 1:
+            raise Defect(f"{rel(path)}: Before block matches {n} places — the anchor is ambiguous")
+    # Before the anchor is called a defect: has this edit already been made? Running the
+    # applier on a feature that is already implemented is a category error — the tool
+    # describes work that has not happened yet — and reporting "anchor not found" sends
+    # the reader hunting for a blueprint bug that is not there.
+    if after.strip() and after.strip() in text:
+        raise AlreadyApplied(f"{rel(path)}: the After content is already in the file")
+    # Guide mode: the After adds a signature with a marker body, and the developer then
+    # replaces the marker — so after implementation neither the Before nor the After is in
+    # the file, and "not found verbatim" sent the reader hunting for a blueprint bug. If
+    # every line the After ADDS (markers aside) is in the file, the change has landed.
+    added = [
+        ln.strip() for ln in after.split("\n")
+        if ln.strip() and ln.strip() not in before and not re.search(r"\bT\d{3,}:", ln)
+        and re.search(r"[A-Za-z]", ln) and ln.strip() not in ("{", "}", "};", ")", ");")
+    ]
+    if len(added) >= 1 and all(ln in text for ln in added):
+        raise AlreadyApplied(
+            f"{rel(path)}: the lines the After adds are in the file and its markers are not — implemented since"
+        )
+    _ch = changed_since_stamp(rel(path))
+    # A document with no `| HEAD` stamp makes no claim about which tree it describes, so
+    # "the Before is not in the file" is exactly what it looks like. Only a stamp that
+    # exists and cannot be resolved is a reason to say nothing can tell.
+    if _ch is True or (_ch is None and _stamped_head):
+        # `None` is git declining to answer, which a shallow clone does for every path.
+        # Falling through to "Before block not found verbatim" accused a correct blueprint
+        # of a defect in exactly the checkout CI performs by default.
+        # All of them, not any: a guide skeleton's boilerplate — `raise NotImplementedError(`,
+        # `def setUp(self) -> None:` — appears in every task's block, and one such line
+        # counted a task nobody had started as done.
+        if added_now and all(ln in file_lines for ln in added_now):
+            raise AlreadyApplied(
+                f"{rel(path)}: every line this hunk adds is already in the file, and the file has changed"
+                f" since HEAD {_stamped_head} — implemented since"
+            )
+        # Changed, but this hunk's work is not visibly in it. Could be implemented
+        # differently, could be an earlier task's edits having moved the anchor. Saying
+        # which would be a guess, and a failure here sends the reader after a blueprint
+        # bug that may not exist.
+        if _ch is None:
+            raise Ambiguous(
+                f"{rel(path)}: the Before is not in the file, and this clone cannot resolve HEAD"
+                f" {_stamped_head} — nothing here can say whether the file moved or the quotation is wrong"
+            )
+        raise Ambiguous(
+            f"{rel(path)}: the Before is not in the file, which has changed since HEAD {_stamped_head}"
+            f" — this task may be implemented differently, or an earlier task moved the anchor"
+        )
+    head = before.strip().split("\n")[0][:60]
+    raise Defect(f"{rel(path)}: Before block not found verbatim (starts {head!r})")
+
+
+
+def inside(tree: str, path: str) -> str:
+    """Resolve `path` under `tree`, refusing anything that leaves it.
+
+    Paths come out of the blueprint, and `os.path.join(tree, "/etc/passwd")` is
+    `/etc/passwd` — an absolute or `../` target would write to the real filesystem,
+    breaking the one promise this tool makes about not touching your tree. A symlink
+    inside the copy is followed by open(), so the resolved path is checked too.
+    """
+    full = os.path.realpath(os.path.join(tree, path))
+    root = os.path.realpath(tree)
+    if full != root and not full.startswith(root + os.sep):
+        raise Defect(f"{path}: declared path resolves outside the working copy")
+    return full
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def write_file(path: str, text: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+_tree = ""
+_root = ""
+_stamped_head = ""
+
+
+def changed_since_stamp(rel_path: str):
+    """Has `rel_path` changed in the user's tree since the commit the blueprint stamps?"""
+    return changed_since(_root, _stamped_head, rel_path)
+# Declared-new files that were already on disk and were removed from the copy before applying.
+_overwritten: list[str] = []
+# Tasks where SOME hunks were already in the file. Kept apart from "already applied"
+# because half done is not done, and the summary says so.
+_partly: list[str] = []
+
+
+def rel(path: str) -> str:
+    return os.path.relpath(path, _tree) if _tree else path
+
+
+def _above(block: str, ln: str) -> str:
+    """The nearest non-blank line above `ln` in `block`, stripped."""
+    lines = [x.strip() for x in block.split("\n")]
+    try:
+        i = lines.index(ln)
+    except ValueError:
+        return ""
+    for j in range(i - 1, -1, -1):
+        if lines[j]:
+            return lines[j]
+    return ""
+
+
+CLASS_DECL = re.compile(
+    r"(?:export\s+|default\s+|public\s+|private\s+|protected\s+|final\s+|abstract\s+|sealed\s+|open\s+|static\s+|data\s+)*"
+    r"(?:class|interface|record|struct|object|trait|enum)\b"
+)
+
+
+def _class_at(lines: list, idx: int) -> str:
+    """The top-level type declaration this line sits inside, or "" outside one."""
+    for j in range(min(idx, len(lines) - 1), -1, -1):
+        ln = lines[j]
+        if not ln.strip():
+            continue
+        if len(ln) - len(ln.lstrip()) == 0 and CLASS_DECL.match(ln.strip()):
+            return ln.strip()
+    return ""
+
+
+def _same_neighbour(text: str, after: str, ln: str) -> bool:
+    """Would the After put this line where the file already has it?
+
+    A method name repeats across classes: `def test_crosses_year_boundary` under two of
+    them is not one line written twice. Comparing the line alone read the second class's
+    method as the first's, called the hunk already applied, and skipped it.
+    """
+    want = _above(after, ln)
+    return not want or _above(text, ln) == want
+
+
+def apply_task(tree: str, section: str) -> tuple[str, int, set[str]]:
+    """Apply one task section to the copied tree. Returns (note, blocks consumed)."""
+    # A path declared twice keeps its FIRST kind: `(new)` then `(modify)` is a
+    # create-then-edit narrative, and taking the last left the file unwritten.
+    kinds: dict[str, str] = {}
+    for _p, _k in file_kinds(section):
+        kinds.setdefault(_p, _k)
+    paths = list(kinds)
+    if not paths:
+        return "no file declared", 0, set()
+    if all(k == "delete" for k in kinds.values()):
+        return "delete task", 0, set()
+    # A (modify) path has to be in the tree before anything else is decided. Checked at
+    # the write site, a task whose only block had no marker was reported "unanchored" and
+    # never reached the check — a wrong path with an unlabelled block passed all three
+    # tools with exit 0.
+    for path, kind in kinds.items():
+        if kind == "modify" and not os.path.isfile(inside(tree, path)):
+            raise Defect(f"{path}: declared (modify) but not in the tree — the path is wrong, or the file is new and mislabelled")
+
+    def hunk_target(current: str | None) -> str:
+        """Which file a **Before**/**After** pair edits.
+
+        A multi-file task labels its blocks, but a task that creates two files and edits
+        a third often introduces the hunks in prose ("the four TransferService edits
+        below") and leaves the last label pointing at a file it has finished writing. A
+        hunk can only edit a declared `(modify)` path, so when there is exactly one it is
+        the target and nothing is being guessed. When there are several, it is a real
+        ambiguity in the document and the task fails.
+        """
+        if current and kinds.get(current) in ("modify", "unknown"):
+            return current
+        mods = [p for p, k in kinds.items() if k == "modify"]
+        if len(mods) == 1:
+            return mods[0]
+        if not mods:
+            raise Defect(
+                "a Before/After hunk edits an existing file, and this task declares no (modify)"
+                " file — if the file it edits already exists, declare it (modify), not (new)"
+            )
+        raise Defect(
+            "a Before/After hunk follows a **`"
+            + (current or "?")
+            + f"`** block, and the task declares {len(mods)} modified files"
+            + " — label the hunk with its path"
+        )
+
+    current = paths[0] if len(paths) == 1 else None
+    # A single new file's one code block is that file, with nothing to announce it. For
+    # a modify, a bare block could be a fragment or the whole file, so it needs saying.
+    pending = "content" if current and kinds[current] == "new" else None
+    before: str | None = None
+    before_at: str | None = None
+    cite: int | None = None
+    applied, unanchored, seen, inferred = 0, 0, 0, 0
+    # A task with several hunks against an implemented file used to stop at the first
+    # one already present and report "the After content is already in the file" for
+    # the whole task — true of that hunk, not of the two that no longer matched at all.
+    hunks_already, hunks_missing, misnumbered, hunks_unclear = 0, [], [], []
+    written: list[str] = []
+    hunk_defects: list[Defect] = []
+
+    for kind, payload in section_events(section):
+        if kind == "label":
+            # A label naming a path the task does not declare is how a block reached a
+            # file nobody asked for: the orphan sweep removed the stale skeleton and this
+            # wrote it straight back, so the build passed over a mistyped declaration.
+            if payload not in kinds:
+                raise Defect(
+                    f"a code block is labelled `{payload}`, which this task does not declare"
+                    " — fix the label or add the path to the **File**: line"
+                )
+            current, pending = payload, "content"
+        elif kind == "cite":
+            cite = payload
+            continue
+        elif kind == "directive":
+            if payload == "before":
+                resolved = hunk_target(current)
+                inferred += resolved != current
+                before_at = resolved
+                cite = None
+            pending = payload
+        else:
+            _info, payload = payload
+            seen += 1
+            if pending is None:
+                unanchored += 1
+                continue
+            if pending in ("before", "after"):
+                target = inside(tree, before_at or "")
+            elif current is None:
+                raise Defect("multi-file task has a code block before any **`path`** label")
+            else:
+                target = inside(tree, current)
+            if pending == "before":
+                before = payload
+                pending = None
+            elif pending == "after":
+                if before is None:
+                    raise Defect("an **After** block with no **Before** before it")
+                try:
+                    at = replace_once(target, before, payload)
+                except AlreadyApplied as exc:
+                    hunks_already += 1
+                    hunks_missing.append(str(exc))
+                except Ambiguous as exc:
+                    hunks_unclear.append(str(exc))
+                except Defect as exc:
+                    # Held, not raised: whether this is a defect depends on the other
+                    # hunks. Beside one already in the file it is "implemented since,
+                    # differently"; on its own it is the wrong Before it looks like.
+                    hunk_defects.append(exc)
+                else:
+                    applied += 1
+                    if rel(target) not in written:
+                        written.append(rel(target))
+                    # The number the Before cites against the line the text was found on,
+                    # in the copy as the earlier tasks left it. The document validator
+                    # cannot check a file an earlier task changes; this is the one place
+                    # that can, and a reader following the number deserves to know.
+                    if cite is not None and at != cite:
+                        misnumbered.append(f"{rel(target)}: Before says line {cite}, matched at line {at}")
+                before, pending = None, None
+            elif pending == "replace":
+                write_file(target, payload)
+                pending, applied = None, applied + 1
+                if rel(target) not in written:
+                    written.append(rel(target))
+            elif pending == "content":
+                pending = None
+                declared = kinds.get(current)
+                exists = os.path.exists(target)
+                # A (new) target that exists here was written by an earlier task of this
+                # run — the copy started without any of the blueprint's new files.
+                if declared not in ("new", None) and not exists:
+                    # A `(modify)` path that is not in the tree is a wrong path in the
+                    # blueprint. Creating it from the fragment made a phantom file that
+                    # no source set compiles, so --build passed and nothing was changed.
+                    raise Defect(
+                        f"{rel(target)}: declared ({declared}) but not in the tree —"
+                        " the path is wrong, or the file is new and mislabelled"
+                    )
+                if exists and declared != "new":
+                    # No **Before**, no **Replace entire file** — whether this block is the
+                    # file or a piece of it is not written down anywhere, so it is not applied.
+                    unanchored += 1
+                    continue
+                write_file(target, payload)
+                applied += 1
+                if rel(target) not in written:
+                    written.append(rel(target))
+
+    if before is not None:
+        raise Defect(f"{before_at}: a **Before** block with no **After** after it")
+    if hunk_defects and not hunks_already:
+        raise hunk_defects[0]
+    if hunks_unclear and not applied and not hunks_already:
+        raise Ambiguous("\n  ".join(hunks_unclear[:3]))
+    if hunks_already and not applied:
+        # Nothing of this task's hunks applied fresh: the tree already holds the work,
+        # and a hunk that matched neither Before nor After beside one that did is the
+        # implementation having moved on, not a blueprint bug.
+        total_hunks = hunks_already + len(hunk_defects) + len(hunks_unclear)
+        summary = (
+            f"{hunks_already} of this task's {total_hunks} hunk(s) already in the file"
+            if total_hunks > hunks_already
+            else f"{hunks_already} hunk(s) already in the file"
+        )
+        if hunk_defects:
+            summary += f", {len(hunk_defects)} Before not found — implemented since, differently"
+        raise AlreadyApplied(summary + "".join(f"\n  {m}" for m in hunks_missing[:3]))
+    if applied:
+        # Only the files this task actually wrote. Listing every declared path said a
+        # file was edited when the block meant for it had been left alone.
+        note = f"{applied} edit(s) -> {', '.join(written)}"
+        if inferred:
+            note += f"; {inferred} hunk(s) had no path label, resolved to the sole modified file"
+        if unanchored:
+            note += f"; {unanchored} unanchored block(s) left alone"
+        if hunks_already:
+            note += f"; {hunks_already} hunk(s) were already in the file or implemented since"
+        if hunks_unclear:
+            note += f"; {len(hunks_unclear)} hunk(s) could not be placed or recognised"
+        if hunk_defects:
+            note += f"; {len(hunk_defects)} hunk(s) matched nothing"
+        if misnumbered:
+            note += "".join(f"\n  line number: {m}" for m in misnumbered[:4])
+            if len(misnumbered) > 4:
+                note += f"\n  (+{len(misnumbered) - 4} more)"
+        flags = set()
+        if unanchored:
+            flags.add("unanchored")
+        if hunks_already:
+            flags.add("moved")
+        return note, applied, flags
+    if unanchored:
+        return f"{unanchored} code block(s) with no Before/After or Replace marker", 0, {"unanchored"}
+    return "no code block", 0, set()
+
+
+# --- Copying and building ---------------------------------------------------------
+
+
+def gitignored_dirs(root: str) -> set[str]:
+    """Bare directory names from .gitignore. Anything with a glob or a path is left in."""
+    names = set()
+    path = os.path.join(root, ".gitignore")
+    if os.path.isfile(path):
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.strip().rstrip("/")
+            if line and not line.startswith(("#", "!")) and not re.search(r"[*?\[\]/]", line):
+                names.add(line)
+    return names
+
+
+def copy_tree(root: str) -> str:
+    # A bare name in .gitignore matches at any depth, which is how git reads it too.
+    anywhere = SKIP_ANYWHERE | gitignored_dirs(root)
+    real_root = os.path.realpath(root)
+    dest = tempfile.mkdtemp(prefix="blueprint-apply-")
+
+    def ignore(directory: str, names: list[str]) -> list[str]:
+        drop = anywhere | SKIP_AT_ROOT if os.path.realpath(directory) == real_root else anywhere
+        # Directories only. A source file named `dist` or `out` is authored content.
+        return [n for n in names if n in drop and os.path.isdir(os.path.join(directory, n))]
+
+    try:
+        shutil.copytree(root, dest, dirs_exist_ok=True, symlinks=False,
+                        ignore_dangling_symlinks=True, ignore=ignore)
+    except Exception:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    return dest
+
+
+BUILD_CANDIDATES = [
+    ("tools/build.sh", "bash tools/build.sh"),
+    ("gradlew", "./gradlew build"),
+    ("package.json", "npm test"),
+    ("Makefile", "make test"),
+    (None, "python3 -m unittest discover"),
+]
+
+
+def build_command(tree: str, blueprint: str) -> str | None:
+    for _, line, in_fence, _ in scan(blueprint):
+        if not in_fence and line.startswith("**Build**:"):
+            rest = line.split(":", 1)[1].strip()
+            # The header template teaches `— explanation` for the Mode line twelve lines
+            # above and authors write the Build line the same way, usually with the
+            # command in backticks. Stripping the ends left a backtick in the middle of
+            # the command and the shell died on it: `unexpected EOF while looking for
+            # matching ``'`.
+            quoted = re.search(r"`([^`]+)`", rest)
+            if quoted:
+                return quoted.group(1).strip()
+            return re.split(r"\s+[—–]\s+|\s+-{1,2}\s+", rest, maxsplit=1)[0].strip()
+    for marker, cmd in BUILD_CANDIDATES:
+        if marker and os.path.exists(os.path.join(tree, marker)):
+            return cmd
+    # Nothing declared and nothing recognised. A Python tree at least has a discover
+    # target; inventing a command for anything else would only report its own failure.
+    if any(f.startswith("test") for f in os.listdir(tree)) or os.path.isdir(os.path.join(tree, "tests")):
+        return "python3 -m unittest discover"
+    return None
+
+
+BUILD_TIMEOUT = 900
+VERIFY_TIMEOUT = 300
+
+# A runner, not a sentence. `**Verification**` lines are half prose ("`pace --help` shows
+# `--month`") and half command, and the backticked span that starts with one of these is
+# the half a machine can settle. Anything else in the line is left to the reader — the
+# alternative is running whatever a generated document put between backticks.
+VERIFY_RUNNER = re.compile(
+    r"^(?:python3?|py|bash|sh|zsh|node|npm|npx|yarn|pnpm|make|rake|mvn|gradlew?|\./gradlew"
+    r"|go|cargo|dotnet|swift|ruby|php|pytest|unittest|javac|java|jest|tsc|deno|\./[\w./-]+)\b"
+)
+
+
+# A sentence that predicts its own failure. Guide mode's whole shape is "this is red
+# until the developer writes the body", and a generator says so in the Verification line:
+# "`bash tools/build.sh` fails until T003 supplies an implementation". Running that and
+# counting the failure is the tool disagreeing with a sentence it just read.
+PREDICTS_FAILURE = re.compile(
+    r"\b(?:fails?|failing|red|errors?|throws?|does not pass|will not pass)\b[^\n]{0,40}"
+    r"\b(?:until|before|till)\b",
+    re.I,
+)
+
+
+# A Verification line that hands the check to a person. The generate rules have always
+# said such a task "says so and is counted, not failed", and the parser ran the command a
+# reviewer was told to look FOR: `Human review: confirm README contains the exact
+# invocation `node bin/ledger.js history …``. The README was cut to one line, the CLI
+# example still ran green, and two documentation tasks were reported passed. A sentence
+# addressed to a human is not a command, whatever it quotes.
+HUMAN_REVIEW = re.compile(
+    r"^\s*(?:[-*]\s+)?(?:\*\*|_)?(?:human|manual)[ -](?:review|check|inspection|verification|confirmation)\b",
+    re.I,
+)
+
+
+def _verification_lines(section: str) -> list[str]:
+    lines: list[str] = []
+    for m in re.finditer(r"^\*\*Verification\*\*:?(.*?)(?=^\*\*|^#|\Z)",
+                         outside_fences(section), re.M | re.S):
+        lines += m.group(1).split("\n")
+    return lines
+
+
+def human_reviews(section: str) -> list[str]:
+    """Verification lines that are addressed to a person, not to a shell."""
+    return [ln.strip() for ln in _verification_lines(section) if HUMAN_REVIEW.match(ln)]
+
+
+# A test file a task writes, by the conventions runners themselves use. `specs/` at the
+# root is spec-kit's own directory and never a test directory.
+TEST_PATH = re.compile(
+    r"(?:^|/)(?:tests?|__tests__|spec)/|[._-](?:test|spec)\.[A-Za-z0-9]+$"
+    r"|(?:^|/)test_[^/]+\.py$|Tests?\.(?:java|kt|cs|swift|scala)$"
+)
+
+# A command that runs a whole suite, and so runs any test file in it.
+SUITE_RUNNER = re.compile(
+    r"^(?:npm|yarn|pnpm)(?:\s+run)?\s+test\b|^npx\s+(?:jest|vitest|mocha)\b"
+    r"|^node\s+--test\s*$|^(?:python3?\s+-m\s+)?pytest\b(?!\s+\S+\.py)"
+    r"|^python3?\s+-m\s+unittest(?:\s+discover)?\b(?!\s+\S+\.py)"
+    r"|^(?:\./)?gradlew?\s+(?:\S+:)?test\b|^mvn\s+(?:-\S+\s+)*test\b|^go\s+test\b"
+    r"|^cargo\s+test\b|^make\s+test\b|^dotnet\s+test\b|^bash\s+tools/test\.sh\b"
+)
+
+
+def test_files(section: str) -> list[str]:
+    return [p for p, kind in file_kinds(section)
+            if kind in ("new", "modify") and not p.startswith("specs/") and TEST_PATH.search(p)]
+
+
+def names_file(cmd: str, path: str) -> bool:
+    """Whether a command names this file by its path, basename, or stem as a class or module."""
+    base = os.path.basename(path)
+    stem = os.path.splitext(base)[0]
+    return (path in cmd or bool(re.search(r"(?<![\w.-])" + re.escape(base) + r"(?![\w.-])", cmd))
+            or bool(re.search(r"(?<![\w-])" + re.escape(stem) + r"(?![\w-])(?!\.\w)", cmd)))
+
+
+def runs_file(cmds: list[str], path: str) -> bool:
+    """Whether one of these commands names the file or runs the whole suite holding it.
+
+    A file is named by its path, its basename, or its stem as a class or module name —
+    `./tools/test-x.sh ledger.CancellationSuccessTest` runs CancellationSuccessTest.java.
+    """
+    for cmd in cmds:
+        if names_file(cmd, path):
+            return True
+        body = cmd[len("set -e\n"):] if cmd.startswith("set -e\n") else cmd
+        if any(SUITE_RUNNER.match(ln.strip().lstrip("$ ").strip()) for ln in body.splitlines()):
+            return True
+    return False
+
+
+def verification_commands(section: str) -> list[str]:
+    """Every runnable command a task's **Verification** line names, in order.
+
+    Five rounds of review asked for this. The line has been required of every task since
+    the first version of the spec, every task carries one, and until now the string
+    "Verification" appeared in these scripts exactly once — in a comment explaining that
+    the block under it should be skipped.
+    """
+    out: list[str] = []
+    for m in re.finditer(r"^\*\*Verification\*\*:?(.*?)(?=^\*\*|^#|\Z)",
+                         outside_fences(section), re.M | re.S):
+        # Per line, so one sentence predicting failure does not silence the rest of a
+        # Verification line that names three commands.
+        for line in m.group(1).split("\n"):
+            if PREDICTS_FAILURE.search(line) or HUMAN_REVIEW.match(line):
+                continue
+            for cm in re.finditer(r"`([^`\n]+)`", line):
+                cmd = cm.group(1).strip()
+                if VERIFY_RUNNER.match(cmd) and cmd not in out:
+                    out.append(cmd)
+    # The template also allows a fenced block under the label; ILLUSTRATIVE_LABELS keeps
+    # the applier from writing it to a file, which is why it has to be read here.
+    under_label = False
+    for _i, line, in_fence, block in scan(section):
+        if block is not None:
+            if under_label:
+                lines = block.strip().splitlines()
+                first = next((ln.strip() for ln in lines
+                              if ln.strip() and not ln.lstrip().startswith("#")), "")
+                if first.startswith("$"):
+                    first = first[1:].strip()
+                if first and VERIFY_RUNNER.match(first):
+                    # Preserve heredoc bodies and command sequencing. Executing only
+                    # runner-prefixed lines silently dropped acceptance assertions.
+                    script = "set -e\n" + "\n".join(
+                        ln[1:].lstrip() if ln.startswith("$ ") else ln for ln in lines)
+                    if script not in out:
+                        out.append(script)
+                under_label = False
+            continue
+        if not in_fence and line.startswith("**"):
+            under_label = line.startswith("**Verification**")
+    return out
+
+
+def test_command(blueprint: str) -> str | None:
+    """The optional `**Test**:` header line — the one command that exercises behaviour.
+
+    Guide mode's rules tell the generator to stamp `**Build**` with a COMPILE check, not a
+    test run, and for a good reason: the applier's copy holds skeletons that throw. The
+    consequence was that a feature could be typed to completion, pass the document
+    validator, the applier's build, the scaffold validator and `--verify`, and still leave
+    the project's own test suite red — measured, on a feature whose blueprint had no task
+    that wrote the golden file its tests diff against. `**Test**` is where a document can
+    name the command that would have caught it; --verify runs it last, against the tree.
+    """
+    for _, line, in_fence, _ in scan(blueprint):
+        if not in_fence and line.startswith("**Test**:"):
+            rest = line.split(":", 1)[1].strip()
+            quoted = re.search(r"`([^`]+)`", rest)
+            if quoted:
+                return quoted.group(1).strip()
+            return re.split(r"\s+[—–]\s+|\s+-{1,2}\s+", rest, maxsplit=1)[0].strip() or None
+    return None
+
+
+def verify_excerpt(stdout: str, stderr: str) -> list:
+    """The part of a verification run a reader needs, from each stream separately.
+
+    `(stdout + stderr)[-8:]` was the whole rule, and it is the bug this release's notes
+    describe fixing in `--build` — shipped again, ten functions away, in the flag the
+    same release put on the front page. A test runner writes its failures to stdout and
+    a compiler writes its warnings to stderr; concatenating them puts the warnings last,
+    so the tail is always the warnings. Measured by a reviewer: a tree with an emptied
+    policy body and a tree with a Key Decision implemented backwards produced
+    byte-identical `--verify` output, and neither showed one character of the twelve and
+    three failures the runner had printed.
+
+    So the streams are excerpted apart and labelled when both spoke.
+    """
+    out, err = stdout.rstrip(), stderr.rstrip()
+    if out and err:
+        rows = ["stdout:"] + build_excerpt(out, 8, FAILURE_LINE)
+        return rows + ["stderr:"] + build_excerpt(err, 4, FAILURE_LINE)
+    if out:
+        return build_excerpt(out, 12, FAILURE_LINE)
+    if err:
+        return build_excerpt(err, 12, FAILURE_LINE)
+    return ["(the command printed nothing)"]
+
+
+def _run_one(cmd: str, cwd: str):
+    try:
+        proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
+                              text=True, timeout=VERIFY_TIMEOUT)
+        return proc.returncode, verify_excerpt(proc.stdout, proc.stderr)
+    except subprocess.TimeoutExpired:
+        return 124, [f"did not finish within {VERIFY_TIMEOUT}s"]
+    except OSError as exc:
+        return 127, [str(exc)]
+
+
+def test_scope(blueprint: str) -> str:
+    """Scope is declared, never inferred from the test runner's name."""
+    for _, line, in_fence, _ in scan(blueprint):
+        if not in_fence and line.startswith("**Test Scope**:"):
+            return line.split(":", 1)[1].strip().strip("`")
+    return "unspecified"
+
+
+def _ids(group) -> str:
+    shown = sorted(group)
+    return ", ".join(shown[:12]) + (f" (+{len(shown) - 12} more)" if len(shown) > 12 else "")
+
+
+def dependencies(section: str) -> list[str]:
+    """The task ids a section's `**Dependencies**:` line names, in order."""
+    m = re.search(r"^\*\*Dependencies\*\*:?(.*)$", outside_fences(section), re.M)
+    return re.findall(r"\bT\d{3,}\b", m.group(1)) if m else []
+
+
+def blocked_by(tasks: list, red: set) -> dict:
+    """Each red task that depends, directly or through others, on another red task.
+
+    A test task's command runs the code its dependency writes, so when that code is red
+    the test is red too, written or not. Reported against the test, the behavior task's
+    failure was counted twice and the test was called unfinished: a tree whose CLI alone
+    was missing printed two finished test tasks failed, and a library off by one printed
+    three. The result is still a failure. What changes is the claim: it cannot be told
+    apart from the red task it depends on.
+    """
+    prefix = {tid: tid.rsplit("/", 1)[0] + "/" if "/" in tid else "" for tid, _s in tasks}
+    deps = {tid: [prefix[tid] + d for d in dependencies(sec)] for tid, sec in tasks}
+    out: dict[str, list[str]] = {}
+    for tid in red:
+        seen, stack, hit = set(), list(deps.get(tid, [])), []
+        while stack:
+            d = stack.pop()
+            if d in seen or d == tid:
+                continue
+            seen.add(d)
+            if d in red:
+                hit.append(d)
+            stack.extend(deps.get(d, []))
+        if hit:
+            out[tid] = sorted(hit)
+    return out
+
+
+def _blob_sha(path: str) -> str:
+    """What `git hash-object` prints for this file, so a reviewer can produce it too."""
+    import hashlib
+    with open(path, "rb") as f:
+        data = f.read()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+HUMAN_EVIDENCE_FILE = "human-evidence.md"
+HUMAN_EVIDENCE_LINE = re.compile(
+    r"^\s*(?:[-*]\s+)?(?P<tid>T\d{3,}):\s+(?P<who>\S+)\s+(?P<date>\d{4}-\d{2}-\d{2})(?P<rest>.*)$")
+
+
+def human_evidence(root: str, tid: str, section: str) -> tuple[str, str]:
+    """('supplied' | 'stale' | 'invalid' | 'missing', detail) for a task with a `Human review:` line.
+
+    The applier had no way to receive a person's result, so `human evidence not
+    supplied` printed the same number on an empty tree and a finished one, while the
+    docs told pipelines to require 0. A person records the review in the feature's
+    `human-evidence.md` as `T010: <reviewer> <YYYY-MM-DD> README.md@<sha>`, one
+    `path@sha` per file the task declares, the sha being `git hash-object <path>`. The
+    record is tied to the bytes reviewed: change the file and it is stale again.
+    """
+    feature, _, bare = tid.rpartition("/")
+    files = [p for p, k in file_kinds(section) if k in ("new", "modify", "unknown")]
+    want = {p: (_blob_sha(os.path.join(root, p)) if os.path.isfile(os.path.join(root, p)) else "")
+            for p in files}
+    suggestion = " ".join(f"{p}@{sha[:12]}" for p, sha in want.items() if sha)
+    template = f"{bare}: <reviewer> <YYYY-MM-DD>" + (f" {suggestion}" if suggestion else "")
+    path = os.path.join(root, feature, HUMAN_EVIDENCE_FILE) if feature else ""
+    if not path or not os.path.isfile(path):
+        return "missing", template
+    with open(path, encoding="utf-8", errors="replace") as f:
+        lines = f.read().split("\n")
+    for line in lines:
+        m = HUMAN_EVIDENCE_LINE.match(line.rstrip("\n"))
+        if not m or m.group("tid") != bare:
+            continue
+        # A date is a day that exists and has happened. `9999-99-99` passed the shape test
+        # and was printed back as the day of a review. One day of slack is for a reviewer
+        # whose calendar is ahead of UTC.
+        import datetime
+        try:
+            day = datetime.date.fromisoformat(m.group("date"))
+        except ValueError:
+            return "invalid", f"{m.group('date')} is not a calendar date — record as: {template}"
+        if day > datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1):
+            return "invalid", f"{m.group('date')} is in the future — record as: {template}"
+        given = dict(re.findall(r"(\S+)@([0-9a-f]{7,40})\b", m.group("rest")))
+        moved = [p for p, sha in want.items() if not sha or not sha.startswith(given.get(p, "-"))]
+        if moved:
+            return "stale", f"{', '.join(moved)} — record again as: {template}"
+        return "supplied", f"{m.group('who')} {m.group('date')}"
+    return "missing", template
+
+
+def skeleton_tree(root: str, bp: str, tasks: list) -> tuple[str | None, str]:
+    """A copy of the tree as the blueprint leaves it before anyone implements it.
+
+    The files this feature's tasks declare are put back as the stamped commit had them,
+    and the tasks are applied over them: every declaration in place, every body its
+    marker. A test that passes here passes without the feature, so it measures nothing
+    the feature adds. The stamped commit alone is the wrong baseline, measured: a test
+    file there fails on its import of a name the feature has not declared yet, so four
+    of six emptied test files read as red-then-green. Returns (tree, "") or (None, why).
+    """
+    global _tree
+    head = stamped_head(bp)
+    if not head:
+        return None, "the blueprint has no `| HEAD` stamp to rebuild the skeleton from"
+    if not commit_known(root, head):
+        return None, f"this clone does not contain the stamped commit {head}"
+    tree = copy_tree(root)
+    saved = _tree
+    _tree = os.path.realpath(tree)
+    try:
+        for _tid, section in tasks:
+            for path, _kind in file_kinds(section):
+                full = inside(tree, path)
+                if in_commit(root, head, path):
+                    blob = subprocess.run(["git", "-C", root, "show", f"{head}:{path}"],
+                                          capture_output=True, timeout=60)
+                    if blob.returncode == 0:
+                        os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
+                        with open(full, "wb") as f:
+                            f.write(blob.stdout)
+                        continue
+                if os.path.isfile(full):
+                    os.remove(full)
+        failed = []
+        for tid, section in tasks:
+            try:
+                apply_task(tree, section)
+            except (Defect, AlreadyApplied, Ambiguous) as exc:
+                failed.append(f"{tid.rsplit('/', 1)[-1]} ({str(exc).splitlines()[0][:80]})")
+    except (Defect, OSError, subprocess.SubprocessError) as exc:
+        shutil.rmtree(tree, ignore_errors=True)
+        return None, f"the skeleton could not be rebuilt: {exc}"
+    finally:
+        _tree = saved
+    if failed:
+        shutil.rmtree(tree, ignore_errors=True)
+        return None, "the blueprint does not apply to its stamped commit: " + "; ".join(failed[:3])
+    return tree, ""
+
+
+# A fenced block in a Markdown file that a reader would paste into a terminal. Anything
+# else (`text`, no info string, `json`) is shown, not run.
+SHELL_FENCES = {"sh", "bash", "shell", "console", "zsh"}
+DOC_FILE = re.compile(r"\.(?:md|markdown)$", re.I)
+
+
+def shell_blocks(markdown: str) -> list[str]:
+    """The shell-fenced blocks of a Markdown text, in order."""
+    return [body for info, body in code_blocks(markdown)
+            if re.split(r"[{\s,]", info.lower(), maxsplit=1)[0] in SHELL_FENCES]
+
+
+def doc_example_scripts(root: str, head: str, section: str) -> tuple[list, list]:
+    """The documentation examples a task promises, read from the document on disk.
+
+    A README task's Verification used to look for substrings in the README and then run
+    commands the blueprint restated next to them. A reviewer broke both README example
+    lines — a flag the CLI rejects, a clock value it refuses — and every gate stayed
+    green, because nothing ran what the README says. So a task whose authored Markdown
+    adds a shell-fenced block (```sh, ```bash, ```shell, ```console) promises a runnable
+    example, and the examples run are the shell blocks of the file as it is now that the
+    stamped commit did not have. Returns ([(path, script)], [(path, problem)]); a problem
+    is a promise with nothing on disk to run, or one that cannot be told apart from the
+    file's older examples.
+    """
+    kinds: dict[str, str] = {}
+    for p, k in file_kinds(section):
+        kinds.setdefault(p, k)
+    docs = [p for p, k in kinds.items()
+            if k in ("new", "modify") and DOC_FILE.search(p) and not p.startswith("specs/")]
+    if not docs:
+        return [], []
+    promised, pending = 0, None
+    for kind, payload in section_events(section):
+        if kind == "directive":
+            pending = payload
+        elif kind == "block":
+            if pending != "before":
+                promised += len(shell_blocks(payload[1]))
+            pending = None
+    if not promised:
+        return [], []
+    scripts, problems = [], []
+    for path in docs:
+        full = os.path.join(root, path)
+        if not os.path.isfile(full):
+            problems.append((path, "the file is not on disk"))
+            continue
+        blocks = shell_blocks(_read(full))
+        if kinds[path] == "modify" or in_commit(root, head, path):
+            if not (head and commit_known(root, head)):
+                problems.append((path, "not measured — without the stamped commit its new examples"
+                                       " cannot be told from the ones it already had"))
+                continue
+            older = {b.strip() for b in shell_blocks(_git_blob(root, head, path) or "")}
+            blocks = [b for b in blocks if b.strip() not in older]
+        if not blocks:
+            problems.append((path, f"the task adds {promised} shell example block(s) and the file has no"
+                                   " shell block the stamped commit did not have"))
+            continue
+        for n, body in enumerate(blocks, 1):
+            lines = [ln for ln in body.rstrip("\n").split("\n")]
+            # A console transcript: `$ ` marks the commands, the other lines are output.
+            if any(ln.startswith("$ ") for ln in lines):
+                lines = [ln[2:] for ln in lines if ln.startswith("$ ")]
+            scripts.append((path, f"set -e\n# {path} example {n}, as written there\n" + "\n".join(lines)))
+    return scripts, problems
+
+
+def _git_blob(root: str, head: str, path: str) -> str | None:
+    proc = subprocess.run(["git", "-C", root, "show", f"{head}:{path}"], capture_output=True, timeout=60)
+    return proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else None
+
+
+def task_spans(root: str, head: str, tasks: list) -> tuple[dict, dict, dict]:
+    """Where each task's hunks land in each existing file, in the stamped commit's lines.
+
+    "Has this (modify) file changed since the stamp" is a question about a file, and two
+    tasks that edit one file share the answer: a reviewer left the transfer-limit task
+    untouched beside a finished library task in the same file and --done passed, because
+    the file had moved. The tasks are applied in order to the stamped files and every
+    region a task changed is mapped back to the stamped commit's line numbers — a span
+    (a, b) covers lines a..b-1, and (g, g) is the gap above line g where a task only
+    inserts. A span inside lines an earlier task inserted maps to that task's gap, so the
+    two share it. Returns ({path: stamped text}, {(task, path): [spans]}, {task: why}) for
+    the tasks whose hunks could not be placed.
+    """
+    import difflib
+    global _tree
+    files: dict[str, str] = {}
+    for _tid, section in tasks:
+        for path, kind in file_kinds(section):
+            if kind == "modify" and path not in files:
+                text = _git_blob(root, head, path)
+                if text is not None:
+                    files[path] = text
+    spans: dict = {}
+    unplaced: dict = {}
+    if not files:
+        return files, spans, unplaced
+    tmp = tempfile.mkdtemp(prefix="blueprint-spans-")
+    origin = {}
+    saved = _tree
+    _tree = os.path.realpath(tmp)
+    try:
+        for path, text in files.items():
+            write_file(inside(tmp, path), text)
+            origin[path] = list(range(len(text.split("\n"))))
+        for tid, section in tasks:
+            if not any(p in files for p, _k in file_kinds(section)):
+                continue
+            old = {p: _read(inside(tmp, p)) for p in files}
+            try:
+                apply_task(tmp, section)
+            except (Defect, AlreadyApplied, Ambiguous) as exc:
+                unplaced[tid] = str(exc).splitlines()[0][:100]
+            for path in files:
+                new = _read(inside(tmp, path))
+                if new == old[path]:
+                    continue
+                a, b = old[path].split("\n"), new.split("\n")
+                was, now = origin[path], []
+                for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+                    if tag == "equal":
+                        now += was[i1:i2]
+                        continue
+                    stamped = [x for x in was[i1:i2] if x is not None]
+                    if stamped:
+                        span = (min(stamped), max(stamped) + 1)
+                    else:
+                        above = [x for x in was[:i1] if x is not None]
+                        gap = above[-1] + 1 if above else 0
+                        span = (gap, gap)
+                    spans.setdefault((tid, path), []).append(span)
+                    now += [None] * (j2 - j1)
+                origin[path] = now
+    finally:
+        _tree = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    return files, spans, unplaced
+
+
+TRIVIAL_LINE = re.compile(r"^[\s{}()\[\];,]*$")
+
+
+def _widen(span: tuple, lines: list) -> tuple:
+    """The span grown over the blank and bracket-only lines on either side of it.
+
+    A diff can place one insertion at several equally good gaps when the inserted block
+    ends with a line the file already has there, a `}` or a blank: a new function put
+    above `listTransfers` read as inserted two lines higher, above the `}` and the blank
+    line that close `transfer`, and a finished task was reported untouched.
+    """
+    a, b = span
+    while a > 0 and TRIVIAL_LINE.match(lines[a - 1]):
+        a -= 1
+    while b < len(lines) and TRIVIAL_LINE.match(lines[b]):
+        b += 1
+    return a, b
+
+
+def _spans_meet(a: tuple, b: tuple, lines: list) -> bool:
+    """Do two stamped-line spans touch, once each is widened over blank and bracket lines?"""
+    (a1, a2), (b1, b2) = _widen(a, lines), _widen(b, lines)
+    return a1 <= b2 and b1 <= a2
+
+
+def _changes(stamped: str, current: str) -> list:
+    """(stamped span, current lines i..j) for every region where the file differs from the stamp."""
+    import difflib
+    a, b = stamped.split("\n"), current.split("\n")
+    return [((i1, i2), (j1, j2)) for tag, i1, i2, j1, j2
+            in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes() if tag != "equal"]
+
+
+def _reach(a: list, b: list, i1: int, i2: int, j1: int, j2: int) -> tuple:
+    """The stamped span a change could equally have been placed at.
+
+    A pure insertion or deletion slides over the lines it repeats: a `cancel` method
+    inserted after `return true;\n    }` reads the same as one inserted before them, and
+    the diff of the finished file chose one gap while the blueprint's chose the other,
+    two lines apart. Blank and bracket lines are covered by `_widen`; this covers the
+    rest. Only for asking whether spans meet — the change itself is (i1, i2).
+    """
+    if i1 == i2 and j1 < j2:
+        ins, lo, hi = b[j1:j2], i1, i1
+        while hi < len(a) and a[hi] == ins[(hi - i1) % len(ins)]:
+            hi += 1
+        while lo > 0 and a[lo - 1] == ins[(lo - 1 - i1) % len(ins)]:
+            lo -= 1
+        return lo, hi
+    if j1 == j2 and i1 < i2:
+        lo, hi = i1, i2
+        while hi < len(a) and a[hi] == a[hi - (i2 - i1)]:
+            hi += 1
+        while lo > 0 and a[lo - 1] == a[lo - 1 + (i2 - i1)]:
+            lo -= 1
+        return lo, hi
+    return i1, i2
+
+
+def untouched_tasks(root: str, head: str, tasks: list) -> tuple[list, dict]:
+    """[(task, path)] whose every span still reads as the stamped commit had it, and {task: why} not measured."""
+    files, spans, unplaced = task_spans(root, head, tasks)
+    out = []
+    for (tid, path), sps in spans.items():
+        if tid in unplaced or not os.path.isfile(os.path.join(root, path)):
+            continue
+        lines = files[path].split("\n")
+        current = _read(os.path.join(root, path)).split("\n")
+        changes = _changes(files[path], "\n".join(current))
+        if not any(_spans_meet(s, _reach(lines, current, *c, *cur), lines) for s in sps for c, cur in changes):
+            out.append((tid, path))
+    return out, unplaced
+
+
+def revert_task(root: str, tree: str, files: dict, spans: dict, tid: str) -> int:
+    """Put back, in `tree`, the stamped lines of every change that meets this task's spans.
+
+    The rest of the tree stays as the developer left it. Returns how many regions were
+    reverted, 0 when the task's spans meet no change (nothing of it is on disk to take away).
+    """
+    reverted = 0
+    for (owner, path), sps in spans.items():
+        if owner != tid or not os.path.isfile(os.path.join(root, path)):
+            continue
+        current = _read(os.path.join(root, path))
+        cur, old, out, at = current.split("\n"), files[path].split("\n"), [], 0
+        for (i1, i2), (j1, j2) in _changes(files[path], current):
+            out += cur[at:j1]
+            if any(_spans_meet(s, _reach(old, cur, i1, i2, j1, j2), old) for s in sps):
+                out += old[i1:i2]
+                reverted += 1
+            else:
+                out += cur[j1:j2]
+            at = j2
+        out += cur[at:]
+        write_file(inside(tree, path), "\n".join(out))
+    return reverted
+
+
+def run_verifications(root: str, tasks: list, bp: str, keep: bool,
+                      scope: str = "all", base_tasks: list | None = None,
+                      partial: bool = False) -> int:
+    """Run declared commands once, preserving their scope and qualified ownership.
+
+    Two questions share this output and used to share its sentences. "Did the feature's
+    declared commands pass?" is what a command's exit code answers. "Did each task do its
+    work?" is a different question, and a command claimed by ten tasks answers it for
+    none of them: a guru blueprint repeated one 52-line acceptance script under ten
+    tasks, so a half-built feature (library done, CLI not) printed all ten red, and a
+    copy whose six test files were emptied printed six "Test …" tasks passed. The exit
+    code is still the command results; the task lines now say what a result is evidence
+    of, and what nothing here measured.
+    """
+    base_tasks = base_tasks or []
+    header_scope = test_scope(bp)
+    print(f"\n{CYAN}=== Verification: {scope} command scope ==={NC}")
+    if header_scope not in ("feature", "repository", "unspecified"):
+        record("fail", f"invalid **Test Scope**: {header_scope!r}; use feature or repository")
+        return 1
+    test_cmd = test_command(bp)
+    if scope == "feature" and test_cmd and header_scope == "unspecified":
+        record("fail", "feature verification unavailable: **Test** header scope is unspecified; declare **Test Scope**: feature or repository")
+        return 2
+    include_header = bool(test_cmd and (scope == "all" or header_scope == "feature"))
+    if test_cmd:
+        print(f"  Header test scope: {header_scope} — "
+              + ("included" if include_header else "omitted from feature gate"))
+    if scope == "feature":
+        print(f"  Base: {len(base_tasks)} referenced task(s); commands omitted from feature gate")
+    run_tasks = (base_tasks if scope == "all" else []) + tasks
+    task_cmds = {tid: verification_commands(section) for tid, section in run_tasks}
+    # The examples a documentation task writes are run as the document on disk has them,
+    # in order, in a copy of their own so a reader's example cannot disturb the other
+    # commands.
+    doc_runs: dict[str, str] = {}
+    doc_missing: set[str] = set()
+    doc_unmeasured = []
+    for tid, section in run_tasks:
+        scripts, problems = doc_example_scripts(root, stamped_head(bp), section)
+        for path, script in scripts:
+            task_cmds[tid].append(script)
+            doc_runs[script] = path
+        for path, why in problems:
+            if why.startswith("not measured"):
+                doc_unmeasured.append(f"{tid} {path}: {why}")
+                continue
+            missing = (f"set -e\n# {path} examples, missing\n"
+                       f"echo {shlex.quote(path + ': ' + why)} >&2\nexit 1")
+            task_cmds[tid].append(missing)
+            doc_runs[missing] = path
+            doc_missing.add(missing)
+    # Every task that leaves part of its check to a person, with or without a command
+    # beside it: a static README assertion does not settle the wording it cannot read.
+    humans = {tid for tid, section in run_tasks if human_reviews(section)}
+    order, owners, silent = [], {}, []
+    for tid, _section in run_tasks:
+        cmds = task_cmds[tid]
+        if not cmds and tid not in humans:
+            silent.append(tid)
+        for cmd in cmds:
+            if cmd not in owners:
+                owners[cmd] = []
+                order.append(cmd)
+            owners[cmd].append(tid)
+    if include_header and test_cmd not in owners:
+        owners[test_cmd] = []
+        order.append(test_cmd)
+    # A task whose Verification is addressed to a person is counted, not failed — the
+    # generate rules have said so since they allowed it. It is not counted as passed
+    # either: it is listed below as evidence nobody supplied.
+    selected_silent = [tid for tid, section in tasks
+                       if not verification_commands(section) and not human_reviews(section)]
+    proof_missing = scope == "feature" and bool(selected_silent) and not (
+        include_header and header_scope == "feature")
+    failures = 0
+    if proof_missing:
+        record("fail", "selected tasks lack runnable verification and no feature-scoped header covers them",
+               ", ".join(selected_silent))
+        failures += 1
+    if not order:
+        record("fail", "no runnable verification proof; behavior verification unavailable")
+        return failures or 1
+    tree = copy_tree(root)
+    doc_tree = None
+    try:
+        print(f"  against a copy of {root} ({tree})")
+        passed_tasks, failed_tasks = set(), set()
+        code_of: dict[str, int] = {}
+        header_code = None
+        for cmd in order:
+            who = owners[cmd]
+            labels = list(who)
+            if include_header and cmd == test_cmd:
+                labels.append(f"**Test** header [{header_scope}]")
+            label = ", ".join(labels[:4]) + (f" (+{len(labels) - 4} more)" if len(labels) > 4 else "")
+            display_lines = cmd.splitlines()
+            display = display_lines[1] if display_lines[0] == "set -e" and len(display_lines) > 1 else display_lines[0]
+            if len(display_lines) > 1:
+                display += f" (+{len(display_lines) - 1} script line(s))"
+            if cmd in doc_runs and doc_tree is None:
+                doc_tree = copy_tree(root)
+            code, tail = _run_one(cmd, doc_tree if cmd in doc_runs else tree)
+            code_of[cmd] = code
+            if include_header and cmd == test_cmd:
+                header_code = code
+            if code == 0:
+                passed_tasks.update(who)
+                record("pass", f"{label}  $ {display}", always=VERBOSE)
+            else:
+                failures += 1
+                failed_tasks.update(who)
+                record("fail", f"{label}  $ {display} — exit {code}", "\n".join(tail))
+        print(f"  ran {len(order)} distinct command(s); "
+              f"{len(passed_tasks | failed_tasks)} qualified task(s) covered; "
+              f"{len(silent)} task(s) name no runnable command")
+        covered_ids = passed_tasks | failed_tasks
+        selected_ids = {tid for tid, _section in tasks}
+        base_ids = {tid for tid, _section in base_tasks}
+        selected_silent_ids = set(selected_silent)
+        base_silent_ids = {tid for tid, section in base_tasks
+                           if not verification_commands(section) and not human_reviews(section)}
+        print(f"  Selected task proof: {len(selected_ids & covered_ids)} covered; "
+              f"{len(selected_silent_ids)} without runnable commands; {len(tasks)} selected task section(s)")
+        print(f"  Base task proof: {len(base_ids & covered_ids)} covered; "
+              f"{len(base_silent_ids)} without runnable commands; {len(base_tasks)} referenced task section(s)"
+              + (" (commands omitted)" if scope == "feature" else ""))
+        if header_code is not None:
+            print(f"  Header result [{header_scope}]: "
+                  + ("passed" if header_code == 0 else f"failed (exit {header_code})"))
+
+        # Axis 1: the feature's behavior commands, one result per distinct command.
+        n_pass = sum(1 for c in order if code_of.get(c) == 0)
+        print(f"  Feature behavior proof: {n_pass} of {len(order)} distinct command(s) passed"
+              + (f"; {len(order) - n_pass} failed" if n_pass < len(order) else ""))
+        # Axis 2: what each task's OWN Verification measured.
+        shared = {c for c in order if len(owners[c]) > 1}
+        own_pass, own_fail, shared_pass, shared_fail = set(), set(), set(), set()
+        for tid, _section in run_tasks:
+            cmds = task_cmds[tid]
+            if not cmds:
+                continue
+            own = [c for c in cmds if c not in shared]
+            if own:
+                (own_fail if any(code_of.get(c) for c in own) else own_pass).add(tid)
+            else:
+                (shared_fail if any(code_of.get(c) for c in cmds) else shared_pass).add(tid)
+        # A test task's own command passing says the test passes, which an empty body and
+        # `assert.ok(true)` beside the subject's name in a comment both do. What says the
+        # test was written is that it FAILS on the tree the blueprint leaves before
+        # implementation and passes here. Only the commands that name the task's test
+        # file are rerun there; an oracle case beside them would be red on the skeleton
+        # whatever the test file holds.
+        discriminating, non_discriminating, undiscriminated = set(), set(), {}
+        selected_sections = dict(tasks)
+        probes = {}
+        for tid in sorted(own_pass & set(selected_sections)):
+            files = test_files(selected_sections[tid])
+            if not files:
+                continue
+            naming, unsplit = [], False
+            for c in (c for c in task_cmds[tid] if c not in shared):
+                if not c.startswith("set -e\n"):
+                    naming += [c] if any(names_file(c, f) for f in files) else []
+                    continue
+                # A fenced script runs the oracle and the test file in one command; on the
+                # skeleton only its lines that name the test file are run.
+                lines = c.split("\n")[1:]
+                if any("<<" in ln or ln.rstrip().endswith("\\") for ln in lines):
+                    unsplit = unsplit or any(names_file(c, f) for f in files)
+                    continue
+                keep_lines = [ln for ln in lines if any(names_file(ln, f) for f in files)]
+                if keep_lines:
+                    naming.append("set -e\n" + "\n".join(keep_lines))
+            if naming:
+                probes[tid] = (files, naming)
+            elif unsplit:
+                undiscriminated[tid] = "its test file is run inside a script with a heredoc, which cannot be split"
+            else:
+                undiscriminated[tid] = "no command of its own names its test file"
+        if probes and partial:
+            # The skeleton is built from the selected tasks, and --through cut the later ones
+            # off: a test importing what they declare would fail there for that reason alone.
+            for tid in probes:
+                undiscriminated[tid] = "--through selects part of the document, so the skeleton would be partial"
+        elif probes:
+            skeleton, why = skeleton_tree(root, bp, tasks)
+            if skeleton is None:
+                for tid in probes:
+                    undiscriminated[tid] = why
+            else:
+                try:
+                    for tid, (files, _naming) in probes.items():
+                        for path in files:
+                            src = os.path.join(root, path)
+                            if os.path.isfile(src):
+                                dst = inside(skeleton, path)
+                                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                                shutil.copyfile(src, dst)
+                    for tid, (_files, naming) in probes.items():
+                        red = any(_run_one(c, skeleton)[0] != 0 for c in naming)
+                        (discriminating if red else non_discriminating).add(tid)
+                finally:
+                    if keep:
+                        print(f"  Skeleton tree kept at: {skeleton}")
+                    else:
+                        shutil.rmtree(skeleton, ignore_errors=True)
+        # Red on the whole skeleton is a low bar for a feature that changes existing code:
+        # there every new function throws, so a test that merely calls one is red. A
+        # reviewer's tests that checked only "a transfer under the limit succeeds" counted
+        # as discriminating while the limit itself was a no-op. So each discriminating test
+        # runs once more on the tree as it is with only the hunks of the (modify) task it
+        # depends on put back as the stamp had them. Green there, the test does not see
+        # that task's change. A dependency that only creates files has no hunks to put back
+        # and is not probed this way; the whole-skeleton probe already removed its files.
+        weak_against: dict[str, list[str]] = {}
+        new_only: dict[str, list[str]] = {}
+        if discriminating and not partial:
+            head = stamped_head(bp)
+            sections = dict(run_tasks)
+            files, spans, unplaced = task_spans(root, head, tasks) if head and commit_known(root, head) else ({}, {}, {})
+            testers: dict[str, list[str]] = {}
+            for tid in sorted(discriminating):
+                prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+                for dep in (prefix + d for d in dependencies(selected_sections[tid])):
+                    if dep not in sections or test_files(sections[dep]):
+                        continue
+                    if not any(owner == dep for owner, _p in spans) or dep in unplaced:
+                        if all(k == "new" for _p, k in file_kinds(sections[dep])):
+                            new_only.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
+                        continue
+                    testers.setdefault(dep, []).append(tid)
+            if testers:
+                # One copy: each dependency's files are put back, probed, and restored.
+                part = copy_tree(root)
+                try:
+                    for dep, tids in testers.items():
+                        if revert_task(root, part, files, spans, dep):
+                            for tid in tids:
+                                if all(_run_one(c, part)[0] == 0 for c in probes[tid][1]):
+                                    weak_against.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
+                        for (owner, path) in spans:
+                            if owner == dep and os.path.isfile(os.path.join(root, path)):
+                                shutil.copyfile(os.path.join(root, path), inside(part, path))
+                finally:
+                    shutil.rmtree(part, ignore_errors=True)
+        task_passed = own_pass - non_discriminating - set(weak_against)
+        behind = blocked_by(run_tasks, own_fail | shared_fail)
+        own_blocked = {t for t in own_fail if t in behind}
+        print("  Task proof — what each task's own Verification measured:")
+        if task_passed:
+            print(f"    Task-specific command results passed: {_ids(task_passed)}")
+        if discriminating - set(weak_against):
+            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating - set(weak_against))}")
+        if own_fail - own_blocked:
+            print(f"    Task-specific command results failed: {_ids(own_fail - own_blocked)}")
+            # A failure is reported where it was observed. A reviewer put the defect in a
+            # helper an earlier task wrote, whose own cases did not reach it, and the
+            # output read "T006 failed" beside "T002 passed". Nothing here can tell which
+            # task's lines are wrong; it can say which passed tasks wrote the same files.
+            sections = dict(run_tasks)
+            passed_any = own_pass | shared_pass
+            shared_code = []
+            for tid in sorted(own_fail - own_blocked):
+                mine = {p for p, k in file_kinds(sections[tid]) if k in ("new", "modify")}
+                prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+                seen, stack, hits = set(), [prefix + d for d in dependencies(sections[tid])], []
+                while stack:
+                    d = stack.pop()
+                    if d in seen or d not in sections:
+                        continue
+                    seen.add(d)
+                    stack += [prefix + x for x in dependencies(sections[d])]
+                    common = sorted(mine & {p for p, k in file_kinds(sections[d]) if k in ("new", "modify")})
+                    if d in passed_any and common:
+                        hits.append(f"{d.rsplit('/', 1)[-1]} ({', '.join(common)})")
+                if hits:
+                    shared_code.append(f"{tid} with {', '.join(sorted(hits))}")
+            if shared_code:
+                print("    Observed there, not necessarily caused there — a passed dependency wrote the same file(s): "
+                      + "; ".join(shared_code[:6]) + (f" (+{len(shared_code) - 6} more)" if len(shared_code) > 6 else ""))
+        if own_blocked:
+            print("    Task-specific command results failed behind a failed dependency (not separable from it): "
+                  + ", ".join(f"{t} <- {'/'.join(d.rsplit('/', 1)[-1] for d in behind[t])}"
+                              for t in sorted(own_blocked)[:12])
+                  + (f" (+{len(own_blocked) - 12} more)" if len(own_blocked) > 12 else ""))
+        n_shared = len({c for c in shared if set(owners[c]) & (shared_pass | shared_fail)})
+        if shared_pass:
+            print(f"    Shared command results passed ({n_shared} command(s) claimed by several tasks;"
+                  f" claimed coverage, not per-task implementation status): {_ids(shared_pass)}")
+        if shared_fail:
+            print(f"    Shared command results failed (one result for every claiming task;"
+                  f" which of them are done is not measured): {_ids(shared_fail)}")
+        if silent:
+            print(f"    No runnable command: {_ids(silent)}")
+        if non_discriminating:
+            record("warn", f"{len(non_discriminating)} test task(s) pass on the blueprint's skeleton as well as"
+                   " here — their tests measure nothing this feature adds, so they are not counted as passed: "
+                   + _ids(non_discriminating), always=True)
+        if set(doc_runs) - doc_missing:
+            print(f"  Documentation examples: {len(set(doc_runs) - doc_missing)} shell block(s) run as the document on disk has them"
+                  f" ({', '.join(sorted(set(doc_runs.values())))}), in order, in a copy apart from the other commands")
+        if doc_unmeasured:
+            record("warn", f"{len(doc_unmeasured)} documentation file(s) promise runnable examples that were not run",
+                   "\n".join(doc_unmeasured[:4]), always=True)
+        if weak_against:
+            record("warn", f"{len(weak_against)} test task(s) also pass with only the (modify) task they test put back"
+                   " as the stamp had it — red on the whole skeleton, but blind to that task's change, so not"
+                   " counted as passed: " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(weak_against.items())[:12]),
+                   always=True)
+        if new_only:
+            print("    Not probed against their dependency alone (it only creates files, so the whole-skeleton probe"
+                  " is the only one): " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(new_only.items())[:12]))
+        if undiscriminated:
+            record("warn", f"{len(undiscriminated)} test task(s) passed, and whether their tests discriminate"
+                   " was not measured", "\n".join(f"{t}: {why}" for t, why in sorted(undiscriminated.items())[:6]),
+                   always=True)
+        evidence = {tid: human_evidence(root, tid, section) for tid, section in run_tasks if tid in humans}
+        supplied = {t for t, (state, _d) in evidence.items() if state == "supplied"}
+        stale = {t for t, (state, _d) in evidence.items() if state == "stale"}
+        invalid = {t for t, (state, _d) in evidence.items() if state == "invalid"}
+        missing = set(humans) - supplied - stale - invalid
+        if supplied:
+            print(f"    Human evidence supplied: "
+                  + ", ".join(f"{t} ({evidence[t][1]})" for t in sorted(supplied)))
+        if missing:
+            record("warn", f"human review declared, human evidence not supplied — the human part is not run, not counted as passed: {_ids(missing)}",
+                   "record a review in the feature's " + HUMAN_EVIDENCE_FILE + ", one line per task:\n"
+                   + "\n".join(evidence[t][1] for t in sorted(missing)[:4]),
+                   always=True)
+        if stale:
+            record("warn", f"human evidence is stale — a reviewed file changed after the review, so it is not supplied: {_ids(stale)}",
+                   "\n".join(f"{t}: {evidence[t][1]}" for t in sorted(stale)[:4]), always=True)
+        if invalid:
+            record("warn", f"human evidence is dated a day that does not exist or has not come, so it is not supplied: {_ids(invalid)}",
+                   "\n".join(f"{t}: {evidence[t][1]}" for t in sorted(invalid)[:4]), always=True)
+        header_cmds = [test_cmd] if include_header else []
+        unexercised = []
+        for tid, section in run_tasks:
+            for path in test_files(section):
+                if not runs_file(task_cmds[tid] + header_cmds, path):
+                    unexercised.append(f"{tid} {path}")
+        if unexercised:
+            record("warn", f"{len(unexercised)} test file(s) a task writes are not run by its Verification or a"
+                   " feature-scoped header — their test bodies are unmeasured",
+                   "\n".join(unexercised[:8]) + (f"\n(+{len(unexercised) - 8} more)" if len(unexercised) > 8 else ""),
+                   always=True)
+        print(f"  Proof summary: commands passed {n_pass}/{len(order)}; task-specific {len(task_passed)} passed,"
+              f" {len(own_fail)} failed ({len(own_blocked)} behind a failed dependency);"
+              f" test tasks non-discriminating {len(non_discriminating)}, not measured {len(undiscriminated)};"
+              f" shared-only {len(shared_pass) + len(shared_fail)};"
+              f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale) + len(invalid)};"
+              f" no command {len(silent)}; test files unmeasured {len(unexercised)};"
+              f" test tasks blind to their target {len(weak_against)}")
+        print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
+        print("  Exit status reflects command results and missing proof only; shared-only, human,"
+              " non-discriminating, blind-to-target and unmeasured-test rows above do not change it.")
+        if partial:
+            print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
+        elif failures or selected_silent and not (include_header and header_scope == "feature"):
+            print("  Complete feature behavior is unverified: failed or missing feature proof.")
+        else:
+            print("  Selected feature's declared verification commands passed.")
+    finally:
+        if keep:
+            print(f"  Verification tree kept at: {tree}")
+        else:
+            shutil.rmtree(tree, ignore_errors=True)
+        if doc_tree:
+            shutil.rmtree(doc_tree, ignore_errors=True)
+    return failures
+
+
+def run_build(tree: str, cmd: str) -> int:
+    print(f"\n{CYAN}=== Build ==={NC}")
+    # The command can come from the blueprint's own **Build**: line, so it is shown
+    # before it runs — this is a shell command out of a generated document.
+    print(f"  $ {cmd}")
+    print(f"  (in {tree}, limit {BUILD_TIMEOUT}s)")
+    try:
+        proc = subprocess.run(
+            cmd, shell=True, cwd=tree, capture_output=True, text=True, timeout=BUILD_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        # A build that hangs is a failed build. Without a limit the applier waits for
+        # ever on exactly the code it exists to be suspicious of.
+        record("fail", f"build did not finish within {BUILD_TIMEOUT}s", cmd)
+        return 1
+    record(
+        "pass" if proc.returncode == 0 else "fail",
+        f"exit code {proc.returncode}",
+        "\n".join(build_excerpt(proc.stdout + proc.stderr)),
+    )
+    return proc.returncode
+
+
+# Suffixes whose files are usually compared byte for byte — golden outputs, snapshots,
+# recorded fixtures. A markdown code block states text, not bytes, so --scaffold says so
+# when it writes one rather than leaving the difference to a diff of identical-looking
+# lines. Not a refusal: many of these are plain LF text and perfectly fine.
+BYTE_EXACT_SUFFIXES = {
+    ".csv", ".tsv", ".golden", ".snap", ".approved", ".expected", ".out", ".bin",
+    ".pem", ".der", ".png", ".jpg", ".gif", ".pdf", ".zip", ".gz",
+}
+
+ERROR_LINE = re.compile(r"\berror\b|\bERROR\b|\bError:|\bFAILED\b|\bFAIL:|Traceback|cannot find symbol")
+
+# What a *test* runner calls a failure. The compiler vocabulary above misses all of it:
+# `ran 157 checks, 12 failures`, `FAILED (failures=3)`, `AssertionError`, `expected:` —
+# none of them say "error". A verification excerpt that cannot find the first failure
+# falls back to the tail, and for a runner that prints a summary last the tail is right;
+# for one that prints failures and then a banner it is not.
+FAILURE_LINE = re.compile(
+    r"\berror\b|\bError:|Traceback|cannot find symbol"
+    r"|\bfail(?:s|ed|ure|ures)?\b|\bassert\w*\b|\bexpected\b|\bnot ok\b|\b✗",
+    re.I,
+)
+
+
+def build_excerpt(out: str, limit: int = 20, pattern=None) -> list:
+    """The part of a build log a reader needs: the first error, then the tail.
+
+    The last twenty lines was the whole rule, and `javac -Xlint:all` prints errors first
+    and warnings after. One repository carries seven standing warnings — twenty-one lines
+    — so a build with one error showed twenty lines of warnings, the words `1 error`, and
+    not one character saying what the error was. Measured there: a reader had to keep the
+    copy with --keep and build it by hand to find out.
+
+    `pattern` is what counts as the first bad line; it defaults to the compiler's
+    vocabulary. A test runner's is different enough that `--verify` passes its own (see
+    FAILURE_LINE), and the split between head and tail follows `limit` so a stream given
+    four lines does not spend eight of them on the head.
+    """
+    lines = out.rstrip().split("\n")
+    if len(lines) <= limit:
+        return lines
+    tail = lines[-limit:]
+    rx = pattern or ERROR_LINE
+    first = next((i for i, ln in enumerate(lines) if rx.search(ln)), None)
+    if first is None or first >= len(lines) - limit:
+        return tail
+    head_n = max(1, min(8, limit // 2))
+    head = lines[first:first + head_n]
+    return head + [f"      ... ({len(lines) - len(head) - (limit - head_n) - first} line(s) not shown)"] \
+        + lines[-(limit - head_n):]
+
+
+def main() -> int:
+    global _tree, _root, _stamped_head
+    argv = sys.argv[1:]
+    if "--help" in argv or "-h" in argv:
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
+        print("\n  --build            run the project's build in the copy after applying")
+        print("  --keep             print the copy's path instead of deleting it")
+        print("  --require-anchors  fail when a task anchors nothing, or when nothing anchored at all")
+        print("  --scaffold         after a clean apply, copy the declared-new files into your tree")
+        print("  --verify-scope S   all (default): Base/tasks/header; feature: selected tasks and feature-scoped header")
+        print("  --verify           run every task's **Verification** command against YOUR tree; alone, does not apply")
+        print("  --verbose          print the per-task line for every task, not just the failures")
+        print("  --through T0NN     limit application, or --verify commands, to that task — a build bisector")
+        print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved or")
+        print("     not in the repository root's specs/ (a copy without its own .git),")
+        print("     3 the tree has moved past the stamp so the build failure says nothing about the document.")
+        return 0
+    global VERBOSE
+    do_build, keep = "--build" in argv, "--keep" in argv
+    strict_anchors = "--require-anchors" in argv
+    do_scaffold = "--scaffold" in argv
+    do_verify = "--verify" in argv
+    verify_scope = "all"
+    for i, arg in enumerate(argv):
+        if arg.startswith("--verify-scope="):
+            verify_scope = arg.split("=", 1)[1]
+        elif arg == "--verify-scope":
+            verify_scope = argv[i + 1] if i + 1 < len(argv) else ""
+    if verify_scope not in ("all", "feature"):
+        print("ERROR: --verify-scope takes feature or all")
+        return 2
+    if any(a.startswith("--verify-scope") for a in argv) and not do_verify:
+        print("ERROR: --verify-scope requires --verify")
+        return 2
+    VERBOSE = "--verbose" in argv
+    # --through T0NN: apply the document only as far as one task.
+    #
+    # Asked for in four consecutive rounds of review and never answered, not even with a
+    # refusal. It is a bisector: when a twenty-task blueprint fails to build, the question
+    # is which task broke it, and the alternative was deleting sections by hand. The
+    # coverage line below is told the FULL task count, so a truncated run reports the
+    # fraction of the document it actually tested rather than 100% of what was left.
+    through = None
+    for i, a in enumerate(argv):
+        if a.startswith("--through="):
+            through = a.split("=", 1)[1].strip()
+        elif a == "--through" and i + 1 < len(argv):
+            through = argv[i + 1].strip()
+    KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold", "--verify", "--verbose",
+             "--through", "--verify-scope"}
+    unknown = [a for a in argv
+               if a.startswith("-") and a not in KNOWN and not a.startswith("--through=") and not a.startswith("--verify-scope=")]
+    if unknown:
+        # A typo in --build looked like a run that simply chose not to build.
+        print(f"{RED}ERROR: unknown option(s): {' '.join(unknown)}{NC}")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
+        return 2
+    args = [a for a in argv if not a.startswith("--")]
+    if "--verify-scope" in argv:
+        # Consume the option's value by position; a feature directory may itself
+        # be named "feature" or "all".
+        scope_values = {i + 1 for i, a in enumerate(argv) if a == "--verify-scope"}
+        args = [a for i, a in enumerate(argv) if not a.startswith("--") and i not in scope_values]
+    if through is not None:
+        args = [a for a in args if a != through]
+        if not re.fullmatch(r"T\d+", through):
+            print(f"{RED}ERROR: --through takes a task id like T005, not {through!r}.{NC}")
+            return 2
+
+    root = repo_root()
+    feature_dir = resolve_feature_dir(root, args[0] if args else None)
+    if not feature_dir or not os.path.isdir(feature_dir):
+        print(f"{RED}ERROR: feature directory not found.{NC}")
+        print("Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]\n                          [--scaffold] [--verify] [--verbose] [--through T0NN]")
+        return 2
+    foreign = foreign_feature_dir(root, feature_dir)
+    if foreign:
+        print(f"Repository root: {root}")
+        for line in foreign_feature_message(root, foreign):
+            print(f"{RED}{line}{NC}" if line.startswith("ERROR") else line)
+        return 2
+
+    bp_path = os.path.join(feature_dir, "blueprint.md")
+    if not os.path.isfile(bp_path):
+        print(f"{RED}blueprint.md not found — run /speckit.blueprint.generate first.{NC}")
+        return 1
+    bp = open(bp_path, encoding="utf-8", errors="replace").read()
+    # A slice of a split feature needs its predecessors applied first: its Before blocks
+    # quote the file as they leave it, and its code calls what they declare.
+    try:
+        chain = base_chain(bp, feature_dir, root)
+    except BaseChainError as exc:
+        print(f"{RED}ERROR: invalid Base chain: {exc}{NC}")
+        return 1
+    base_tasks = [(tid, sec) for _p, text in chain for tid, sec in split_tasks(text)]
+    tasks = split_tasks(bp)
+    qualified_base = [(f"{os.path.relpath(os.path.dirname(path), root)}/{tid}", sec)
+                      for path, text in chain for tid, sec in split_tasks(text)]
+    full_task_count = len(tasks)
+    dropped_through = 0
+    if through is not None:
+        order = [t for t, _s in tasks]
+        if through not in order:
+            print(f"{RED}ERROR: --through {through}: this blueprint has no such task.{NC}")
+            print("  its tasks are: " + ", ".join(order[:12])
+                  + (f" (+{len(order) - 12} more)" if len(order) > 12 else ""))
+            return 2
+        cut = len(order) - 1 - order[::-1].index(through)
+        dropped_through = len(tasks) - (cut + 1)
+        tasks = tasks[: cut + 1]
+    _stamped_head = stamped_head(bp)
+    _root = root
+
+    print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
+    print(f"Feature: {os.path.relpath(feature_dir, root)}")
+    print(f"Repository root: {root}")
+    mode = parse_mode(bp)
+    print(f"Mode: {mode} | {len(tasks)} task sections"
+          + (f" (+{len(base_tasks)} from {len(chain)} base blueprint(s))" if chain else ""))
+    if mode == "unknown":
+        print(f"  {YELLOW}Mode is unknown — the header's **Mode**: line is missing or unreadable, so"
+              f" mode-specific behaviour is off.{NC}")
+    ids = [tid for tid, _ in tasks]
+    dupes = sorted({t for t in ids if ids.count(t) > 1})
+    if dupes:
+        print(f"  {YELLOW}{len(dupes)} task id(s) have more than one section — each section is applied:"
+              f" {', '.join(dupes)}{NC}")
+
+    if do_verify and verify_scope == "feature" and test_command(bp) and test_scope(bp) == "unspecified":
+        print("ERROR: feature gate cannot omit an unspecified **Test** header; declare **Test Scope**: feature or repository")
+        return 2
+
+    # --verify asks only whether commands pass on the working tree. Once a feature is
+    # complete its historical Before blocks no longer anchor, so applying them first
+    # turns a passing verification into an unrelated document failure. --through still
+    # limits the task commands; applying is retained only when an explicit operation
+    # needs the document copy.
+    verify_only = do_verify and not (do_build or do_scaffold or strict_anchors)
+    if verify_only:
+        verify_failures = run_verifications(root, [(f"{os.path.relpath(feature_dir, root)}/{tid}", sec) for tid, sec in tasks], bp, keep, verify_scope, qualified_base, through is not None)
+        return 1 if verify_failures else 0
+
+    # realpath: on macOS mkdtemp returns /var/... and inside() resolves to /private/var/...,
+    # so an unresolved _tree made every Defect message a six-level ../ chain.
+    tree = copy_tree(root)
+    _tree = os.path.realpath(tree)
+
+    # Start from a tree WITHOUT this blueprint's new files. In guide-scaffold mode the
+    # skeletons are already on disk, and a copy that keeps them lets the build pass over a
+    # task whose block is missing or mislabelled — the skeleton fills the hole and the
+    # compiler never sees it. A file the blueprint declares new is a file the blueprint
+    # has to supply; removing it first is what makes the build a test of the document.
+    for _tid, section in base_tasks + tasks:
+        for path, kind in file_kinds(section):
+            if kind != "new" or path in _overwritten:
+                continue
+            try:
+                full = inside(tree, path)
+            except Defect:
+                continue  # reported when the task itself is applied
+            if os.path.isfile(full):
+                os.remove(full)
+                _overwritten.append(path)
+    if _overwritten:
+        print(f"  {YELLOW}{len(_overwritten)} declared-new file(s) were already on disk and were removed from"
+              f" the copy first{NC} — the build tests what the blueprint supplies, not what the tree holds")
+    # A file on disk that carries a blueprint marker but that no task declares is residue
+    # of a task the document no longer has — a deleted section, a renamed path. Left in
+    # the copy it fills the hole the missing task left, and the build passes over it.
+    declared_all = {p for _t, sec in base_tasks + tasks for p, _k in file_kinds(sec)}
+    # A sibling slice's files are that slice's business, not residue of this one.
+    for _cp, _ctext in dependent_slices(feature_dir, root):
+        declared_all |= {p for _t, sec in split_tasks(_ctext) for p, _k in file_kinds(sec)}
+    # The question is not "is this newer than the stamp" — an ADR, a golden fixture, a
+    # test and .gitignore all are, and deleting them produced a build failure reported
+    # against the blueprint. It is "did a blueprint put this here and does no task own it
+    # now": undeclared, absent from the committed tree, and carrying a marker.
+    head_known = commit_known(root, "HEAD")
+    orphans = []
+    # The executable marker forms and the scaffold comment — not a bare `T014:`, which
+    # the extension's own command specs use in their examples under .specify/.
+    marker = re.compile(
+        r"TODO\(blueprint\)"
+        r"|(?:NotImplementedError|UnsupportedOperationException|NotImplementedException|fatalError|todo!|unimplemented!|panic)\s*\(\s*\"?T\d{3,}:"
+        r"|throw\s+new\s+Error\s*\(\s*[\"'`]\s*T\d{3,}\s*:"
+    )
+    for dirpath, dirnames, filenames in os.walk(tree):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_ANYWHERE | SKIP_AT_ROOT and not d.startswith(".")]
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            relp = os.path.relpath(full, tree)
+            if relp in declared_all or relp.startswith("specs" + os.sep):
+                continue
+            # Residue means: not in the stamped commit AND declared by nobody. A file
+            # that WAS in that commit is the tree's, however it looks now — deleting one
+            # because a sibling slice had put a marker in it removed a baseline class and
+            # produced a build failure the blueprint was blamed for.
+            if head_known and in_commit(root, "HEAD", relp):
+                continue  # committed tree content, whatever it looks like
+            try:
+                if os.path.getsize(full) > 512_000:
+                    continue
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+                if marker.search(text):
+                    orphans.append((relp, set(re.findall(r"\bT\d{3,}\b", text))))
+            except OSError:
+                continue
+    # Removed only when something in this document claims them. An undeclared file is not
+    # this blueprint's output, so deleting it does not test the blueprint — it tests
+    # whether the project still builds without a file the developer is in the middle of
+    # writing. Reproduced: a helper class typed but not yet staged, carrying one
+    # `TODO(blueprint):` line, turned a green run red, and the tool explained the failure
+    # by naming nine unrelated files and saying the blueprint was stale. Uncommitted work
+    # in progress is the workflow this tool recommends; it must not be swept.
+    #
+    # The residue this check exists for is a file a task USED to declare. That shows up as
+    # a marker naming one of this document's own task ids, which is exactly what the
+    # cleanup spec uses to trace a marker to its task.
+    own_ids = {tid for tid, _s in base_tasks + tasks}
+    claimed, unclaimed = [], []
+    for relp, ids in orphans:
+        (claimed if ids & own_ids else unclaimed).append(relp)
+    for relp in claimed:
+        os.remove(os.path.join(tree, relp))
+    if claimed:
+        why = "carry a marker naming one of this blueprint's task ids, are not in the committed tree, and no task declares them"
+        print(f"  {YELLOW}{len(claimed)} file(s) {why};"
+              f" removed from the copy so they cannot stand in for a missing task:{NC} "
+              + ", ".join(claimed[:6])
+              + (f" (+{len(claimed) - 6} more)" if len(claimed) > 6 else ""))
+    if unclaimed:
+        print(f"  {len(unclaimed)} untracked file(s) carry a blueprint marker no task here claims;"
+              " left in the copy: " + ", ".join(unclaimed[:4])
+              + (f" (+{len(unclaimed) - 4} more)" if len(unclaimed) > 4 else ""))
+    print(f"Tree: {tree}\n")
+
+    base_written, base_noop, base_unplaced, base_failed = 0, 0, 0, []
+    if base_tasks:
+        print(f"{CYAN}[0] Applying {len(base_tasks)} task(s) from the base blueprint(s){NC}")
+        for tid, section in base_tasks:
+            try:
+                _note, count, _flags = apply_task(tree, section)
+                if count:
+                    base_written += 1
+                elif "unanchored" in _flags:
+                    base_unplaced += 1
+                else:
+                    base_noop += 1
+            except (Defect, AlreadyApplied, Ambiguous) as exc:
+                base_failed.append(f"{tid}: {exc}")
+        if base_failed:
+            # The base is another slice's document; its problems are not this one's, but
+            # this slice cannot be tested until they are fixed.
+            record("warn", f"{len(base_failed)} base task(s) did not apply",
+                   "\n".join(base_failed[:4]) + (f"\n(+{len(base_failed) - 4} more)" if len(base_failed) > 4 else "")
+                   + "\nrun the applier in the base feature directory; this slice builds on top of it")
+        else:
+            record("pass", f"Base: {base_written} task(s) wrote blocks; {base_noop} no-op/reference; {base_unplaced} unplaced")
+
+    print(f"{CYAN}[1] Applying tasks in document order{NC}")
+    failed, applied_tasks, unanchored_tasks, already, unclear = [], 0, [], [], []
+    # What did not apply, kept as one list. `already` holds a task that applied over a
+    # moved tree too, so counting skips from it said "9 task(s) skipped" above a
+    # summary reading `skipped: 8`, and listed eight.
+    skipped_ids: list[str] = []
+    applied_sections: list = []
+    # Kept apart from `rc` on purpose — see the --verify branch below.
+    verify_failures = 0
+    _ahead_moved: list[str] = []
+    try:
+        for tid, section in tasks:
+            try:
+                note, count, flags = apply_task(tree, section)
+            except AlreadyApplied as exc:
+                # Partly typed is not done: /speckit.blueprint.review counts a task with
+                # one of three registrations written as unimplemented, and so does this.
+                (unclear if " of this task's " in str(exc) or " of the " in str(exc) else already).append(tid)
+                skipped_ids.append(tid)
+                if " of this task's " in str(exc):
+                    _partly.append(tid)
+                # "already applied" for a task where only some hunks are present says the
+                # work is done when it is half done, which is the opposite of what
+                # /speckit.blueprint.review means by implemented.
+                partial = " (partly)" if " of this task's " in str(exc) else ""
+                record("warn", f"{tid}  already applied{partial}", str(exc))
+                continue
+            except Ambiguous as exc:
+                # Not counted as already in the tree: nobody showed that it is.
+                unclear.append(tid)
+                skipped_ids.append(tid)
+                record("warn", f"{tid}  cannot tell", str(exc))
+                continue
+            except Defect as exc:
+                failed.append(tid)
+                record("fail", f"{tid}  FAILED", str(exc))
+                continue
+            if count and "moved" in flags:
+                # Some hunks applied and some were already there: the tree is part-way
+                # through this task, and a tick would say the blueprint was tested on it.
+                applied_tasks += 1
+                already.append(tid)
+                record("warn", f"{tid}  applied over a tree that has moved on", note)
+            elif count and "unanchored" in flags:
+                # Applied, but a block was left unplaced: a tick here is what a reader
+                # running without --build sees, and it is not the whole story.
+                applied_tasks += 1
+                unanchored_tasks.append(tid)
+                record("warn", f"{tid}  applied, with a block left unplaced", note)
+            elif count:
+                applied_tasks += 1
+                applied_sections.append((tid, section))
+                record("pass", f"{tid}  applied", note)
+            elif "no file" in note or "delete" in note or note == "no code block":
+                skipped_ids.append(tid)
+                record("warn", f"{tid}  skipped ({note})")
+            else:
+                unanchored_tasks.append(tid)
+                skipped_ids.append(tid)
+                record("warn", f"{tid}  skipped ({note})")
+
+        # One state, said once. "Already applied", "cannot tell" and "applied over a tree
+        # that has moved on" are three readings of a single fact — this tree is past the
+        # commit the blueprint describes — and printing them per task filled the run with
+        # the same sentence. What a reader needs is the state and the count.
+        moved_files = sorted({p for p in declared_all
+                              if changed_since(root, _stamped_head, p) is True}) if _stamped_head else []
+        ahead = sorted(set(already) | set(unclear))
+        if ahead:
+            if moved_files:
+                print(f"\n  {YELLOW}AHEAD — this tree is past the blueprint's stamp.{NC}"
+                      f" {len(moved_files)} of the file(s) it writes have changed since"
+                      f" HEAD {_stamped_head}, so {len(ahead)} task(s) could not be tested:"
+                      f" {', '.join(ahead[:10])}"
+                      + (f" (+{len(ahead) - 10} more)" if len(ahead) > 10 else ""))
+            else:
+                print(f"\n  {YELLOW}{len(ahead)} task(s) are already in the tree or could not be judged{NC}:"
+                      f" {', '.join(ahead[:10])}"
+                      + (f" (+{len(ahead) - 10} more)" if len(ahead) > 10 else ""))
+            print("  Applying a blueprint over work that is done tests nothing. Run it before implementing,")
+            print("  or against a tree that predates the work; --verbose gives the per-task reason.")
+
+        print(f"\n{CYAN}=== Summary ==={NC}")
+        # "Partly applied" and "cannot tell" are not "skipped". The code computes the
+        # difference and a comment in it says why the difference matters — a task with
+        # one of three hunks in the file is half done, and calling that done is the
+        # opposite of what review means by implemented — and then the summary folded all
+        # three into one word. Two counts in parentheses restore it without restoring the
+        # per-task wall of text that made this run unreadable.
+        partly = [t for t in unclear if t in _partly] + [t for t in already if t in _partly]
+        breakdown = []
+        if partly:
+            breakdown.append(f"{len(partly)} partly applied")
+        cannot = [t for t in unclear if t not in _partly]
+        if cannot:
+            breakdown.append(f"{len(cannot)} cannot tell")
+        print(f"  applied: {applied_tasks}  skipped: {len(skipped_ids)}"
+              + (f" ({', '.join(breakdown)})" if breakdown else "")
+              + f"  {RED}FAILED{NC}: {len(failed)}"
+              + (f"  {YELLOW}replaced{NC}: {len(_overwritten)} declared-new file(s) that were on disk" if _overwritten else ""))
+        # How much of the document this run actually tested. `applied: 3 skipped: 11` and
+        # exit 0 is honest in the body and a lie to a CI job reading only the code; the
+        # fraction is the number a reader needs to know what the green covers, and it goes
+        # in the summary rather than a paragraph underneath it.
+        # The denominator is the WHOLE document, including the tasks --through cut off.
+        # Measuring the truncated run against itself would print `coverage: 5 of 5 (100%)`
+        # for a run that never looked at fifteen tasks, which is the exact shape of false
+        # green this line exists to prevent.
+        if full_task_count:
+            pct = round(100 * applied_tasks / full_task_count)
+            colour = GREEN if pct >= 80 else YELLOW
+            print(f"  {colour}Selected application coverage: {applied_tasks} of {full_task_count}"
+                  f" task(s) wrote blocks ({pct}%){NC}")
+        if base_tasks:
+            print(f"  Base application: {base_written} of {len(base_tasks)} task(s) wrote blocks; "
+                  f"{base_noop} no-op/reference; {len(base_failed) + base_unplaced} not applied")
+        print("  Application coverage describes writes in the copied tree; it does not prove behavior.")
+        if dropped_through:
+            print(f"  {YELLOW}--through {through}: {dropped_through} later task(s) were not applied,"
+                  f" not tested, and are not evidence of anything.{NC}")
+        if unanchored_tasks:
+            print(f"  {YELLOW}{len(unanchored_tasks)} task(s) carry code no marker anchors to a"
+                  f" position: {', '.join(unanchored_tasks[:10])}"
+                  + (f" (+{len(unanchored_tasks) - 10} more)" if len(unanchored_tasks) > 10 else "") + NC)
+
+        rc = 1 if failed else 0
+        if strict_anchors and (unanchored_tasks or applied_tasks == 0):
+            rc = 1
+        if strict_anchors and (already or unclear):
+            # The CI flag's whole point is that "verified nothing" must not share an exit
+            # code with "verified everything". A run whose copy discarded the
+            # implementation to test the blueprint says nothing about the tree CI is
+            # guarding, so it must not stay green there.
+            print(f"\n  {YELLOW}--require-anchors: {len(already) + len(unclear)} task(s) are already in the tree or"
+                  f" could not be judged — this run describes the blueprint, not this tree.{NC}")
+            rc = 1
+        if do_build and failed:
+            print(f"\n{YELLOW}Build skipped — {len(failed)} task(s) did not apply, so a build here"
+                  f" would report the applier's damage, not the blueprint's.{NC}")
+        elif do_build:
+            cmd = build_command(tree, bp)
+            if cmd is None:
+                print(f"\n{YELLOW}WARN: no build command declared and none recognised — build skipped.{NC}")
+                print("      Add a `**Build**: <command>` line to the blueprint header.")
+            elif run_build(tree, cmd) != 0:
+                rc = 1
+                if not failed and _stamped_head:
+                    moved = sorted({p for p in declared_all
+                                    if changed_since(root, _stamped_head, p) is True})
+                    if moved:
+                        _ahead_moved = moved
+                        print(f"\n      {YELLOW}every task applied and the build still failed. {len(moved)} of the"
+                              f" file(s) this blueprint writes have changed since HEAD {_stamped_head}:{NC} "
+                              + ", ".join(moved[:6])
+                              + (f" (+{len(moved) - 6} more)" if len(moved) > 6 else ""))
+                        print("      A blueprint describes the tree at its stamp. Run against a tree that has moved on,")
+                        print("      a failure here is usually that distance rather than a defect in the document —")
+                        print("      check the errors against the files listed before rewriting anything.")
+                        # And the exit code says the same thing the paragraph does. This
+                        # run diagnosed the distance itself and then reported it with the
+                        # code that means "the document is wrong", which is the one
+                        # reading it had just ruled out. Exit 3 is "could not test",
+                        # separate from exit 1's "tested, and it failed". Five features
+                        # out of five in one repository were exiting 1 for this reason,
+                        # which is how a tool teaches a team to ignore it.
+                        rc = 3 if not strict_anchors else 1
+            elif mode.startswith("guide"):
+                print(f"      {YELLOW}a guide build compiles skeletons; it does not exercise behavior.{NC}")
+                stripped = [
+                    (tid, sum(n for _l, n in body_replaced_by_marker(sec)))
+                    for tid, sec in base_tasks + tasks if body_replaced_by_marker(sec)
+                ]
+                if stripped:
+                    print(f"      {YELLOW}{len(stripped)} task(s) replace working code with a marker: "
+                          + ", ".join(f"{t} (-{n} lines)" for t, n in stripped[:6])
+                          + (f" (+{len(stripped) - 6} more)" if len(stripped) > 6 else "")
+                          + f" — that behavior is gone from this copy and the build above cannot see it.{NC}")
+        if do_verify:
+            # Not gated on whether the applier could place anything: --verify asks a
+            # question about the working tree, and the applier's copy has no say in it.
+            #
+            # Its result is kept OUT of `rc`. Folding it in made the run print
+            # "Blueprint did NOT apply cleanly" three lines under its own `FAILED: 0`,
+            # which points a developer at the document when the finding is about their
+            # code. The two verdicts are about two different artifacts and get two
+            # different sentences; the exit code is still non-zero for either.
+            verify_failures = run_verifications(root, [(f"{os.path.relpath(feature_dir, root)}/{tid}", sec) for tid, sec in tasks], bp, keep, verify_scope, qualified_base, through is not None)
+        if do_scaffold and not failed:
+            # The generator writing forty skeletons by hand is where drift comes from;
+            # the copy already holds exactly what the document says, verified by the
+            # build. Only files the blueprint declares new, and only ones not already
+            # there: nothing existing is touched, which is the promise this flag bends
+            # far enough and no further.
+            written, skipped = [], []
+            for _tid, section in base_tasks + tasks:
+                for relp, kind in file_kinds(section):
+                    if kind != "new":
+                        continue
+                    src, dst = os.path.join(tree, relp), os.path.join(root, relp)
+                    if not os.path.isfile(src):
+                        continue
+                    if os.path.exists(dst):
+                        skipped.append(relp)
+                        continue
+                    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+                    shutil.copyfile(src, dst)
+                    written.append(relp)
+            print(f"\n{CYAN}=== Scaffold ==={NC}")
+            print(f"  wrote {len(written)} new file(s) into {root}")
+            # A markdown code block can carry text. It cannot carry bytes: there is no way
+            # to write CRLF in one, no trailing-newline rule, no encoding. A reviewer's
+            # blueprint declared a golden CSV whose real file ends its records with CRLF
+            # per RFC 4180; --scaffold wrote it with LF, all three document tools passed,
+            # and the diff that finally caught it showed three lines that looked identical.
+            # These files still get written — refusing would leave the developer writing
+            # the same wrong bytes by hand — but never silently.
+            byte_exact = [p for p in written
+                          if os.path.splitext(p)[1].lower() in BYTE_EXACT_SUFFIXES]
+            if byte_exact:
+                print(f"  {YELLOW}{len(byte_exact)} of them are files whose bytes a code block cannot"
+                      f" state — line endings, a trailing newline, an encoding:{NC} "
+                      + ", ".join(byte_exact[:6])
+                      + (f" (+{len(byte_exact) - 6} more)" if len(byte_exact) > 6 else ""))
+                print("      What is on disk is the document's TEXT. If the real artifact is compared"
+                      " byte for byte,")
+                print("      regenerate it with the command that produces it and let the document name"
+                      " that command.")
+            if skipped:
+                print(f"  {YELLOW}left {len(skipped)} file(s) alone — already on disk{NC}: " + ", ".join(skipped[:6])
+                  + (f" (+{len(skipped) - 6} more)" if len(skipped) > 6 else ""))
+        elif do_scaffold:
+            print(f"\n{YELLOW}--scaffold skipped: {len(failed)} task(s) did not apply.{NC}")
+    finally:
+        if keep:
+            print(f"\nTree kept at: {tree}")
+        else:
+            shutil.rmtree(tree, ignore_errors=True)
+
+    if rc == 3:
+        print(f"\n{YELLOW}Could not test this blueprint — the tree has moved past its stamp"
+              f" (exit 3, not 1: nothing here says the document is wrong).{NC}")
+        if _ahead_moved:
+            # "Nothing here says the document is wrong" is true and is not the whole
+            # sentence. A build did fail, in a copy of the developer's own tree, and the
+            # errors named files — a reviewer's tree that would not compile at all was
+            # summarised by this line as a distance problem. Exit 3 means this run cannot
+            # judge the DOCUMENT; it says nothing either way about the tree.
+            print(f"      The build above did fail. It ran over your files, and {len(_ahead_moved)} of the ones"
+                  f" this blueprint writes have moved: " + ", ".join(_ahead_moved[:3])
+                  + (f" (+{len(_ahead_moved) - 3} more)" if len(_ahead_moved) > 3 else ""))
+            print("      Read the compiler's own lines above before concluding the distance explains them.")
+    elif rc:
+        print(f"\n{RED}Blueprint did NOT apply cleanly{NC}")
+    elif applied_tasks == 0:
+        # A build that passes over an unchanged tree is evidence about the tree, not
+        # about the blueprint, and saying "applied cleanly" here would claim otherwise.
+        print(f"\n{YELLOW}Nothing was applied — no task anchored its code to a position in a file.{NC}")
+        print("      The build result above describes the working tree, not this blueprint.")
+        print("      Pass --require-anchors to make this a failure.")
+    elif skipped_ids or _overwritten:
+        # Still exit 0 — what was applied did apply — but not in green, and never without
+        # naming what went untested. A skipped task has not seen a compiler, and a run
+        # that says "applied and built" over one is the false pass this tool exists to
+        # refuse. Same for a copy that discarded the implementation to test the document.
+        names = skipped_ids
+        bits = []
+        if names:
+            more = f" (+{len(names) - 8} more)" if len(names) > 8 else ""
+            bits.append(f"{len(names)} task(s) skipped: {', '.join(names[:8])}{more}")
+        if _overwritten:
+            bits.append(f"{len(_overwritten)} declared-new file(s) removed from the copy first")
+        print(f"\n{YELLOW}Blueprint applied{' and built' if do_build else ''} — {'; '.join(bits)}.{NC}")
+        if names:
+            print("      A skipped task never reached the build; this run says nothing about its code.")
+            print("      Pass --require-anchors to make that a failure.")
+        if _overwritten:
+            print("      If those held your implementation, this run describes the blueprint, not your tree;")
+            print("      if they were scaffolds, this is the run you wanted.")
+    else:
+        print(f"\n{GREEN}Blueprint applied{' and built' if do_build else ''} cleanly{NC}")
+    if verify_failures:
+        # A second sentence, about a second artifact. The line above judged the document;
+        # this one judges the tree, and saying so is the whole educational value of the
+        # flag — a developer who reads "did NOT apply cleanly" goes and regenerates a
+        # blueprint that was fine.
+        print(f"\n{RED}{verify_failures} **Verification** command(s) failed against your tree{NC}"
+              " — your code, not this document.")
+    return rc or (1 if verify_failures else 0)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

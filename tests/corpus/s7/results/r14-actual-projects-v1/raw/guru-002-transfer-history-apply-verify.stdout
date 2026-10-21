@@ -1,0 +1,13 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/002-transfer-history
+Mode: guide | 11 task sections (+7 from 1 base blueprint(s))
+
+=== Verification ===
+  against a copy of your working tree (/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-ogox4xl9)
+  ✗ T003  $ node bin/ledger.js >/dev/null — exit 2
+      usage: ledger balance --file PATH | ledger transfer --file PATH --request ID --from ACCOUNT --to ACCOUNT --amount MINOR_UNITS | ledger history --file PATH [--account ACCOUNT] [--after REQUEST_ID] [--limit COUNT]
+  ran 7 distinct command(s) covering 12 task(s): 6 passed, 1 failed; 4 task(s) name no runnable command
+  11 task(s) verify against your tree: T001, T002, T004, T005, T006, T007, T008, T009, T010, T011 (+1 more)
+  1 task(s) do not verify against your tree: T003
+  These ran against YOUR code, not the blueprint's. Before the bodies are written
+  a guide-mode blueprint is red here by design; after they are, this is the failure.

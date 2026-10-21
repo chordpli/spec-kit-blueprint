@@ -1,0 +1,83 @@
+
+########## specs/001-fee-settlement ##########
+=== Blueprint Scaffold Validator 1.2.0 ===
+Feature: specs/001-fee-settlement
+Blueprint: specs/001-fee-settlement/blueprint.md
+Mode: guide (--done: validating completed files on disk)
+Completion scope: declared files, symbols, and markers only; runtime behavior is not executed.
+
+[1. Blueprint Document]
+  ✓ blueprint.md exists
+
+[2. File Existence (NEW files from blueprint)]
+  ⚠ No NEW file paths detected in blueprint (check blueprint format)
+
+[3. TODO Markers in Scaffold Files]
+
+  Services/Handlers:
+    (no service/handler files to check)
+
+  Tests:
+    (no test files to check)
+
+  Other skeletons (the blueprint gives them a marker):
+    (none)
+
+[3b. Feature declared done]
+  ✓ no declared file carries a not-implemented marker
+
+[4. Over-Implementation Detection]
+  ✓ No over-implemented scaffold files detected
+
+=== Summary ===
+  PASS: 3
+  WARN: 1
+  FAIL: 0
+  After implementing, run /speckit.blueprint.cleanup to sweep leftover markers.
+
+Validation PASSED with warnings
+
+########## specs/002-settlement-cancellation ##########
+=== Blueprint Scaffold Validator 1.2.0 ===
+Feature: specs/002-settlement-cancellation
+Blueprint: specs/002-settlement-cancellation/blueprint.md
+Mode: guide (--done: validating completed files on disk)
+Completion scope: declared files, symbols, and markers only; runtime behavior is not executed.
+
+[1. Blueprint Document]
+  ✓ blueprint.md exists
+
+[2. File Existence (NEW files from blueprint)]
+  ✓ 8 declared file(s) exist
+
+[3. TODO Markers in Scaffold Files]
+
+  Services/Handlers:
+    (no service/handler files to check)
+
+  Tests:
+
+  Other skeletons (the blueprint gives them a marker):
+    (none)
+
+  ✓ 8 of 8 declared skeleton(s) carry no marker — implemented, or written complete on purpose. Pass --fresh to judge a scaffold nobody has touched yet
+
+[3b. Feature declared done]
+  ✓ no declared file carries a not-implemented marker
+
+[4. Over-Implementation Detection]
+  ✓ No over-implemented scaffold files detected
+
+=== Declared symbols ===
+  ✓ all 10 declared symbol(s) are present in the files that should hold them (3 introduced by a (modify) hook)
+
+=== Summary ===
+  PASS: 6
+  WARN: 0
+  FAIL: 0
+  After implementing, run /speckit.blueprint.cleanup to sweep leftover markers.
+
+All checks passed
+
+########## sweep ##########
+  ✓ all 2 feature(s) passed

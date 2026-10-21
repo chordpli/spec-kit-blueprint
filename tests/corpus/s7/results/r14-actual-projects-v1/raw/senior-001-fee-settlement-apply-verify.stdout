@@ -1,0 +1,7 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/001-fee-settlement
+Mode: guide | 0 task sections
+
+=== Verification ===
+  against a copy of your working tree (/var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-qmuy8j_o)
+  ran 1 distinct command(s) covering 0 task(s) plus 1 header test suite(s): 1 passed, 0 failed

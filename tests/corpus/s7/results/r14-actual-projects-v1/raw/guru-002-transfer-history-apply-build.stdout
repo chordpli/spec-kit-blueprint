@@ -1,0 +1,23 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/002-transfer-history
+Mode: guide | 11 task sections (+7 from 1 base blueprint(s))
+  4 declared-new file(s) were already on disk and were removed from the copy first — the build tests what the blueprint supplies, not what the tree holds
+Tree: /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-3nw6ep6x
+
+[0] Applying 7 task(s) from the base blueprint(s)
+[1] Applying tasks in document order
+
+=== Summary ===
+  applied: 1  skipped: 10  FAILED: 0  replaced: 4 declared-new file(s) that were on disk
+  coverage: this run typed and tested 1 of 18 task(s) (6%)
+
+=== Build ===
+  $ npm run build
+  (in /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-3nw6ep6x, limit 900s)
+      a guide build compiles skeletons; it does not exercise behavior.
+
+Blueprint applied and built — 10 task(s) skipped: T001, T003, T004, T005, T006, T007, T008, T009 (+2 more); 4 declared-new file(s) removed from the copy first.
+      A skipped task never reached the build; this run says nothing about its code.
+      Pass --require-anchors to make that a failure.
+      If those held your implementation, this run describes the blueprint, not your tree;
+      if they were scaffolds, this is the run you wanted.

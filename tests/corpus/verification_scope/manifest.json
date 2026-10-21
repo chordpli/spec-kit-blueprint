@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "bundle": "tests/corpus/s7/projects/project-guru.bundle",
+  "app_modified": false,
+  "generation_input": "docs/r16-verification-boundary.md",
+  "states": {
+    "before": {
+      "commit": "617d83ff3bf3fcc6ace8d263a7e9a122b49cfe92",
+      "expected": {
+        "a_document": 0,
+        "b_document": 0,
+        "a_focused": 0,
+        "b_focused": 1,
+        "repository": 1
+      },
+      "sha256": {
+        "specs/001-idempotent-transfer/blueprint.md": "17ac2f48f18a14f7d78f06c0e21f5f8290c04f2584b0feabcf9007e57e0579af",
+        "specs/002-transfer-history/blueprint.md": "fcf78671e01eaba26e66f13c6afd2ea107f736466b6531a3d075622ad9aea539",
+        "docs/r16-verification-boundary.md": "4c95011439329be3e4b11817bf55b2aaa624c1c72d5cd706bbcaa512b917c602"
+      }
+    },
+    "half": {
+      "commit": "a3312ad985d9a763d3427e3703b91342869c13d6",
+      "expected": {
+        "a_document": 0,
+        "b_document": 0,
+        "a_focused": 0,
+        "b_focused": 1,
+        "repository": 0
+      },
+      "sha256": {
+        "specs/001-idempotent-transfer/blueprint.md": "17ac2f48f18a14f7d78f06c0e21f5f8290c04f2584b0feabcf9007e57e0579af",
+        "specs/002-transfer-history/blueprint.md": "fcf78671e01eaba26e66f13c6afd2ea107f736466b6531a3d075622ad9aea539",
+        "docs/r16-verification-boundary.md": "4c95011439329be3e4b11817bf55b2aaa624c1c72d5cd706bbcaa512b917c602"
+      }
+    },
+    "complete": {
+      "commit": "bd8d9ec22a098fca3e4823e62be2a6a71ce2af02",
+      "expected": {
+        "a_document": 0,
+        "b_document": 0,
+        "a_focused": 0,
+        "b_focused": 0,
+        "repository": 0
+      },
+      "sha256": {
+        "specs/001-idempotent-transfer/blueprint.md": "17ac2f48f18a14f7d78f06c0e21f5f8290c04f2584b0feabcf9007e57e0579af",
+        "specs/002-transfer-history/blueprint.md": "99f4b6fb2ff6bf0c5c49381e7dc52ed65f7bdd554af87f2560e217952014f292",
+        "docs/r16-verification-boundary.md": "4c95011439329be3e4b11817bf55b2aaa624c1c72d5cd706bbcaa512b917c602"
+      }
+    }
+  }
+}

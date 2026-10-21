@@ -1,0 +1,28 @@
+validate: exit 0
+validate --strict-guide: exit 0
+validate --typo: ERROR: unknown option(s): --strict-guied
+validate --typo: Usage: validate_blueprint.py [specs/NNN-feature-name]
+validate --typo: exit 2
+apply: exit 0
+apply --verify: ⚠ human review declared, human evidence not supplied — the human part is not run, not counted as passed: specs/017-proof/T004
+apply --verify: ⚠ 1 test file(s) a task writes are not run by its Verification or a feature-scoped header — their test bodies are unmeasured
+apply --verify: exit 0
+apply --typo: ERROR: unknown option(s): --verfy
+apply --typo: Usage: apply_blueprint.py [specs/NNN-feature-name] [--build] [--keep] [--require-anchors]
+apply --typo:                           [--scaffold] [--verify] [--verbose] [--through T0NN]
+apply --typo: exit 2
+scaffold: exit 0
+scaffold --fresh: exit 0
+scaffold --done: ✗ 2 declared file(s) still carry a not-implemented marker: pkg/store.py (1), tests/test_cli.py (1)
+scaffold --done: exit 1
+scaffold --strict: exit 0
+scaffold --markers: pkg/store.py:3: raise NotImplementedError("T001: store record under key (017 FR-001).")
+scaffold --markers: tests/test_cli.py:6: raise NotImplementedError("T003: assert main reports two writes for two records (017 FR-002).")
+scaffold --markers:   (2 marker line(s) in 4 declared file(s))
+scaffold --markers: exit 0
+scaffold --done --all: ✗ 2 declared file(s) still carry a not-implemented marker: pkg/store.py (1), tests/test_cli.py (1)
+scaffold --done --all: ✗ 1 of 1 feature(s) did not pass: specs/017-proof
+scaffold --done --all: exit 1
+scaffold --typo: ERROR: unknown option: --frsh
+scaffold --typo: Usage: <EXT>/scripts/bash/validate-scaffold.sh [specs/NNN-feature-name] [--strict] [--fresh] [--done] [--markers] [--all]
+scaffold --typo: exit 2

@@ -1,0 +1,21 @@
+=== Blueprint Applier 1.2.0 ===
+Feature: specs/001-csv-import
+Mode: guide | 7 task sections
+  2 declared-new file(s) were already on disk and were removed from the copy first — the build tests what the blueprint supplies, not what the tree holds
+Tree: /var/folders/cn/sz3hlvwx0cv8_4zg5g732vnh0000gn/T/blueprint-apply-q8xtvx4v
+
+[1] Applying tasks in document order
+
+  AHEAD — this tree is past the blueprint's stamp. 6 of the file(s) it writes have changed since HEAD b316e3f, so 1 task(s) could not be tested: T011
+  Applying a blueprint over work that is done tests nothing. Run it before implementing,
+  or against a tree that predates the work; --verbose gives the per-task reason.
+
+=== Summary ===
+  applied: 6  skipped: 1  FAILED: 0  replaced: 2 declared-new file(s) that were on disk
+  coverage: this run typed and tested 6 of 7 task(s) (86%)
+
+Blueprint applied — 1 task(s) skipped: T011; 2 declared-new file(s) removed from the copy first.
+      A skipped task never reached the build; this run says nothing about its code.
+      Pass --require-anchors to make that a failure.
+      If those held your implementation, this run describes the blueprint, not your tree;
+      if they were scaffolds, this is the run you wanted.
