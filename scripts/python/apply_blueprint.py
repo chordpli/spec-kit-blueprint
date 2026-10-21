@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     BaseChainError,
     body_replaced_by_marker,
     changed_since,
+    code_blocks,
     commit_known,
     dependent_slices,
     in_commit,
@@ -957,6 +959,75 @@ def skeleton_tree(root: str, bp: str, tasks: list) -> tuple[str | None, str]:
     return tree, ""
 
 
+# A fenced block in a Markdown file that a reader would paste into a terminal. Anything
+# else (`text`, no info string, `json`) is shown, not run.
+SHELL_FENCES = {"sh", "bash", "shell", "console", "zsh"}
+DOC_FILE = re.compile(r"\.(?:md|markdown)$", re.I)
+
+
+def shell_blocks(markdown: str) -> list[str]:
+    """The shell-fenced blocks of a Markdown text, in order."""
+    return [body for info, body in code_blocks(markdown)
+            if re.split(r"[{\s,]", info.lower(), maxsplit=1)[0] in SHELL_FENCES]
+
+
+def doc_example_scripts(root: str, head: str, section: str) -> tuple[list, list]:
+    """The documentation examples a task promises, read from the document on disk.
+
+    A README task's Verification used to look for substrings in the README and then run
+    commands the blueprint restated next to them. A reviewer broke both README example
+    lines — a flag the CLI rejects, a clock value it refuses — and every gate stayed
+    green, because nothing ran what the README says. So a task whose authored Markdown
+    adds a shell-fenced block (```sh, ```bash, ```shell, ```console) promises a runnable
+    example, and the examples run are the shell blocks of the file as it is now that the
+    stamped commit did not have. Returns ([(path, script)], [(path, problem)]); a problem
+    is a promise with nothing on disk to run, or one that cannot be told apart from the
+    file's older examples.
+    """
+    kinds: dict[str, str] = {}
+    for p, k in file_kinds(section):
+        kinds.setdefault(p, k)
+    docs = [p for p, k in kinds.items()
+            if k in ("new", "modify") and DOC_FILE.search(p) and not p.startswith("specs/")]
+    if not docs:
+        return [], []
+    promised, pending = 0, None
+    for kind, payload in section_events(section):
+        if kind == "directive":
+            pending = payload
+        elif kind == "block":
+            if pending != "before":
+                promised += len(shell_blocks(payload[1]))
+            pending = None
+    if not promised:
+        return [], []
+    scripts, problems = [], []
+    for path in docs:
+        full = os.path.join(root, path)
+        if not os.path.isfile(full):
+            problems.append((path, "the file is not on disk"))
+            continue
+        blocks = shell_blocks(_read(full))
+        if kinds[path] == "modify" or in_commit(root, head, path):
+            if not (head and commit_known(root, head)):
+                problems.append((path, "not measured — without the stamped commit its new examples"
+                                       " cannot be told from the ones it already had"))
+                continue
+            older = {b.strip() for b in shell_blocks(_git_blob(root, head, path) or "")}
+            blocks = [b for b in blocks if b.strip() not in older]
+        if not blocks:
+            problems.append((path, f"the task adds {promised} shell example block(s) and the file has no"
+                                   " shell block the stamped commit did not have"))
+            continue
+        for n, body in enumerate(blocks, 1):
+            lines = [ln for ln in body.rstrip("\n").split("\n")]
+            # A console transcript: `$ ` marks the commands, the other lines are output.
+            if any(ln.startswith("$ ") for ln in lines):
+                lines = [ln[2:] for ln in lines if ln.startswith("$ ")]
+            scripts.append((path, f"set -e\n# {path} example {n}, as written there\n" + "\n".join(lines)))
+    return scripts, problems
+
+
 def _git_blob(root: str, head: str, path: str) -> str | None:
     proc = subprocess.run(["git", "-C", root, "show", f"{head}:{path}"], capture_output=True, timeout=60)
     return proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else None
@@ -1134,6 +1205,26 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         print(f"  Base: {len(base_tasks)} referenced task(s); commands omitted from feature gate")
     run_tasks = (base_tasks if scope == "all" else []) + tasks
     task_cmds = {tid: verification_commands(section) for tid, section in run_tasks}
+    # The examples a documentation task writes are run as the document on disk has them,
+    # in order, in a copy of their own so a reader's example cannot disturb the other
+    # commands.
+    doc_runs: dict[str, str] = {}
+    doc_missing: set[str] = set()
+    doc_unmeasured = []
+    for tid, section in run_tasks:
+        scripts, problems = doc_example_scripts(root, stamped_head(bp), section)
+        for path, script in scripts:
+            task_cmds[tid].append(script)
+            doc_runs[script] = path
+        for path, why in problems:
+            if why.startswith("not measured"):
+                doc_unmeasured.append(f"{tid} {path}: {why}")
+                continue
+            missing = (f"set -e\n# {path} examples, missing\n"
+                       f"echo {shlex.quote(path + ': ' + why)} >&2\nexit 1")
+            task_cmds[tid].append(missing)
+            doc_runs[missing] = path
+            doc_missing.add(missing)
     # Every task that leaves part of its check to a person, with or without a command
     # beside it: a static README assertion does not settle the wording it cannot read.
     humans = {tid for tid, section in run_tasks if human_reviews(section)}
@@ -1166,6 +1257,7 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         record("fail", "no runnable verification proof; behavior verification unavailable")
         return failures or 1
     tree = copy_tree(root)
+    doc_tree = None
     try:
         print(f"  against a copy of {root} ({tree})")
         passed_tasks, failed_tasks = set(), set()
@@ -1181,7 +1273,9 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             display = display_lines[1] if display_lines[0] == "set -e" and len(display_lines) > 1 else display_lines[0]
             if len(display_lines) > 1:
                 display += f" (+{len(display_lines) - 1} script line(s))"
-            code, tail = _run_one(cmd, tree)
+            if cmd in doc_runs and doc_tree is None:
+                doc_tree = copy_tree(root)
+            code, tail = _run_one(cmd, doc_tree if cmd in doc_runs else tree)
             code_of[cmd] = code
             if include_header and cmd == test_cmd:
                 header_code = code
@@ -1314,6 +1408,12 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             record("warn", f"{len(non_discriminating)} test task(s) pass on the blueprint's skeleton as well as"
                    " here — their tests measure nothing this feature adds, so they are not counted as passed: "
                    + _ids(non_discriminating), always=True)
+        if set(doc_runs) - doc_missing:
+            print(f"  Documentation examples: {len(set(doc_runs) - doc_missing)} shell block(s) run as the document on disk has them"
+                  f" ({', '.join(sorted(set(doc_runs.values())))}), in order, in a copy apart from the other commands")
+        if doc_unmeasured:
+            record("warn", f"{len(doc_unmeasured)} documentation file(s) promise runnable examples that were not run",
+                   "\n".join(doc_unmeasured[:4]), always=True)
         if undiscriminated:
             record("warn", f"{len(undiscriminated)} test task(s) passed, and whether their tests discriminate"
                    " was not measured", "\n".join(f"{t}: {why}" for t, why in sorted(undiscriminated.items())[:6]),
@@ -1364,6 +1464,8 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             print(f"  Verification tree kept at: {tree}")
         else:
             shutil.rmtree(tree, ignore_errors=True)
+        if doc_tree:
+            shutil.rmtree(doc_tree, ignore_errors=True)
     return failures
 
 

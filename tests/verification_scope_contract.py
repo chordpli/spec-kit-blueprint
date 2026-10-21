@@ -562,6 +562,57 @@ class CalcTest(unittest.TestCase):
                 rc, out = self.scaffold(shell, outer, '--done', '--all')
                 self.assertEqual(rc, 0, out)
 
+    # --- R19: documentation examples run as the document on disk has them ---------------
+
+    README_BP = ("# Blueprint: docs\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                 "### T001: Document the verb\n\n**File**: `README.md` (modify)\n\n"
+                 "**Before**:\n````markdown\n## Usage\n````\n\n"
+                 "**After**:\n````markdown\n## Usage\n\n```{fence}\npython3 -c \"print('documented')\"\n```\n````\n\n"
+                 "**Verification**: `python3 -c \"print(0)\"`\n")
+    README_OLD = "# calc\n\n```sh\npython3 -c \"raise SystemExit(7)\"\n```\n\n## Usage\n"
+
+    def verify_feature(self, root):
+        proc = subprocess.run([sys.executable, str(MODULE), 'specs/022-two', '--verify', '--verify-scope', 'feature'],
+                              cwd=root, capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+        return proc.returncode, proc.stdout
+
+    def test_readme_examples_run_from_the_readme_not_the_blueprint(self):
+        # R19 guru r2: both README example lines were broken and every gate stayed green,
+        # because the check ran commands the blueprint restated. The README's own new
+        # shell blocks run now; its older ones (this README_OLD's exit 7) are not this
+        # feature's and are not run.
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'README.md': self.README_OLD}, self.README_BP.replace('{fence}', 'sh'))
+            good = self.README_OLD + "\n```sh\npython3 -c \"print('documented')\"\n```\n"
+            Path(root, 'README.md').write_text(good)
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 0, out)
+            self.assertIn('Documentation examples: 1 shell block(s) run as the document on disk has them (README.md)', out)
+            self.assertIn('commands passed 2/2', out)
+            Path(root, 'README.md').write_text(good.replace("print('documented')", "raise SystemExit(3)"))
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('specs/022-two/T001  $ # README.md example 1, as written there (+2 script line(s)) — exit 3', out)
+            # The promise with nothing on disk to run is a failure, not a pass.
+            Path(root, 'README.md').write_text(self.README_OLD)
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('README.md: the task adds 1 shell example block(s) and the file has no shell block'
+                          ' the stamped commit did not have', out)
+            # A console transcript runs its `$ ` lines and skips the output lines.
+            Path(root, 'README.md').write_text(self.README_OLD + "\n```console\n$ python3 -c \"print(1)\"\n1\n```\n")
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 0, out)
+
+    def test_a_text_fenced_example_is_not_a_promise_to_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'README.md': self.README_OLD}, self.README_BP.replace('{fence}', 'text'))
+            Path(root, 'README.md').write_text(self.README_OLD + "\n```text\ncalc halve N\n```\n")
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn('Documentation examples', out)
+            self.assertIn('commands passed 1/1', out)
+
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')
         self.assertEqual(applier.test_scope('**Test Scope**: feature'), 'feature')
