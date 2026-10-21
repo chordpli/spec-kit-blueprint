@@ -1156,7 +1156,7 @@ def revert_task(root: str, tree: str, files: dict, spans: dict, tid: str) -> int
     """
     reverted = 0
     for (owner, path), sps in spans.items():
-        if owner != tid:
+        if owner != tid or not os.path.isfile(os.path.join(root, path)):
             continue
         current = _read(os.path.join(root, path))
         cur, old, out, at = current.split("\n"), files[path].split("\n"), [], 0
@@ -1380,14 +1380,53 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                         print(f"  Skeleton tree kept at: {skeleton}")
                     else:
                         shutil.rmtree(skeleton, ignore_errors=True)
-        task_passed = own_pass - non_discriminating
+        # Red on the whole skeleton is a low bar for a feature that changes existing code:
+        # there every new function throws, so a test that merely calls one is red. A
+        # reviewer's tests that checked only "a transfer under the limit succeeds" counted
+        # as discriminating while the limit itself was a no-op. So each discriminating test
+        # runs once more on the tree as it is with only the hunks of the (modify) task it
+        # depends on put back as the stamp had them. Green there, the test does not see
+        # that task's change. A dependency that only creates files has no hunks to put back
+        # and is not probed this way; the whole-skeleton probe already removed its files.
+        weak_against: dict[str, list[str]] = {}
+        new_only: dict[str, list[str]] = {}
+        if discriminating and not partial:
+            head = stamped_head(bp)
+            sections = dict(run_tasks)
+            files, spans, unplaced = task_spans(root, head, tasks) if head and commit_known(root, head) else ({}, {}, {})
+            testers: dict[str, list[str]] = {}
+            for tid in sorted(discriminating):
+                prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+                for dep in (prefix + d for d in dependencies(selected_sections[tid])):
+                    if dep not in sections or test_files(sections[dep]):
+                        continue
+                    if not any(owner == dep for owner, _p in spans) or dep in unplaced:
+                        if all(k == "new" for _p, k in file_kinds(sections[dep])):
+                            new_only.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
+                        continue
+                    testers.setdefault(dep, []).append(tid)
+            if testers:
+                # One copy: each dependency's files are put back, probed, and restored.
+                part = copy_tree(root)
+                try:
+                    for dep, tids in testers.items():
+                        if revert_task(root, part, files, spans, dep):
+                            for tid in tids:
+                                if all(_run_one(c, part)[0] == 0 for c in probes[tid][1]):
+                                    weak_against.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
+                        for (owner, path) in spans:
+                            if owner == dep and os.path.isfile(os.path.join(root, path)):
+                                shutil.copyfile(os.path.join(root, path), inside(part, path))
+                finally:
+                    shutil.rmtree(part, ignore_errors=True)
+        task_passed = own_pass - non_discriminating - set(weak_against)
         behind = blocked_by(run_tasks, own_fail | shared_fail)
         own_blocked = {t for t in own_fail if t in behind}
         print("  Task proof — what each task's own Verification measured:")
         if task_passed:
             print(f"    Task-specific command results passed: {_ids(task_passed)}")
-        if discriminating:
-            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating)}")
+        if discriminating - set(weak_against):
+            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating - set(weak_against))}")
         if own_fail - own_blocked:
             print(f"    Task-specific command results failed: {_ids(own_fail - own_blocked)}")
         if own_blocked:
@@ -1414,6 +1453,14 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         if doc_unmeasured:
             record("warn", f"{len(doc_unmeasured)} documentation file(s) promise runnable examples that were not run",
                    "\n".join(doc_unmeasured[:4]), always=True)
+        if weak_against:
+            record("warn", f"{len(weak_against)} test task(s) also pass with only the (modify) task they test put back"
+                   " as the stamp had it — red on the whole skeleton, but blind to that task's change, so not"
+                   " counted as passed: " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(weak_against.items())[:12]),
+                   always=True)
+        if new_only:
+            print("    Not probed against their dependency alone (it only creates files, so the whole-skeleton probe"
+                  " is the only one): " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(new_only.items())[:12]))
         if undiscriminated:
             record("warn", f"{len(undiscriminated)} test task(s) passed, and whether their tests discriminate"
                    " was not measured", "\n".join(f"{t}: {why}" for t, why in sorted(undiscriminated.items())[:6]),
@@ -1449,10 +1496,11 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
               f" test tasks non-discriminating {len(non_discriminating)}, not measured {len(undiscriminated)};"
               f" shared-only {len(shared_pass) + len(shared_fail)};"
               f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale)};"
-              f" no command {len(silent)}; test files unmeasured {len(unexercised)}")
+              f" no command {len(silent)}; test files unmeasured {len(unexercised)};"
+              f" test tasks blind to their target {len(weak_against)}")
         print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
         print("  Exit status reflects command results and missing proof only; shared-only, human,"
-              " non-discriminating and unmeasured-test rows above do not change it.")
+              " non-discriminating, blind-to-target and unmeasured-test rows above do not change it.")
         if partial:
             print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
         elif failures or selected_silent and not (include_header and header_scope == "feature"):

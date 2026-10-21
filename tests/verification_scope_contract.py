@@ -562,6 +562,52 @@ class CalcTest(unittest.TestCase):
                 rc, out = self.scaffold(shell, outer, '--done', '--all')
                 self.assertEqual(rc, 0, out)
 
+    # --- R19: a test is probed with only the (modify) task it tests put back -------------
+
+    SCALE_BP = ("# Blueprint: scale\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                "### T001: Triple a number\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\ndef double(x):\n```\n\n"
+                "**After**:\n```python\ndef triple(x):\n    raise NotImplementedError(\"T001: three times x\")\n\n\n"
+                "def double(x):\n```\n\n**Verification**: `python3 -c \"from pkg.calc import triple; assert triple(1) == 3\"`\n\n"
+                "### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\ndef scale(x):\n    return x\n```\n\n"
+                "**After**:\n```python\ndef scale(x, k=1):\n    raise NotImplementedError(\"T002: x times k\")\n```\n\n"
+                "**Verification**: `python3 -c \"from pkg.calc import scale; assert scale(3, 2) == 6\"`\n\n"
+                "### T003: Test scaling\n\n**File**: `tests/test_calc.py` (new)\n\n**Dependencies**: T002\n\n"
+                "```python\nimport unittest\n\n\nclass CalcTest(unittest.TestCase):\n"
+                "    def test_scale(self):\n        raise NotImplementedError(\"T003: scale(3, 2) is 6\")\n```\n\n"
+                "**Verification**: `python3 -m unittest tests.test_calc`\n")
+    SCALE_STAMPED = 'def double(x):\n    return x + x\n\n\ndef scale(x):\n    return x\n'
+    SCALE_DONE = ('def triple(x):\n    return 3 * x\n\n\ndef double(x):\n    return x + x\n\n\n'
+                  'def scale(x, k=1):\n    return x * k\n')
+
+    def test_test_blind_to_its_target_task_is_not_counted_as_passed(self):
+        # R19 guru t3/t3b: tests that only checked what the old code already did were red on
+        # the whole skeleton (a new function there throws) and counted as discriminating,
+        # even on a tree where the task they test was a no-op.
+        weak = ("import unittest\nfrom pkg.calc import scale, triple\n\n\nclass CalcTest(unittest.TestCase):\n"
+                "    def test_scale(self):\n        self.assertEqual(triple(1), 3)\n        self.assertEqual(scale(3), 3)\n")
+        honest = weak.replace('scale(3), 3)', 'scale(3, 2), 6)')
+        for body, blind in ((weak, True), (honest, False)):
+            with self.subTest(blind=blind), tempfile.TemporaryDirectory() as root:
+                self.stamped_repo(root, {'pkg/__init__.py': '', 'pkg/calc.py': self.SCALE_STAMPED}, self.SCALE_BP)
+                Path(root, 'pkg/calc.py').write_text(self.SCALE_DONE)
+                Path(root, 'tests').mkdir()
+                Path(root, 'tests/__init__.py').write_text('')
+                Path(root, 'tests/test_calc.py').write_text(body)
+                rc, out = self.verify_feature(root)
+                self.assertEqual(rc, 0, out)
+                if blind:
+                    self.assertIn('1 test task(s) also pass with only the (modify) task they test put back as the'
+                                  ' stamp had it', out)
+                    self.assertIn('so not counted as passed: specs/022-two/T003 <- T002', out)
+                    self.assertIn('task-specific 2 passed, 0 failed', out)
+                    self.assertIn('test tasks blind to their target 1', out)
+                else:
+                    self.assertIn('(the test discriminates): specs/022-two/T003', out)
+                    self.assertIn('task-specific 3 passed, 0 failed', out)
+                    self.assertIn('test tasks blind to their target 0', out)
+
     # --- R19: documentation examples run as the document on disk has them ---------------
 
     README_BP = ("# Blueprint: docs\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
