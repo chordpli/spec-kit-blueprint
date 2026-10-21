@@ -877,7 +877,7 @@ HUMAN_EVIDENCE_LINE = re.compile(
 
 
 def human_evidence(root: str, tid: str, section: str) -> tuple[str, str]:
-    """('supplied' | 'stale' | 'missing', detail) for a task with a `Human review:` line.
+    """('supplied' | 'stale' | 'invalid' | 'missing', detail) for a task with a `Human review:` line.
 
     The applier had no way to receive a person's result, so `human evidence not
     supplied` printed the same number on an empty tree and a finished one, while the
@@ -901,6 +901,16 @@ def human_evidence(root: str, tid: str, section: str) -> tuple[str, str]:
         m = HUMAN_EVIDENCE_LINE.match(line.rstrip("\n"))
         if not m or m.group("tid") != bare:
             continue
+        # A date is a day that exists and has happened. `9999-99-99` passed the shape test
+        # and was printed back as the day of a review. One day of slack is for a reviewer
+        # whose calendar is ahead of UTC.
+        import datetime
+        try:
+            day = datetime.date.fromisoformat(m.group("date"))
+        except ValueError:
+            return "invalid", f"{m.group('date')} is not a calendar date — record as: {template}"
+        if day > datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1):
+            return "invalid", f"{m.group('date')} is in the future — record as: {template}"
         given = dict(re.findall(r"(\S+)@([0-9a-f]{7,40})\b", m.group("rest")))
         moved = [p for p, sha in want.items() if not sha or not sha.startswith(given.get(p, "-"))]
         if moved:
@@ -1468,7 +1478,8 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         evidence = {tid: human_evidence(root, tid, section) for tid, section in run_tasks if tid in humans}
         supplied = {t for t, (state, _d) in evidence.items() if state == "supplied"}
         stale = {t for t, (state, _d) in evidence.items() if state == "stale"}
-        missing = set(humans) - supplied - stale
+        invalid = {t for t, (state, _d) in evidence.items() if state == "invalid"}
+        missing = set(humans) - supplied - stale - invalid
         if supplied:
             print(f"    Human evidence supplied: "
                   + ", ".join(f"{t} ({evidence[t][1]})" for t in sorted(supplied)))
@@ -1480,6 +1491,9 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         if stale:
             record("warn", f"human evidence is stale — a reviewed file changed after the review, so it is not supplied: {_ids(stale)}",
                    "\n".join(f"{t}: {evidence[t][1]}" for t in sorted(stale)[:4]), always=True)
+        if invalid:
+            record("warn", f"human evidence is dated a day that does not exist or has not come, so it is not supplied: {_ids(invalid)}",
+                   "\n".join(f"{t}: {evidence[t][1]}" for t in sorted(invalid)[:4]), always=True)
         header_cmds = [test_cmd] if include_header else []
         unexercised = []
         for tid, section in run_tasks:
@@ -1495,7 +1509,7 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
               f" {len(own_fail)} failed ({len(own_blocked)} behind a failed dependency);"
               f" test tasks non-discriminating {len(non_discriminating)}, not measured {len(undiscriminated)};"
               f" shared-only {len(shared_pass) + len(shared_fail)};"
-              f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale)};"
+              f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale) + len(invalid)};"
               f" no command {len(silent)}; test files unmeasured {len(unexercised)};"
               f" test tasks blind to their target {len(weak_against)}")
         print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")

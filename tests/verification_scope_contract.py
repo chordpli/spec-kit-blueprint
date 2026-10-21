@@ -389,6 +389,13 @@ class CalcTest(unittest.TestCase):
             self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
             evidence.write_text('T003: rev 2026-10-20\n')
             self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
+            # R19 guru h4: `9999-99-99` was accepted as the day of a review.
+            sha = applier._blob_sha(os.path.join(root, 'README.md'))
+            for day in ('9999-99-99', '2026-02-30', '2999-01-01'):
+                evidence.write_text(f'T003: rev {day} README.md@{sha[:7]}\n')
+                self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'invalid', day)
+            evidence.write_text(f'T003: rev 2026-10-20 README.md@{sha[:7]}\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'supplied')
 
     # --- R18: declarations are read without comments, in any binding form ------------
 
