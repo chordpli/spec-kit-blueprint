@@ -48,7 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supplied 1 → 0. Every 005 run now has one more command (the README example). Over the
   real trees (ws 001–005, R18 guru/novice/senior half and complete; 204 runs × two tools)
   the only exit change is ws 004 `--verify` 0 → 1: its README example fails on the
-  finished tree. A first version without insertion sliding called a senior-complete test
+  finished tree. The same run reports two of its six test tasks blind to their target
+  (`T007 <- T003`, `T009 <- T003`); both test code their `**Dependencies**` line does not
+  name, so this is the probe misfiring on a loose line, not weak tests. No R18 tree has one. A first version without insertion sliding called a senior-complete test
   task blind; that was fixed before the measurement above. The time-zone case still
   depends on the host's zone (`m3a` exits 0 under `TZ=UTC`); the validator only warns
   that nothing pins one. `--verify` costs about 1.3–1.6 s more per feature (median 7.5 →
