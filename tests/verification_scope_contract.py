@@ -389,6 +389,13 @@ class CalcTest(unittest.TestCase):
             self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
             evidence.write_text('T003: rev 2026-10-20\n')
             self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'stale')
+            # R19 guru h4: `9999-99-99` was accepted as the day of a review.
+            sha = applier._blob_sha(os.path.join(root, 'README.md'))
+            for day in ('9999-99-99', '2026-02-30', '2999-01-01'):
+                evidence.write_text(f'T003: rev {day} README.md@{sha[:7]}\n')
+                self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'invalid', day)
+            evidence.write_text(f'T003: rev 2026-10-20 README.md@{sha[:7]}\n')
+            self.assertEqual(applier.human_evidence(root, 'specs/020-calc/T003', section)[0], 'supplied')
 
     # --- R18: declarations are read without comments, in any binding form ------------
 
@@ -447,6 +454,282 @@ class CalcTest(unittest.TestCase):
                 Path(root, 'specs/021-cli/blueprint.md').write_text(bp.format(head='0123456789ab'))
                 rc, out = done()
                 self.assertIn('not measured — this clone does not contain HEAD 0123456789ab', out)
+
+    # --- R19: --done judges each (modify) task, not each file ---------------------------
+
+    SHELLS = [s for s in ('/bin/bash', '/opt/homebrew/bin/bash') if Path(s).exists()]
+    GIT = ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false']
+
+    def stamped_repo(self, root, files, bp):
+        """A git repo holding `files`, committed, and `bp` (with {head}) as specs/022-two/blueprint.md."""
+        subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+        for path, text in files.items():
+            Path(root, path).parent.mkdir(parents=True, exist_ok=True)
+            Path(root, path).write_text(text)
+        subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+        subprocess.run(self.GIT + ['commit', '-qm', 'base'], cwd=root, check=True)
+        head = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], cwd=root, text=True).strip()
+        Path(root, 'specs/022-two').mkdir(parents=True)
+        Path(root, 'specs/022-two/blueprint.md').write_text(bp.replace('{head}', head))
+        return head
+
+    def scaffold(self, shell, root, *args):
+        r = subprocess.run([shell, str(MODULE.parents[1] / 'bash/validate-scaffold.sh'), *args], cwd=root,
+                           capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+        return r.returncode, r.stdout + r.stderr
+
+    TWO_TASKS_BP = ("# Blueprint: two\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                    "### T001: Add the verb\n\n**File**: `pkg/cli.py` (modify)\n\n"
+                    "**Before**:\n```python\nUSAGE = \"calc double N\"\n```\n\n"
+                    "**After**:\n```python\nUSAGE = \"calc double N | calc halve N\"\n```\n\n"
+                    "### T002: Route the verb\n\n**File**: `pkg/cli.py` (modify)\n\n"
+                    "**Before**:\n```python\ndef route(verb):\n    return VERBS[verb]\n```\n\n"
+                    "**After**:\n```python\ndef route(verb):\n    # T002: send halve to halve()\n    return VERBS[verb]\n```\n")
+    TWO_TASKS_FILE = ('import sys\n\nUSAGE = "calc double N"\n\nVERBS = {"double": 2}\n\n\n'
+                      'def other():\n    return 1\n\n\ndef route(verb):\n    return VERBS[verb]\n')
+
+    def test_done_sees_an_untouched_task_beside_a_finished_one_both_bash_versions(self):
+        # R19 guru d3/d4: the file had moved because an earlier task in it was done, and the
+        # later task in the same file, never started, passed --done.
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                head = self.stamped_repo(root, {'pkg/cli.py': self.TWO_TASKS_FILE}, self.TWO_TASKS_BP)
+                first = self.TWO_TASKS_FILE.replace('USAGE = "calc double N"', 'USAGE = "calc double N | calc halve N"')
+                Path(root, 'pkg/cli.py').write_text(first)
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertEqual(rc, 1, out)
+                self.assertIn(f'1 (modify) task(s) left every line their hunks change as HEAD {head} had it,'
+                              ' in a file other tasks changed: T002 (pkg/cli.py)', out)
+                # Two tasks, one file: the pass line counts the file once.
+                self.assertIn(f'all 1 existing file(s) a (modify) task changes have changed since HEAD {head}', out)
+                Path(root, 'pkg/cli.py').write_text(first.replace('    return VERBS[verb]', '    return VERBS.get(verb, 1)'))
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertEqual(rc, 0, out)
+                self.assertNotIn('(modify) task(s) left', out)
+                # Only the second task done: the first one is named, not the second.
+                Path(root, 'pkg/cli.py').write_text(self.TWO_TASKS_FILE.replace('    return VERBS[verb]', '    return VERBS.get(verb, 1)'))
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertEqual(rc, 1, out)
+                self.assertIn('in a file other tasks changed: T001 (pkg/cli.py)', out)
+
+    def test_inserted_block_is_attributed_across_a_closing_brace(self):
+        # A diff may place a new function above the `}` and blank line that end the one
+        # before it; the task that inserted it is still the one that changed the file.
+        stamped = 'function a() {\n  return 1;\n}\n\nexport function list() {\n  return [];\n}\n'
+        tasks = [('T001', '**File**: `src/m.js` (modify)\n\n**Before**:\n```javascript\nexport function list() {\n```\n\n'
+                          '**After**:\n```javascript\nexport function b() {\n  throw new Error("T001: b");\n}\n\n'
+                          'export function list() {\n```\n')]
+        with tempfile.TemporaryDirectory() as root:
+            head = self.stamped_repo(root, {'src/m.js': stamped}, '{head}')
+            done = stamped.replace('}\n\nexport function list', '}\n\nexport function b() {\n  return 2;\n}\n\nexport function list')
+            Path(root, 'src/m.js').write_text(done)
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([], {}))
+            # Written as an arrow, the insertion is placed one line below the `}`, where the
+            # blueprint's was placed above it: two gaps that only blank and bracket lines part.
+            Path(root, 'src/m.js').write_text(stamped.replace('}\n\nexport function list',
+                                                              '}\n\nexport const b = () => 2;\n\nexport function list'))
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([], {}))
+            Path(root, 'src/m.js').write_text(stamped.replace('return [];', 'return [1];'))
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([('T001', 'src/m.js')], {}))
+
+    def test_inserted_method_is_attributed_across_a_repeated_statement(self):
+        # R19 senior 002: a finished `cancel` ending in `return true;` and `}` was placed by
+        # the diff above the `return true;` that ends the method before it, two lines from
+        # where the blueprint's insertion went. Its test was then reported blind to it.
+        stamped = 'class S {\n  int put() {\n    x();\n    return 1;\n  }\n  int close() {\n    return 2;\n  }\n}\n'
+        tasks = [('T001', '**File**: `src/S.java` (modify)\n\n**Before**:\n```java\n  int close() {\n```\n\n'
+                          '**After**:\n```java\n  int cancel() {\n    throw new E("T001: cancel");\n  }\n'
+                          '  int close() {\n```\n')]
+        with tempfile.TemporaryDirectory() as root:
+            head = self.stamped_repo(root, {'src/S.java': stamped}, '{head}')
+            done = stamped.replace('  int close', '  int cancel() {\n    y();\n    return 1;\n  }\n  int close')
+            Path(root, 'src/S.java').write_text(done)
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([], {}))
+            files, spans, _ = applier.task_spans(root, head, tasks)
+            tree = tempfile.mkdtemp(dir=root)
+            self.assertEqual(applier.revert_task(root, tree, files, spans, 'T001'), 1)
+            self.assertEqual(Path(tree, 'src/S.java').read_text(), stamped)
+            Path(root, 'src/S.java').write_text(stamped.replace('return 2;', 'return 3;'))
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([('T001', 'src/S.java')], {}))
+
+    def test_private_helper_rename_passes_done_both_bash_versions(self):
+        # R19 guru d5: a non-exported helper renamed with its behavior intact failed --done
+        # as a missing declaration. An exported name is still required.
+        bp = ("# Blueprint: helper\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+              "### T001: Count the day\n\n**File**: `src/m.js` (modify)\n\n"
+              "**Before**:\n```javascript\nexport function list() {\n```\n\n"
+              "**After**:\n```javascript\nfunction spentOn(ledger, day) {\n  throw new Error(\"T001: sum\");\n}\n\n"
+              "export function limitOf(ledger) {\n  throw new Error(\"T001: limit\");\n}\n\n"
+              "export function list() {\n```\n")
+        stamped = 'export function list() {\n  return [];\n}\n'
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                self.stamped_repo(root, {'src/m.js': stamped}, bp)
+                Path(root, 'src/m.js').write_text('function countedTotal(ledger, day) {\n  return 0;\n}\n\n'
+                                                  'export function limitOf(ledger) {\n  return 1;\n}\n\n' + stamped)
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertEqual(rc, 0, out)
+                self.assertIn('1 private declaration(s) the blueprint names are not in the file and not required'
+                              ' — the implementer names those: src/m.js `spentOn`', out)
+                Path(root, 'src/m.js').write_text('function spentOn(ledger, day) {\n  return 0;\n}\n\n'
+                                                  'export function limitFor(ledger) {\n  return 1;\n}\n\n' + stamped)
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertEqual(rc, 1, out)
+                self.assertIn('src/m.js `limitOf`', out)
+                self.assertNotIn('`spentOn`', out)
+
+    def test_done_all_over_a_refused_copy_is_refused_both_bash_versions(self):
+        # R19 guru n1: every feature of a copy without .git was refused with exit 2, and the
+        # sweep reported "5 of 5 did not pass" with exit 1.
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as outer:
+                outer = os.path.realpath(outer)
+                subprocess.run(['git', 'init', '-q'], cwd=outer, check=True)
+                for base in (outer, os.path.join(outer, 'copy')):
+                    Path(base, 'specs/a').mkdir(parents=True)
+                    Path(base, 'specs/a/blueprint.md').write_text('**Mode**: guide\n### T001: Check\n')
+                rc, out = self.scaffold(shell, os.path.join(outer, 'copy'), '--done', '--all')
+                self.assertEqual(rc, 2, out)
+                self.assertIn('1 of 1 feature(s) were refused (exit 2), so the sweep is refused: specs/a', out)
+                rc, out = self.scaffold(shell, outer, '--done', '--all')
+                self.assertEqual(rc, 0, out)
+
+    # --- R19: a test is probed with only the (modify) task it tests put back -------------
+
+    SCALE_BP = ("# Blueprint: scale\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                "### T001: Triple a number\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\ndef double(x):\n```\n\n"
+                "**After**:\n```python\ndef triple(x):\n    raise NotImplementedError(\"T001: three times x\")\n\n\n"
+                "def double(x):\n```\n\n**Verification**: `python3 -c \"from pkg.calc import triple; assert triple(1) == 3\"`\n\n"
+                "### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\ndef scale(x):\n    return x\n```\n\n"
+                "**After**:\n```python\ndef scale(x, k=1):\n    raise NotImplementedError(\"T002: x times k\")\n```\n\n"
+                "**Verification**: `python3 -c \"from pkg.calc import scale; assert scale(3, 2) == 6\"`\n\n"
+                "### T003: Test scaling\n\n**File**: `tests/test_calc.py` (new)\n\n**Dependencies**: T002\n\n"
+                "```python\nimport unittest\n\n\nclass CalcTest(unittest.TestCase):\n"
+                "    def test_scale(self):\n        raise NotImplementedError(\"T003: scale(3, 2) is 6\")\n```\n\n"
+                "**Verification**: `python3 -m unittest tests.test_calc`\n")
+    SCALE_STAMPED = 'def double(x):\n    return x + x\n\n\ndef scale(x):\n    return x\n'
+    SCALE_DONE = ('def triple(x):\n    return 3 * x\n\n\ndef double(x):\n    return x + x\n\n\n'
+                  'def scale(x, k=1):\n    return x * k\n')
+
+    def test_test_blind_to_its_target_task_is_not_counted_as_passed(self):
+        # R19 guru t3/t3b: tests that only checked what the old code already did were red on
+        # the whole skeleton (a new function there throws) and counted as discriminating,
+        # even on a tree where the task they test was a no-op.
+        weak = ("import unittest\nfrom pkg.calc import scale, triple\n\n\nclass CalcTest(unittest.TestCase):\n"
+                "    def test_scale(self):\n        self.assertEqual(triple(1), 3)\n        self.assertEqual(scale(3), 3)\n")
+        honest = weak.replace('scale(3), 3)', 'scale(3, 2), 6)')
+        for body, blind in ((weak, True), (honest, False)):
+            with self.subTest(blind=blind), tempfile.TemporaryDirectory() as root:
+                self.stamped_repo(root, {'pkg/__init__.py': '', 'pkg/calc.py': self.SCALE_STAMPED}, self.SCALE_BP)
+                Path(root, 'pkg/calc.py').write_text(self.SCALE_DONE)
+                Path(root, 'tests').mkdir()
+                Path(root, 'tests/__init__.py').write_text('')
+                Path(root, 'tests/test_calc.py').write_text(body)
+                rc, out = self.verify_feature(root)
+                self.assertEqual(rc, 0, out)
+                if blind:
+                    self.assertIn('1 test task(s) also pass with only the (modify) task they test put back as the'
+                                  ' stamp had it', out)
+                    self.assertIn('so not counted as passed: specs/022-two/T003 <- T002', out)
+                    self.assertIn('task-specific 2 passed, 0 failed', out)
+                    self.assertIn('test tasks blind to their target 1', out)
+                else:
+                    self.assertIn('(the test discriminates): specs/022-two/T003', out)
+                    self.assertIn('task-specific 3 passed, 0 failed', out)
+                    self.assertIn('test tasks blind to their target 0', out)
+
+    def test_failure_names_passed_dependencies_that_wrote_the_same_file(self):
+        # R19 guru m4b: the defect was in a helper T002 wrote and T006 was reported failed
+        # with nothing to say T002's code was in the path.
+        bp = self.SCALE_BP.replace("### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n",
+                                   "### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                                   "**Dependencies**: T001\n\n")
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'pkg/__init__.py': '', 'pkg/calc.py': self.SCALE_STAMPED}, bp)
+            Path(root, 'pkg/calc.py').write_text(self.SCALE_DONE.replace('x * k', 'x * k + 1'))
+            Path(root, 'tests').mkdir()
+            Path(root, 'tests/test_calc.py').write_text('import unittest\n')
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('Task-specific command results failed: specs/022-two/T002\n', out)
+            self.assertIn('Observed there, not necessarily caused there — a passed dependency wrote the same'
+                          ' file(s): specs/022-two/T002 with T001 (pkg/calc.py)', out)
+
+    def test_date_rules_without_a_pinned_time_zone_are_warned_about(self):
+        # R19 guru m3a: a local-date bug passed every oracle case under TZ=UTC.
+        validator = MODULE.with_name('validate_blueprint.py')
+        bp = ("# Blueprint: day\n\n**Mode**: guide\n\n## Requirements Reference\n\n- **FR-001**: {rule}\n\n"
+              "### T001: Day\n\n**File**: `src/day.js` (new)\n\n**Requirements**: FR-001\n\n**Why**: one day rule.\n\n"
+              "**Verification**: `node specs/023-day/acceptance.mjs`\n")
+
+        def validate(rule, oracle):
+            with tempfile.TemporaryDirectory() as root:
+                subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+                Path(root, 'specs/023-day').mkdir(parents=True)
+                Path(root, 'specs/023-day/blueprint.md').write_text(bp.replace('{rule}', rule))
+                Path(root, 'specs/023-day/acceptance.mjs').write_text(oracle)
+                r = subprocess.run([sys.executable, str(validator), 'specs/023-day'], cwd=root,
+                                   capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+                return r.stdout
+        unpinned = "spawnSync(process.execPath, ['probe.mjs'], { env: process.env });\n"
+        pinned = "spawnSync(process.execPath, ['probe.mjs'], { env: { ...process.env, TZ: 'Pacific/Honolulu' } });\n"
+        out = validate('A day is a UTC calendar date.', unpinned)
+        self.assertIn('the document states date or time rules (calendar date, utc) and no check pins a time zone', out)
+        self.assertIn('[12] Time zones — 1 check(s) passed', validate('A day is a UTC calendar date.', pinned))
+        self.assertNotIn('[12] Time zones', validate('An amount is a positive integer.', unpinned))
+
+    # --- R19: documentation examples run as the document on disk has them ---------------
+
+    README_BP = ("# Blueprint: docs\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                 "### T001: Document the verb\n\n**File**: `README.md` (modify)\n\n"
+                 "**Before**:\n````markdown\n## Usage\n````\n\n"
+                 "**After**:\n````markdown\n## Usage\n\n```{fence}\npython3 -c \"print('documented')\"\n```\n````\n\n"
+                 "**Verification**: `python3 -c \"print(0)\"`\n")
+    README_OLD = "# calc\n\n```sh\npython3 -c \"raise SystemExit(7)\"\n```\n\n## Usage\n"
+
+    def verify_feature(self, root):
+        proc = subprocess.run([sys.executable, str(MODULE), 'specs/022-two', '--verify', '--verify-scope', 'feature'],
+                              cwd=root, capture_output=True, text=True, env=dict(os.environ, NO_COLOR='1'))
+        return proc.returncode, proc.stdout
+
+    def test_readme_examples_run_from_the_readme_not_the_blueprint(self):
+        # R19 guru r2: both README example lines were broken and every gate stayed green,
+        # because the check ran commands the blueprint restated. The README's own new
+        # shell blocks run now; its older ones (this README_OLD's exit 7) are not this
+        # feature's and are not run.
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'README.md': self.README_OLD}, self.README_BP.replace('{fence}', 'sh'))
+            good = self.README_OLD + "\n```sh\npython3 -c \"print('documented')\"\n```\n"
+            Path(root, 'README.md').write_text(good)
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 0, out)
+            self.assertIn('Documentation examples: 1 shell block(s) run as the document on disk has them (README.md)', out)
+            self.assertIn('commands passed 2/2', out)
+            Path(root, 'README.md').write_text(good.replace("print('documented')", "raise SystemExit(3)"))
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('specs/022-two/T001  $ # README.md example 1, as written there (+2 script line(s)) — exit 3', out)
+            # The promise with nothing on disk to run is a failure, not a pass.
+            Path(root, 'README.md').write_text(self.README_OLD)
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('README.md: the task adds 1 shell example block(s) and the file has no shell block'
+                          ' the stamped commit did not have', out)
+            # A console transcript runs its `$ ` lines and skips the output lines.
+            Path(root, 'README.md').write_text(self.README_OLD + "\n```console\n$ python3 -c \"print(1)\"\n1\n```\n")
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 0, out)
+
+    def test_a_text_fenced_example_is_not_a_promise_to_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'README.md': self.README_OLD}, self.README_BP.replace('{fence}', 'text'))
+            Path(root, 'README.md').write_text(self.README_OLD + "\n```text\ncalc halve N\n```\n")
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn('Documentation examples', out)
+            self.assertIn('commands passed 1/1', out)
 
     def test_scope_is_not_guessed(self):
         self.assertEqual(applier.test_scope('**Test**: `npm test`'), 'unspecified')

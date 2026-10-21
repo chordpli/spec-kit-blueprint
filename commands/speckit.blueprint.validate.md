@@ -57,8 +57,8 @@ python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATUR
 # `Task proof` (task-specific, behind a failed dependency, non-discriminating test tasks,
 # shared, human evidence, unmeasured test files). Exit 0 = the commands passed, not every
 # task proven; a script reads the `Proof summary:` line.
-# no declared file still carries a marker, no declared name is missing, no ticked row lies,
-# and no existing file a (modify) task changes is byte-identical to the blueprint's HEAD stamp
+# no declared file still carries a marker, no declared public name is missing, no ticked row
+# lies, and no (modify) task left its part of an existing file as the blueprint's HEAD stamp had it
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
 # and the same question about the whole repository, not just this feature
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh --done --all
@@ -124,22 +124,26 @@ Verification measured, and it is a different question:
 | `Task-specific command results passed/failed` | a command only this task names passed or failed; a test task counts as passed only when its test also discriminates (next row) | that the command's assertions cover the whole task |
 | `Test tasks red on the blueprint's skeleton and green here` | the lines that name the task's test file were rerun on the skeleton — this feature's declared files at the stamped commit, the blueprint applied over them — and failed there | that the test is strong: a test a no-op implementation also passes is still listed here |
 | `⚠ N test task(s) pass on the blueprint's skeleton as well as here` | the test passes without the feature: an emptied body, `assert.ok(true)`. **Not counted as passed** | that the test is wrong when it tests something the skeleton writes complete, or behavior the feature leaves unchanged — those pass on the skeleton by design |
+| `⚠ N test task(s) also pass with only the (modify) task they test put back as the stamp had it` | a discriminating test task was run once more on your tree with only the hunks of the `(modify)` task its `**Dependencies**` name reverted to the stamp, and it passed: it does not see that task's change — "a transfer under the limit succeeds" passes with the limit removed. **Not counted as passed**; `Proof summary` ends `test tasks blind to their target N` | that the test is useless. A dependency that only creates files is not probed this way (the line `Not probed against their dependency alone` names those): reverting it breaks the test's import, so the probe would be red whatever the test asserts |
 | `⚠ … whether their tests discriminate was not measured` | no `| HEAD` stamp, a stamp this clone lacks, a blueprint that does not apply to its stamp, a `--through` run, or no line of the task's own that names its test file. Counted as passed, with the reason | — |
 | `failed behind a failed dependency (… <- T003)` | the task is red and a task its `**Dependencies**` reach is red too | that it is done, or not done: its result cannot be told apart from the dependency's |
+| `Observed there, not necessarily caused there — … T006 with T002 (src/ledger.js)` | the task's own command failed, and a dependency whose own cases passed wrote one of the same files | which of the two holds the defect. A failure is reported where its command went red; a helper T002 wrote and T002's cases never reached shows up as T006's failure |
+| `$ # README.md example 1, as written there` | a documentation task's After adds a shell-fenced block (`sh`, `bash`, `shell`, `console`), so the shell blocks of that file on disk which the stamped commit did not have are run as written, in order, in a copy of their own, and must exit 0. A task that promised one and a file that has none fail | that every example in the file was run: blocks the stamped commit already had are not this feature's. On a tree that has moved past later features, their new blocks run too. Without the stamped commit a modified document's examples are `not measured` |
 | `Shared command results …` | one command claimed by several tasks; its result is the suite's | that each claiming task is implemented — a half-built feature shows every claimant red, and an emptied test file shows its task green |
 | `⚠ human review declared, human evidence not supplied` | the task's Verification hands a check to a person and the feature's `human-evidence.md` has no line for it; that part is **not run and not counted as passed**. The evidence line prints the exact line to record | that the task failed — it is counted, not failed. A backticked example inside a `Human review:` line is never executed |
 | `Human evidence supplied: T010 (alice 2026-10-20)` / `⚠ human evidence is stale` | a line `T010: <reviewer> <YYYY-MM-DD> path@sha …` names every file the task declares at its current `git hash-object`; stale when a file changed since | that the review was good — only that a person recorded one for these bytes |
+| `⚠ human evidence is dated a day that does not exist or has not come` | the date is not a calendar date (`9999-99-99`, `2026-02-30`) or is more than one day after today in UTC; not supplied | — a future date is refused rather than trusted, and one day of slack covers a reviewer whose calendar is ahead of UTC |
 | `⚠ N test file(s) a task writes are not run by its Verification …` | the task writes a test file that neither its own command nor a feature-scoped header runs: its test bodies are unmeasured | that the tests are wrong |
 | `Proof summary: …` | the counts above on one line, for scripts | — |
 
 **Exit policy, for automation.** Exit 1 means a command failed, or (with `--verify-scope
 feature`) a selected task has neither a command nor a human review line and no feature-scoped
 header covers it. Exit 2 is a refused gate (an unspecified `**Test**` scope, a feature directory
-outside the root's `specs/`). Shared-only, non-discriminating, human-evidence and unmeasured-test
-rows **never change the exit code**: exit 0 says the commands passed, not that every task is
+outside the root's `specs/`). Shared-only, non-discriminating, blind-to-target, human-evidence and
+unmeasured-test rows **never change the exit code**: exit 0 says the commands passed, not that every task is
 proven. A pipeline that needs per-task proof reads the `Proof summary` line and requires
-`test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0` and
-`test files unmeasured 0` — each of them reachable on a finished tree, the human one by
+`test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0`,
+`test files unmeasured 0` and `test tasks blind to their target 0` — each of them reachable on a finished tree, the human one by
 recording the review in `human-evidence.md`.
 
 A failed verification is reported as a fact about **your tree**, on its own line, and never as
@@ -222,8 +226,30 @@ the stamped commit does not have (this feature created it) is not asked. With no
 that does not contain the stamped commit, the line says "not measured" and nothing fails. The
 check cannot tell a task never done from a blueprint stamped after the work; the failure says so.
 
+A file is not a task. When two tasks change one file and only the first was done, the file has
+moved and the question above passes for both. So `--done` also asks it per task: the tasks are
+applied in order to the stamped files (`scripts/python/task_hunks.py`, which needs `python3`), each
+task's hunks are mapped to the stamped commit's line numbers, and a task none of whose regions
+differs from the stamp fails as `(modify) task(s) left every line their hunks change as HEAD … had
+it`. Blank and bracket-only lines around a region count as part of it, because a diff may place an
+inserted function above the `}` that closes the one before it, and an insertion counts at every
+gap the diff could equally have put it — a method ending in `return true;` and `}` inserted after
+another that ends the same way. The same matching decides what the `--verify` probe of a test
+task's dependency puts back. A task whose hunks do not apply to
+the stamped files is listed as not measured. A task whose regions touch another task's (an
+insertion right beside an edit) can be read as done because its neighbour was: the check errs
+toward passing.
+
+A declaration the blueprint names but keeps private — a top-level JavaScript or TypeScript
+`function` or `const` without `export` (and not in an `export { … }` list or a `module.exports`
+assignment), a name with a leading underscore, a `private` member, a lower-case Go name — is not
+required by `--done` or the default run. Its absence is printed as a note, not a failure: guide
+mode leaves the implementer to name their helpers, and a helper renamed with its behavior intact
+failed `--done`. `--fresh` still requires it, since a fresh skeleton holds it verbatim.
+
 `--all` asks the same question of every `specs/*/` that has a blueprint, and fails if any of them
-does. Every check here is scoped to the files one blueprint declares, so "is anything in this
+does. A feature refused with exit 2 (a copy without its own `.git`) makes the sweep exit 2 as well,
+the same as the single run; it used to report "did not pass" and exit 1. Every check here is scoped to the files one blueprint declares, so "is anything in this
 repository still unfinished" needed one run per feature — and to know which feature to ask about you
 had to already know the answer. A reviewer carried twenty-two markers across five features that had
 each been called finished, and only found them by guessing which blueprint to type `--done` against.
@@ -303,6 +329,7 @@ Format-level, so they hold for any language. Eleven numbered sections, in the or
 9. **Cited requirements reproduced**: every requirement id cited in a `**Requirements**` line (`FR-`, `NFR-`, `SC-`, `AC-`, `US-`) is also stated somewhere else in the document — a citation alone leaves a reader working from this file unable to look it up
 10. **Forward references**: every task id a task's prose points at — "defined in T019", "see T019", a `**Dependencies**` entry — has a section or a pre-completed row. A promise pointing at a task that never delivers is worse than an open question, because the reader stops looking
 11. **Open questions**: counts the rows of the `## Open Questions` section and how many are blocking. Only printed when that section exists, and never a failure — a blocking row is a warning
+12. **Time zones**: when the document (or a file in the feature directory) states a date or time rule outside code — "on the day", "local date", "before midnight", "UTC", `toISOString`, `LocalDate` — and nothing pins a time zone (`TZ=…`, `timeZone:`, `ZoneId.of`, a fixed clock), it warns. A rule written in local dates and implemented in UTC passes on every host east of UTC after 09:00 and fails in Seoul before 09:00; the suite that cannot tell is the one that only ever runs in the host's zone. Run the check once under a zone far from UTC (`TZ=Pacific/Kiritimati`, `TZ=Pacific/Honolulu`). Only printed when such a rule appears; never a failure
 
 **Every check that reads code goes through one function**, `_blueprint_parse.authored_blocks()`, and that function decides what this document wrote: a fenced block that is neither a hunk nor an illustrative example, the lines each `**After**` adds that its `**Before**` did not have, and a `**Replace entire file**` block — tagged `reprint`, because most of a reprinted file was written by whoever wrote the file. Getting this wrong is the mistake this repository has made most often and in both directions, so it lives in one place and `tests/fixtures/` holds fixtures that fail the moment a check stops using it. **Three** exceptions, each with its own reason written beside it in the code: the abbreviation check in section 3 reads `**Before**` blocks deliberately; the JavaScript invented-type check needs the fence's language, which an After's added lines have nowhere to carry; and the skeleton-drift check in section 3 compares a block to a file on disk byte for byte, so it needs the block as written rather than the lines an After adds. This paragraph said "two" and `tests/fixtures/README.md` said "one" while the code had three — the count is now the same in all three places, which is the least a document about mechanisms owes its own reader.
 

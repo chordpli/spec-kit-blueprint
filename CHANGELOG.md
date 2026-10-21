@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R19 — a task, not a file; a document's examples as written
+
+- `--done` asks the (modify) question per task, not only per file: the tasks are applied
+  in order to the stamped files (`scripts/python/task_hunks.py`), each task's hunk regions
+  are mapped to the stamped commit's lines, and a task none of whose regions changed fails
+  even when another task moved the same file. Blank and bracket-only lines around a region,
+  and every gap a pure insertion or deletion could equally have been placed at, count as
+  part of it. A task whose hunks do not apply to the stamp is "not measured". The pass line
+  counts each file once ("all 3", was "all 5").
+- `--done` no longer requires a private declaration the blueprint names (a leading
+  underscore, `private`/`fileprivate`, a lower-case Go name, a top-level JavaScript or
+  TypeScript declaration with no `export` and not in an `export { … }` list or
+  `module.exports`). Its absence is a note; `--fresh` still requires it.
+- `--done --all` exits 2 when any feature was refused with exit 2, as the single run does.
+- `--verify` runs the shell blocks (`sh`, `bash`, `shell`, `console`, `zsh`) that a
+  documentation task's After adds, taken from the document on disk rather than from the
+  blueprint, minus the blocks the stamped commit already had. Each runs in order as a
+  `set -e` script in a copy of its own; a `console` block runs its `$ ` lines. A promised
+  block missing on disk fails; without the stamp it is "not measured". `text` fences are
+  not run.
+- A discriminating test task whose `**Dependencies**` name a `(modify)` task is run once
+  more with only that task's regions put back as the stamp had them. Green there is
+  warned about as blind to its target and not counted as passed. `Proof summary` ends with
+  `; test tasks blind to their target N`. Exit code unchanged.
+- A failed task whose passed dependency wrote one of the same files gets an
+  `Observed there, not necessarily caused there` line naming both.
+- Human evidence with a date that is not a calendar date, or more than one day past today
+  in UTC, is `invalid` and counted as not supplied.
+- The document validator's section [12] warns when the blueprint or its feature directory
+  states a date or time rule and nothing pins a time zone. Generation guidance: date rules
+  are checked under a zone far from UTC; documentation shell fences are runnable or `text`;
+  a rejected alternative is tested against the reason it was rejected (the `LEDGER_NOW`
+  versus `--on DATE` case).
+- Measured this round (R19 guru 005 controls: 46 copies, the nested one and four partial-
+  implementation prototypes included, old 269633a against new): `--verify` exit codes are unchanged except `r2-readme-bad-example` 0 → 1.
+  `--done` in both bashes: `d3`, `d4` and four partial prototypes 0 → 1, `d5` 1 → 0; the
+  other 39 unchanged. `--done --all`: `n1` 1 → 2, `d4` 0 → 1, `d5` 1 → 0. `t3`, `t3b`:
+  task-specific passed 12 → 9 and 9 → 6 (T008–T010 blind to their target); `h4`
+  supplied 1 → 0. Every 005 run now has one more command (the README example). Over the
+  real trees (ws 001–005, R18 guru/novice/senior half and complete; 204 runs × two tools)
+  the only exit change is ws 004 `--verify` 0 → 1: its README example fails on the
+  finished tree. The same run reports two of its six test tasks blind to their target
+  (`T007 <- T003`, `T009 <- T003`); both test code their `**Dependencies**` line does not
+  name, so this is the probe misfiring on a loose line, not weak tests. No R18 tree has one. A first version without insertion sliding called a senior-complete test
+  task blind; that was fixed before the measurement above. The time-zone case still
+  depends on the host's zone (`m3a` exits 0 under `TZ=UTC`); the validator only warns
+  that nothing pins one. `--verify` costs about 1.3–1.6 s more per feature (median 7.5 →
+  9.1 s on `p3`). Whether the generator follows the new guidance is not measured.
+
 ### R18 — a test task is proven against the skeleton
 
 - `--verify` runs each passing test-writing task's own command once more on the

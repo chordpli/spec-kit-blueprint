@@ -126,6 +126,15 @@ def listing(rows, limit: int = 6, sep: str = "\n") -> str:
     return out
 
 
+# Words that make a document a statement about days and clocks.
+DATE_RULE = re.compile(
+    r"\b(?:UTC|time ?zones?|midnight|calendar (?:date|day)|local (?:date|time|day)|daylight saving)\b", re.I)
+# A check that sets the time zone itself rather than inheriting the host's.
+TZ_PIN = re.compile(
+    r"\bTZ\s*[=:]\s*[\"'`]?[A-Za-z]|[\"'`]TZ[\"'`]|\benv\.TZ\b|\benviron\[[\"']TZ[\"']\]"
+    r"|-Duser\.timezone=|TimeZone\.setDefault|\btzset\(")
+
+
 def feature_number(feature_dir: str) -> str:
     """`004` out of `specs/004-daily-cap` — and out of `specs/004-daily-cap/` too.
 
@@ -1669,6 +1678,30 @@ def main() -> int:
             f"{len(rows)} open question(s), {len(blocking)} blocking",
             "blocking items must be answered before the tasks they block can be typed" if blocking else "",
         )
+
+    # 12. A date rule is checked in more than the host's time zone. The day boundary in
+    #     UTC and in local time agree on a UTC machine, which is what CI usually is: a
+    #     reviewer wrote the local-date bug a task's own marker warned about, and every
+    #     oracle case and the whole --verify run passed under TZ=UTC. Only a check that
+    #     sets TZ itself (or the platform's equivalent) can see it. Shown only when the
+    #     document states date or time rules.
+    date_rules = re.findall(DATE_RULE, outside_fences(bp))
+    if date_rules:
+        section("[12] Time zones")
+        texts = [bp]
+        for path in sorted(glob.glob(os.path.join(feature_dir, "*"))):
+            if os.path.isfile(path) and os.path.basename(path) != "blueprint.md" and os.path.getsize(path) < 2_000_000:
+                texts.append(open(path, encoding="utf-8", errors="replace").read())
+        if any(re.search(TZ_PIN, t) for t in texts):
+            record("pass", "the document states date or time rules and a check pins a time zone")
+        else:
+            words = sorted({w.lower() for w in date_rules})
+            record(
+                "warn",
+                f"the document states date or time rules ({', '.join(words[:4])}) and no check pins a time zone",
+                "a local-date bug passes on a UTC host, which is what CI usually is; run the date checks in a"
+                "\nchild process with TZ set east and west of UTC (TZ=Pacific/Kiritimati, TZ=Pacific/Honolulu)",
+            )
 
     flush_passes()
     print(f"\n{CYAN}=== Summary ==={NC}")

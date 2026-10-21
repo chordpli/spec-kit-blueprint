@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,7 @@ from _blueprint_parse import (  # noqa: E402  (path set above)
     BaseChainError,
     body_replaced_by_marker,
     changed_since,
+    code_blocks,
     commit_known,
     dependent_slices,
     in_commit,
@@ -287,7 +289,8 @@ def _read(path: str) -> str:
 
 def write_file(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    open(path, "w", encoding="utf-8").write(text)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 _tree = ""
@@ -875,7 +878,7 @@ HUMAN_EVIDENCE_LINE = re.compile(
 
 
 def human_evidence(root: str, tid: str, section: str) -> tuple[str, str]:
-    """('supplied' | 'stale' | 'missing', detail) for a task with a `Human review:` line.
+    """('supplied' | 'stale' | 'invalid' | 'missing', detail) for a task with a `Human review:` line.
 
     The applier had no way to receive a person's result, so `human evidence not
     supplied` printed the same number on an empty tree and a finished one, while the
@@ -899,6 +902,16 @@ def human_evidence(root: str, tid: str, section: str) -> tuple[str, str]:
         m = HUMAN_EVIDENCE_LINE.match(line.rstrip("\n"))
         if not m or m.group("tid") != bare:
             continue
+        # A date is a day that exists and has happened. `9999-99-99` passed the shape test
+        # and was printed back as the day of a review. One day of slack is for a reviewer
+        # whose calendar is ahead of UTC.
+        import datetime
+        try:
+            day = datetime.date.fromisoformat(m.group("date"))
+        except ValueError:
+            return "invalid", f"{m.group('date')} is not a calendar date — record as: {template}"
+        if day > datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1):
+            return "invalid", f"{m.group('date')} is in the future — record as: {template}"
         given = dict(re.findall(r"(\S+)@([0-9a-f]{7,40})\b", m.group("rest")))
         moved = [p for p, sha in want.items() if not sha or not sha.startswith(given.get(p, "-"))]
         if moved:
@@ -957,6 +970,247 @@ def skeleton_tree(root: str, bp: str, tasks: list) -> tuple[str | None, str]:
     return tree, ""
 
 
+# A fenced block in a Markdown file that a reader would paste into a terminal. Anything
+# else (`text`, no info string, `json`) is shown, not run.
+SHELL_FENCES = {"sh", "bash", "shell", "console", "zsh"}
+DOC_FILE = re.compile(r"\.(?:md|markdown)$", re.I)
+
+
+def shell_blocks(markdown: str) -> list[str]:
+    """The shell-fenced blocks of a Markdown text, in order."""
+    return [body for info, body in code_blocks(markdown)
+            if re.split(r"[{\s,]", info.lower(), maxsplit=1)[0] in SHELL_FENCES]
+
+
+def doc_example_scripts(root: str, head: str, section: str) -> tuple[list, list]:
+    """The documentation examples a task promises, read from the document on disk.
+
+    A README task's Verification used to look for substrings in the README and then run
+    commands the blueprint restated next to them. A reviewer broke both README example
+    lines — a flag the CLI rejects, a clock value it refuses — and every gate stayed
+    green, because nothing ran what the README says. So a task whose authored Markdown
+    adds a shell-fenced block (```sh, ```bash, ```shell, ```console) promises a runnable
+    example, and the examples run are the shell blocks of the file as it is now that the
+    stamped commit did not have. Returns ([(path, script)], [(path, problem)]); a problem
+    is a promise with nothing on disk to run, or one that cannot be told apart from the
+    file's older examples.
+    """
+    kinds: dict[str, str] = {}
+    for p, k in file_kinds(section):
+        kinds.setdefault(p, k)
+    docs = [p for p, k in kinds.items()
+            if k in ("new", "modify") and DOC_FILE.search(p) and not p.startswith("specs/")]
+    if not docs:
+        return [], []
+    promised, pending = 0, None
+    for kind, payload in section_events(section):
+        if kind == "directive":
+            pending = payload
+        elif kind == "block":
+            if pending != "before":
+                promised += len(shell_blocks(payload[1]))
+            pending = None
+    if not promised:
+        return [], []
+    scripts, problems = [], []
+    for path in docs:
+        full = os.path.join(root, path)
+        if not os.path.isfile(full):
+            problems.append((path, "the file is not on disk"))
+            continue
+        blocks = shell_blocks(_read(full))
+        if kinds[path] == "modify" or in_commit(root, head, path):
+            if not (head and commit_known(root, head)):
+                problems.append((path, "not measured — without the stamped commit its new examples"
+                                       " cannot be told from the ones it already had"))
+                continue
+            older = {b.strip() for b in shell_blocks(_git_blob(root, head, path) or "")}
+            blocks = [b for b in blocks if b.strip() not in older]
+        if not blocks:
+            problems.append((path, f"the task adds {promised} shell example block(s) and the file has no"
+                                   " shell block the stamped commit did not have"))
+            continue
+        for n, body in enumerate(blocks, 1):
+            lines = [ln for ln in body.rstrip("\n").split("\n")]
+            # A console transcript: `$ ` marks the commands, the other lines are output.
+            if any(ln.startswith("$ ") for ln in lines):
+                lines = [ln[2:] for ln in lines if ln.startswith("$ ")]
+            scripts.append((path, f"set -e\n# {path} example {n}, as written there\n" + "\n".join(lines)))
+    return scripts, problems
+
+
+def _git_blob(root: str, head: str, path: str) -> str | None:
+    proc = subprocess.run(["git", "-C", root, "show", f"{head}:{path}"], capture_output=True, timeout=60)
+    return proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else None
+
+
+def task_spans(root: str, head: str, tasks: list) -> tuple[dict, dict, dict]:
+    """Where each task's hunks land in each existing file, in the stamped commit's lines.
+
+    "Has this (modify) file changed since the stamp" is a question about a file, and two
+    tasks that edit one file share the answer: a reviewer left the transfer-limit task
+    untouched beside a finished library task in the same file and --done passed, because
+    the file had moved. The tasks are applied in order to the stamped files and every
+    region a task changed is mapped back to the stamped commit's line numbers — a span
+    (a, b) covers lines a..b-1, and (g, g) is the gap above line g where a task only
+    inserts. A span inside lines an earlier task inserted maps to that task's gap, so the
+    two share it. Returns ({path: stamped text}, {(task, path): [spans]}, {task: why}) for
+    the tasks whose hunks could not be placed.
+    """
+    import difflib
+    global _tree
+    files: dict[str, str] = {}
+    for _tid, section in tasks:
+        for path, kind in file_kinds(section):
+            if kind == "modify" and path not in files:
+                text = _git_blob(root, head, path)
+                if text is not None:
+                    files[path] = text
+    spans: dict = {}
+    unplaced: dict = {}
+    if not files:
+        return files, spans, unplaced
+    tmp = tempfile.mkdtemp(prefix="blueprint-spans-")
+    origin = {}
+    saved = _tree
+    _tree = os.path.realpath(tmp)
+    try:
+        for path, text in files.items():
+            write_file(inside(tmp, path), text)
+            origin[path] = list(range(len(text.split("\n"))))
+        for tid, section in tasks:
+            if not any(p in files for p, _k in file_kinds(section)):
+                continue
+            old = {p: _read(inside(tmp, p)) for p in files}
+            try:
+                apply_task(tmp, section)
+            except (Defect, AlreadyApplied, Ambiguous) as exc:
+                unplaced[tid] = str(exc).splitlines()[0][:100]
+            for path in files:
+                new = _read(inside(tmp, path))
+                if new == old[path]:
+                    continue
+                a, b = old[path].split("\n"), new.split("\n")
+                was, now = origin[path], []
+                for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+                    if tag == "equal":
+                        now += was[i1:i2]
+                        continue
+                    stamped = [x for x in was[i1:i2] if x is not None]
+                    if stamped:
+                        span = (min(stamped), max(stamped) + 1)
+                    else:
+                        above = [x for x in was[:i1] if x is not None]
+                        gap = above[-1] + 1 if above else 0
+                        span = (gap, gap)
+                    spans.setdefault((tid, path), []).append(span)
+                    now += [None] * (j2 - j1)
+                origin[path] = now
+    finally:
+        _tree = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    return files, spans, unplaced
+
+
+TRIVIAL_LINE = re.compile(r"^[\s{}()\[\];,]*$")
+
+
+def _widen(span: tuple, lines: list) -> tuple:
+    """The span grown over the blank and bracket-only lines on either side of it.
+
+    A diff can place one insertion at several equally good gaps when the inserted block
+    ends with a line the file already has there, a `}` or a blank: a new function put
+    above `listTransfers` read as inserted two lines higher, above the `}` and the blank
+    line that close `transfer`, and a finished task was reported untouched.
+    """
+    a, b = span
+    while a > 0 and TRIVIAL_LINE.match(lines[a - 1]):
+        a -= 1
+    while b < len(lines) and TRIVIAL_LINE.match(lines[b]):
+        b += 1
+    return a, b
+
+
+def _spans_meet(a: tuple, b: tuple, lines: list) -> bool:
+    """Do two stamped-line spans touch, once each is widened over blank and bracket lines?"""
+    (a1, a2), (b1, b2) = _widen(a, lines), _widen(b, lines)
+    return a1 <= b2 and b1 <= a2
+
+
+def _changes(stamped: str, current: str) -> list:
+    """(stamped span, current lines i..j) for every region where the file differs from the stamp."""
+    import difflib
+    a, b = stamped.split("\n"), current.split("\n")
+    return [((i1, i2), (j1, j2)) for tag, i1, i2, j1, j2
+            in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes() if tag != "equal"]
+
+
+def _reach(a: list, b: list, i1: int, i2: int, j1: int, j2: int) -> tuple:
+    """The stamped span a change could equally have been placed at.
+
+    A pure insertion or deletion slides over the lines it repeats: a `cancel` method
+    inserted after `return true;\n    }` reads the same as one inserted before them, and
+    the diff of the finished file chose one gap while the blueprint's chose the other,
+    two lines apart. Blank and bracket lines are covered by `_widen`; this covers the
+    rest. Only for asking whether spans meet — the change itself is (i1, i2).
+    """
+    if i1 == i2 and j1 < j2:
+        ins, lo, hi = b[j1:j2], i1, i1
+        while hi < len(a) and a[hi] == ins[(hi - i1) % len(ins)]:
+            hi += 1
+        while lo > 0 and a[lo - 1] == ins[(lo - 1 - i1) % len(ins)]:
+            lo -= 1
+        return lo, hi
+    if j1 == j2 and i1 < i2:
+        lo, hi = i1, i2
+        while hi < len(a) and a[hi] == a[hi - (i2 - i1)]:
+            hi += 1
+        while lo > 0 and a[lo - 1] == a[lo - 1 + (i2 - i1)]:
+            lo -= 1
+        return lo, hi
+    return i1, i2
+
+
+def untouched_tasks(root: str, head: str, tasks: list) -> tuple[list, dict]:
+    """[(task, path)] whose every span still reads as the stamped commit had it, and {task: why} not measured."""
+    files, spans, unplaced = task_spans(root, head, tasks)
+    out = []
+    for (tid, path), sps in spans.items():
+        if tid in unplaced or not os.path.isfile(os.path.join(root, path)):
+            continue
+        lines = files[path].split("\n")
+        current = _read(os.path.join(root, path)).split("\n")
+        changes = _changes(files[path], "\n".join(current))
+        if not any(_spans_meet(s, _reach(lines, current, *c, *cur), lines) for s in sps for c, cur in changes):
+            out.append((tid, path))
+    return out, unplaced
+
+
+def revert_task(root: str, tree: str, files: dict, spans: dict, tid: str) -> int:
+    """Put back, in `tree`, the stamped lines of every change that meets this task's spans.
+
+    The rest of the tree stays as the developer left it. Returns how many regions were
+    reverted, 0 when the task's spans meet no change (nothing of it is on disk to take away).
+    """
+    reverted = 0
+    for (owner, path), sps in spans.items():
+        if owner != tid or not os.path.isfile(os.path.join(root, path)):
+            continue
+        current = _read(os.path.join(root, path))
+        cur, old, out, at = current.split("\n"), files[path].split("\n"), [], 0
+        for (i1, i2), (j1, j2) in _changes(files[path], current):
+            out += cur[at:j1]
+            if any(_spans_meet(s, _reach(old, cur, i1, i2, j1, j2), old) for s in sps):
+                out += old[i1:i2]
+                reverted += 1
+            else:
+                out += cur[j1:j2]
+            at = j2
+        out += cur[at:]
+        write_file(inside(tree, path), "\n".join(out))
+    return reverted
+
+
 def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                       scope: str = "all", base_tasks: list | None = None,
                       partial: bool = False) -> int:
@@ -989,6 +1243,26 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         print(f"  Base: {len(base_tasks)} referenced task(s); commands omitted from feature gate")
     run_tasks = (base_tasks if scope == "all" else []) + tasks
     task_cmds = {tid: verification_commands(section) for tid, section in run_tasks}
+    # The examples a documentation task writes are run as the document on disk has them,
+    # in order, in a copy of their own so a reader's example cannot disturb the other
+    # commands.
+    doc_runs: dict[str, str] = {}
+    doc_missing: set[str] = set()
+    doc_unmeasured = []
+    for tid, section in run_tasks:
+        scripts, problems = doc_example_scripts(root, stamped_head(bp), section)
+        for path, script in scripts:
+            task_cmds[tid].append(script)
+            doc_runs[script] = path
+        for path, why in problems:
+            if why.startswith("not measured"):
+                doc_unmeasured.append(f"{tid} {path}: {why}")
+                continue
+            missing = (f"set -e\n# {path} examples, missing\n"
+                       f"echo {shlex.quote(path + ': ' + why)} >&2\nexit 1")
+            task_cmds[tid].append(missing)
+            doc_runs[missing] = path
+            doc_missing.add(missing)
     # Every task that leaves part of its check to a person, with or without a command
     # beside it: a static README assertion does not settle the wording it cannot read.
     humans = {tid for tid, section in run_tasks if human_reviews(section)}
@@ -1021,6 +1295,7 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         record("fail", "no runnable verification proof; behavior verification unavailable")
         return failures or 1
     tree = copy_tree(root)
+    doc_tree = None
     try:
         print(f"  against a copy of {root} ({tree})")
         passed_tasks, failed_tasks = set(), set()
@@ -1036,7 +1311,9 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             display = display_lines[1] if display_lines[0] == "set -e" and len(display_lines) > 1 else display_lines[0]
             if len(display_lines) > 1:
                 display += f" (+{len(display_lines) - 1} script line(s))"
-            code, tail = _run_one(cmd, tree)
+            if cmd in doc_runs and doc_tree is None:
+                doc_tree = copy_tree(root)
+            code, tail = _run_one(cmd, doc_tree if cmd in doc_runs else tree)
             code_of[cmd] = code
             if include_header and cmd == test_cmd:
                 header_code = code
@@ -1141,16 +1418,80 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                         print(f"  Skeleton tree kept at: {skeleton}")
                     else:
                         shutil.rmtree(skeleton, ignore_errors=True)
-        task_passed = own_pass - non_discriminating
+        # Red on the whole skeleton is a low bar for a feature that changes existing code:
+        # there every new function throws, so a test that merely calls one is red. A
+        # reviewer's tests that checked only "a transfer under the limit succeeds" counted
+        # as discriminating while the limit itself was a no-op. So each discriminating test
+        # runs once more on the tree as it is with only the hunks of the (modify) task it
+        # depends on put back as the stamp had them. Green there, the test does not see
+        # that task's change. A dependency that only creates files has no hunks to put back
+        # and is not probed this way; the whole-skeleton probe already removed its files.
+        weak_against: dict[str, list[str]] = {}
+        new_only: dict[str, list[str]] = {}
+        if discriminating and not partial:
+            head = stamped_head(bp)
+            sections = dict(run_tasks)
+            files, spans, unplaced = task_spans(root, head, tasks) if head and commit_known(root, head) else ({}, {}, {})
+            testers: dict[str, list[str]] = {}
+            for tid in sorted(discriminating):
+                prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+                for dep in (prefix + d for d in dependencies(selected_sections[tid])):
+                    if dep not in sections or test_files(sections[dep]):
+                        continue
+                    if not any(owner == dep for owner, _p in spans) or dep in unplaced:
+                        if all(k == "new" for _p, k in file_kinds(sections[dep])):
+                            new_only.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
+                        continue
+                    testers.setdefault(dep, []).append(tid)
+            if testers:
+                # One copy: each dependency's files are put back, probed, and restored.
+                part = copy_tree(root)
+                try:
+                    for dep, tids in testers.items():
+                        if revert_task(root, part, files, spans, dep):
+                            for tid in tids:
+                                if all(_run_one(c, part)[0] == 0 for c in probes[tid][1]):
+                                    weak_against.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
+                        for (owner, path) in spans:
+                            if owner == dep and os.path.isfile(os.path.join(root, path)):
+                                shutil.copyfile(os.path.join(root, path), inside(part, path))
+                finally:
+                    shutil.rmtree(part, ignore_errors=True)
+        task_passed = own_pass - non_discriminating - set(weak_against)
         behind = blocked_by(run_tasks, own_fail | shared_fail)
         own_blocked = {t for t in own_fail if t in behind}
         print("  Task proof — what each task's own Verification measured:")
         if task_passed:
             print(f"    Task-specific command results passed: {_ids(task_passed)}")
-        if discriminating:
-            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating)}")
+        if discriminating - set(weak_against):
+            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating - set(weak_against))}")
         if own_fail - own_blocked:
             print(f"    Task-specific command results failed: {_ids(own_fail - own_blocked)}")
+            # A failure is reported where it was observed. A reviewer put the defect in a
+            # helper an earlier task wrote, whose own cases did not reach it, and the
+            # output read "T006 failed" beside "T002 passed". Nothing here can tell which
+            # task's lines are wrong; it can say which passed tasks wrote the same files.
+            sections = dict(run_tasks)
+            passed_any = own_pass | shared_pass
+            shared_code = []
+            for tid in sorted(own_fail - own_blocked):
+                mine = {p for p, k in file_kinds(sections[tid]) if k in ("new", "modify")}
+                prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+                seen, stack, hits = set(), [prefix + d for d in dependencies(sections[tid])], []
+                while stack:
+                    d = stack.pop()
+                    if d in seen or d not in sections:
+                        continue
+                    seen.add(d)
+                    stack += [prefix + x for x in dependencies(sections[d])]
+                    common = sorted(mine & {p for p, k in file_kinds(sections[d]) if k in ("new", "modify")})
+                    if d in passed_any and common:
+                        hits.append(f"{d.rsplit('/', 1)[-1]} ({', '.join(common)})")
+                if hits:
+                    shared_code.append(f"{tid} with {', '.join(sorted(hits))}")
+            if shared_code:
+                print("    Observed there, not necessarily caused there — a passed dependency wrote the same file(s): "
+                      + "; ".join(shared_code[:6]) + (f" (+{len(shared_code) - 6} more)" if len(shared_code) > 6 else ""))
         if own_blocked:
             print("    Task-specific command results failed behind a failed dependency (not separable from it): "
                   + ", ".join(f"{t} <- {'/'.join(d.rsplit('/', 1)[-1] for d in behind[t])}"
@@ -1169,6 +1510,20 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             record("warn", f"{len(non_discriminating)} test task(s) pass on the blueprint's skeleton as well as"
                    " here — their tests measure nothing this feature adds, so they are not counted as passed: "
                    + _ids(non_discriminating), always=True)
+        if set(doc_runs) - doc_missing:
+            print(f"  Documentation examples: {len(set(doc_runs) - doc_missing)} shell block(s) run as the document on disk has them"
+                  f" ({', '.join(sorted(set(doc_runs.values())))}), in order, in a copy apart from the other commands")
+        if doc_unmeasured:
+            record("warn", f"{len(doc_unmeasured)} documentation file(s) promise runnable examples that were not run",
+                   "\n".join(doc_unmeasured[:4]), always=True)
+        if weak_against:
+            record("warn", f"{len(weak_against)} test task(s) also pass with only the (modify) task they test put back"
+                   " as the stamp had it — red on the whole skeleton, but blind to that task's change, so not"
+                   " counted as passed: " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(weak_against.items())[:12]),
+                   always=True)
+        if new_only:
+            print("    Not probed against their dependency alone (it only creates files, so the whole-skeleton probe"
+                  " is the only one): " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(new_only.items())[:12]))
         if undiscriminated:
             record("warn", f"{len(undiscriminated)} test task(s) passed, and whether their tests discriminate"
                    " was not measured", "\n".join(f"{t}: {why}" for t, why in sorted(undiscriminated.items())[:6]),
@@ -1176,7 +1531,8 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         evidence = {tid: human_evidence(root, tid, section) for tid, section in run_tasks if tid in humans}
         supplied = {t for t, (state, _d) in evidence.items() if state == "supplied"}
         stale = {t for t, (state, _d) in evidence.items() if state == "stale"}
-        missing = set(humans) - supplied - stale
+        invalid = {t for t, (state, _d) in evidence.items() if state == "invalid"}
+        missing = set(humans) - supplied - stale - invalid
         if supplied:
             print(f"    Human evidence supplied: "
                   + ", ".join(f"{t} ({evidence[t][1]})" for t in sorted(supplied)))
@@ -1188,6 +1544,9 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         if stale:
             record("warn", f"human evidence is stale — a reviewed file changed after the review, so it is not supplied: {_ids(stale)}",
                    "\n".join(f"{t}: {evidence[t][1]}" for t in sorted(stale)[:4]), always=True)
+        if invalid:
+            record("warn", f"human evidence is dated a day that does not exist or has not come, so it is not supplied: {_ids(invalid)}",
+                   "\n".join(f"{t}: {evidence[t][1]}" for t in sorted(invalid)[:4]), always=True)
         header_cmds = [test_cmd] if include_header else []
         unexercised = []
         for tid, section in run_tasks:
@@ -1203,11 +1562,12 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
               f" {len(own_fail)} failed ({len(own_blocked)} behind a failed dependency);"
               f" test tasks non-discriminating {len(non_discriminating)}, not measured {len(undiscriminated)};"
               f" shared-only {len(shared_pass) + len(shared_fail)};"
-              f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale)};"
-              f" no command {len(silent)}; test files unmeasured {len(unexercised)}")
+              f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale) + len(invalid)};"
+              f" no command {len(silent)}; test files unmeasured {len(unexercised)};"
+              f" test tasks blind to their target {len(weak_against)}")
         print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
         print("  Exit status reflects command results and missing proof only; shared-only, human,"
-              " non-discriminating and unmeasured-test rows above do not change it.")
+              " non-discriminating, blind-to-target and unmeasured-test rows above do not change it.")
         if partial:
             print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
         elif failures or selected_silent and not (include_header and header_scope == "feature"):
@@ -1219,6 +1579,8 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
             print(f"  Verification tree kept at: {tree}")
         else:
             shutil.rmtree(tree, ignore_errors=True)
+        if doc_tree:
+            shutil.rmtree(doc_tree, ignore_errors=True)
     return failures
 
 

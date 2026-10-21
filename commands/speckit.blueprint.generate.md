@@ -443,7 +443,14 @@ CLI not" and "nothing done" print the same; named cases print which contract is 
 - *Documentation task*: a static assertion on the text the spec fixes (exact invocation,
   column list, names of states), **and every example command the text shows, run as the
   reader would run it**: a README example that names `--file examples/ledger.json --request
-  req-001` must name a request that file holds, or the task adds the fixture. Keep only
+  req-001` must name a request that file holds, or the task adds the fixture. Put a runnable
+  example in a ```` ```sh ```` (or `bash`, `shell`, `console` with `$ ` prompts) fence in the
+  After: `--verify` reads those blocks **from the document on disk** — the shell blocks the
+  stamped commit did not have — and runs each as written, in order, in a copy of its own; a
+  block that exits non-zero, or a document that has none, fails the task. Do not restate the
+  commands in the Verification: a restated copy keeps passing after the README's own example
+  breaks. A usage synopsis with placeholders (`--file PATH`) is not runnable; put it in a
+  ```` ```text ```` fence or inline, never a shell fence. Keep only
   judgement for a line that **starts with** `Human review:` — nothing on that line is run,
   even a backticked example. The reviewer records the result in the feature's
   `human-evidence.md` (`T011: <reviewer> <YYYY-MM-DD> README.md@<git hash-object>`); until
@@ -457,6 +464,16 @@ regression case that fixes it, owned by the behavior task that could break it �
 To find what to check, list every existing reader of each stored structure the feature
 writes a new field into: a reversal that adds `reversedBy` to a stored transfer record also
 reaches every command that replays or prints that record, not only the one the plan names.
+
+**A date or time rule is checked in more than the host's time zone.** When the spec states a
+calendar day, a UTC rule, midnight, or local time, the case that checks it runs the code in a
+child process with `TZ` pinned on both sides of UTC — for example `TZ=Pacific/Kiritimati` and
+`TZ=Pacific/Honolulu` — at instants either side of the boundary (`…T23:59:59.999Z`,
+`…T00:00:00.000Z`). Measured: a local-date bug the task's own marker warned about passed every
+oracle case and the whole `--verify` run under `TZ=UTC`, which is what CI usually runs. A
+case that only injects a `Date` into the code under test inherits the host's zone and cannot
+see it. `validate_blueprint.py` warns (section [12]) when the document states date or time
+rules and nothing in it or the feature directory sets `TZ`.
 
 **Product documentation documents the product.** A documentation task writes what the spec
 asks the product's readers to know. This extension's own commands (`apply_blueprint.py`,
@@ -563,7 +580,22 @@ What no script can check, and what you must therefore check yourself before fina
 - **Unchanged behavior**: every "unchanged" sentence in the spec has an oracle case, and every
   existing reader of a structure the feature adds a field to is covered by one.
 - **Documentation examples**: every command a documentation After shows runs, as written, against
-  files the repository holds — and its task's Verification runs it.
+  files the repository holds. Runnable ones sit in a shell fence, which `--verify` runs from the
+  document on disk; synopses with placeholders sit in a `text` fence.
+- **Time zones**: every case that checks a date or time rule pins `TZ` in a child process, on
+  both sides of UTC.
+- **Rejected alternatives**: test each adopted decision against every reason the Key Decisions
+  table gives for rejecting an alternative. If the adopted option has the property the
+  rejection names, the table contradicts itself: say what bounds it in the adopted option, or
+  record the contradiction as an Open Question. Measured: a decision rejected `--on DATE`
+  because it "lets the caller choose the day", and adopted a `LEDGER_NOW` variable that lets
+  the caller choose the day; every gate passed and a limit could be bypassed by dating a
+  transfer in 2030.
+- **Test targets**: a test-writing task's `**Dependencies**` names the task whose code its
+  test exercises, and nothing else. `--verify` reverts that task's regions alone and expects the
+  test to go red; a test of the library whose line names the CLI task, or a compatibility test
+  whose line names the feature it is compatible with, is reported as blind to its target.
+  Measured on the R19 workspace: two such lines in feature 004 (`T007 <- T003`, `T009 <- T003`).
 - **Narration**: no comment inside a code block that merely restates the adjacent line (Step 3c).
 - **Invention**: every task whose basis is absent from the artifacts is marked blocked and listed in
   Open Questions rather than filled with a plausible design (Step 3d).

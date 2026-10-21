@@ -48,19 +48,48 @@ measured, and a shared command measures no single task:
   the current test file copied in. Red there and green on the tree: the test discriminates,
   and the task is passed. Green on both: `non-discriminating`, warned about and not counted
   as passed. A test file no command runs is flagged as unmeasured.
+- **A test red on the whole skeleton can still be blind to its own target.** The skeleton
+  undoes every task at once, so a test of the transfer limit goes red there because transfer
+  itself is gone, not because the limit is. When a discriminating test task's
+  `**Dependencies**` name a `(modify)` task, `--verify` runs it once more on your tree with
+  only that task's hunks put back as the stamp had them. Green there: `blind to their target`,
+  warned about and not counted as passed. Measured on the R19 guru copies: the three test
+  tasks of the copy whose tests skip the limit (`t3`, `t3b`) are now named, the finished
+  copy's are not. A dependency that only creates files is not probed this way — removing it
+  breaks the test's import, so red there would mean nothing. The probe takes the
+  `**Dependencies**` line as the test's target. Where the line names something else, it
+  misfires: the finished R19 workspace's feature 004 has a library-rejection test whose line
+  names the CLI task and a history-compatibility test whose line names the same task, and both
+  are reported blind (2 of 6 test tasks; 0 on the six R18 trees).
 - **A red task that depends on a red task** (its `**Dependencies**` line, followed through)
   is listed as failed *behind* that dependency. A test of the CLI is red when the CLI is
   missing, whether or not the test was written; the result is still a failure, but it cannot
   be told apart from the task it depends on, and the output no longer claims it can.
+- **A failure is reported where it was observed.** When a task's command fails and a
+  dependency whose own cases passed wrote one of the same files, the failure carries
+  `Observed there, not necessarily caused there` and names both: a helper the earlier task
+  wrote wrong and its cases never reached shows up as the later task's failure.
 - **Documentation tasks** get a static assertion on the text the spec fixes, and their
-  example commands are run. Judgement goes on a line that starts with `Human review:`.
+  example commands are run. A shell-fenced block (`sh`, `bash`, `shell`, `console`, `zsh`)
+  that a doc task's After adds is a promise that the example runs. So `--verify` reads the
+  shell blocks of that file **on disk** — the ones the stamped commit did not have — and runs
+  each as written, in order, as a `set -e` script in a copy of its own (`$ ` lines of a
+  `console` block are the commands, the rest is output). The blueprint's own block is not
+  what is run: a README whose example drifted from the blueprint is what a reader types. A
+  synopsis with placeholders (`ledger transfer <from> <to>`) is not a runnable example; put
+  it in a `text` fence. Without the stamped commit the run is `not measured`. A tree that has
+  moved past later features also runs their new blocks.
+  Judgement goes on a line that starts with `Human review:`.
   Nothing on that line is executed — a backticked example in it is a thing to look for, not
   a command. The reviewer records the review in the feature's `human-evidence.md`, one line
   per task: `T010: <reviewer> <YYYY-MM-DD> README.md@<sha>`, one `path@sha` for each file
   the task declares, the sha being `git hash-object <path>` (seven or more characters; the
   warning prints the exact line). Without it the task is `human evidence not supplied`:
   counted, not failed, never passed. When a recorded file changes, the record is `stale`
-  and counts as not supplied again.
+  and counts as not supplied again. A date that is not a calendar date (`9999-99-99`,
+  `2026-02-30`) or lies more than one day past today in UTC makes the record `invalid`, also
+  not supplied: a record from the future is a record nobody made yet, and the one day covers
+  a reviewer east of UTC.
 
 Measured on the R17 guru CSV feature (886-line blueprint, one 52-line script under ten
 tasks; prototype hand-converted to the form above, 398 lines plus a 78-line oracle). Same
@@ -75,11 +104,12 @@ instead of all ten red. The converted blueprint was written by hand, not by the 
 
 Exit 1: a command failed, or under `--verify-scope feature` a selected task has neither a
 command nor a `Human review:` line and no feature-scoped header covers it. Exit 2: a refused
-gate. Shared-only results, non-discriminating test tasks, human evidence not supplied and
-unmeasured test files never change the exit code — exit 0 means the commands passed. A
-pipeline that needs per-task proof reads the `Proof summary:` line and requires
+gate. Shared-only results, non-discriminating or target-blind test tasks, human evidence not
+supplied and unmeasured test files never change the exit code — exit 0 means the commands
+passed. A pipeline that needs per-task proof reads the `Proof summary:` line and requires
 `test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0` (each
-`Human review:` recorded in `human-evidence.md`) and `test files unmeasured 0`.
+`Human review:` recorded in `human-evidence.md`), `test files unmeasured 0` and
+`test tasks blind to their target 0`.
 
 Why non-discriminating is not exit 1: measured on the R18 guru feature's 22 control copies
 and on 16 feature runs of three earlier projects, it fired only on the copy whose tests were
@@ -147,7 +177,7 @@ still exercise more than that prefix, so report its declared scope separately.
 | State | Evidence | Guarantee |
 |---|---|---|
 | document-valid | document validator command and exit | document structure; no runtime behavior |
-| scaffold-complete | feature `--done` command and exit | declared files/symbols, no remaining markers, and every existing `(modify)` file changed since the stamp; no runtime behavior |
+| scaffold-complete | feature `--done` command and exit | declared files and public symbols, no remaining markers, and every `(modify)` task changed its own regions of an existing file since the stamp; no runtime behavior |
 | behavior-verified | focused assertion command, exit, tested scope and unmeasured contracts | the named assertions passed against the working tree |
 
 Record **pass**, **fail**, or **not run** for each state, with the actual command.

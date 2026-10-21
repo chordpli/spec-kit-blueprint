@@ -159,6 +159,8 @@ These were agreed before implementation. Agreement is not correctness — it was
 
 Do not write the rationale as a defence of the code. A reviewer given a reason tends to weigh the reason instead of the line: in a controlled pair on the same diff, the reviewer who saw only the diff called a hardcoded currency a blocker — a foreign-currency transfer dies on it — and the reviewer who saw the same line justified here called it a minor style point and wrote that the reasoning held up. State the assumption instead, so it can be false.
 
+Before filling a row, take the reason the Key Decisions table gives for rejecting the alternative and test the adopted option against it. A rejection reason is a property the design said it would not have; if the code has it anyway, that is the row's "What breaks", and the decision goes to "Open for the reviewer" as well. Measured: `--on DATE` was rejected because it "lets the caller choose the day", the adopted `LEDGER_NOW` variable let the caller choose the day, a limit was bypassed by dating a transfer in 2030, and every gate passed — only this table, filled by hand, named it.
+
 | Decision | Where in the code | What it assumes | What breaks here if that is wrong |
 |----------|-------------------|-----------------|-----------------------------------|
 | {decision} | `{file}:{line}` | {the condition the blueprint's reasoning rests on, written so it can be checked against this code — not why the decision is good} | {the concrete failure: the input, caller, or state that would produce it, or "nothing found" if you looked and there is none} |
