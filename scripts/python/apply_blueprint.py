@@ -957,6 +957,151 @@ def skeleton_tree(root: str, bp: str, tasks: list) -> tuple[str | None, str]:
     return tree, ""
 
 
+def _git_blob(root: str, head: str, path: str) -> str | None:
+    proc = subprocess.run(["git", "-C", root, "show", f"{head}:{path}"], capture_output=True, timeout=60)
+    return proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else None
+
+
+def task_spans(root: str, head: str, tasks: list) -> tuple[dict, dict, dict]:
+    """Where each task's hunks land in each existing file, in the stamped commit's lines.
+
+    "Has this (modify) file changed since the stamp" is a question about a file, and two
+    tasks that edit one file share the answer: a reviewer left the transfer-limit task
+    untouched beside a finished library task in the same file and --done passed, because
+    the file had moved. The tasks are applied in order to the stamped files and every
+    region a task changed is mapped back to the stamped commit's line numbers — a span
+    (a, b) covers lines a..b-1, and (g, g) is the gap above line g where a task only
+    inserts. A span inside lines an earlier task inserted maps to that task's gap, so the
+    two share it. Returns ({path: stamped text}, {(task, path): [spans]}, {task: why}) for
+    the tasks whose hunks could not be placed.
+    """
+    import difflib
+    global _tree
+    files: dict[str, str] = {}
+    for _tid, section in tasks:
+        for path, kind in file_kinds(section):
+            if kind == "modify" and path not in files:
+                text = _git_blob(root, head, path)
+                if text is not None:
+                    files[path] = text
+    spans: dict = {}
+    unplaced: dict = {}
+    if not files:
+        return files, spans, unplaced
+    tmp = tempfile.mkdtemp(prefix="blueprint-spans-")
+    origin = {}
+    saved = _tree
+    _tree = os.path.realpath(tmp)
+    try:
+        for path, text in files.items():
+            write_file(inside(tmp, path), text)
+            origin[path] = list(range(len(text.split("\n"))))
+        for tid, section in tasks:
+            if not any(p in files for p, _k in file_kinds(section)):
+                continue
+            old = {p: _read(inside(tmp, p)) for p in files}
+            try:
+                apply_task(tmp, section)
+            except (Defect, AlreadyApplied, Ambiguous) as exc:
+                unplaced[tid] = str(exc).splitlines()[0][:100]
+            for path in files:
+                new = _read(inside(tmp, path))
+                if new == old[path]:
+                    continue
+                a, b = old[path].split("\n"), new.split("\n")
+                was, now = origin[path], []
+                for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+                    if tag == "equal":
+                        now += was[i1:i2]
+                        continue
+                    stamped = [x for x in was[i1:i2] if x is not None]
+                    if stamped:
+                        span = (min(stamped), max(stamped) + 1)
+                    else:
+                        above = [x for x in was[:i1] if x is not None]
+                        gap = above[-1] + 1 if above else 0
+                        span = (gap, gap)
+                    spans.setdefault((tid, path), []).append(span)
+                    now += [None] * (j2 - j1)
+                origin[path] = now
+    finally:
+        _tree = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    return files, spans, unplaced
+
+
+TRIVIAL_LINE = re.compile(r"^[\s{}()\[\];,]*$")
+
+
+def _widen(span: tuple, lines: list) -> tuple:
+    """The span grown over the blank and bracket-only lines on either side of it.
+
+    A diff can place one insertion at several equally good gaps when the inserted block
+    ends with a line the file already has there, a `}` or a blank: a new function put
+    above `listTransfers` read as inserted two lines higher, above the `}` and the blank
+    line that close `transfer`, and a finished task was reported untouched.
+    """
+    a, b = span
+    while a > 0 and TRIVIAL_LINE.match(lines[a - 1]):
+        a -= 1
+    while b < len(lines) and TRIVIAL_LINE.match(lines[b]):
+        b += 1
+    return a, b
+
+
+def _spans_meet(a: tuple, b: tuple, lines: list) -> bool:
+    """Do two stamped-line spans touch, once each is widened over blank and bracket lines?"""
+    (a1, a2), (b1, b2) = _widen(a, lines), _widen(b, lines)
+    return a1 <= b2 and b1 <= a2
+
+
+def _changes(stamped: str, current: str) -> list:
+    """(stamped span, current lines i..j) for every region where the file differs from the stamp."""
+    import difflib
+    a, b = stamped.split("\n"), current.split("\n")
+    return [((i1, i2), (j1, j2)) for tag, i1, i2, j1, j2
+            in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes() if tag != "equal"]
+
+
+def untouched_tasks(root: str, head: str, tasks: list) -> tuple[list, dict]:
+    """[(task, path)] whose every span still reads as the stamped commit had it, and {task: why} not measured."""
+    files, spans, unplaced = task_spans(root, head, tasks)
+    out = []
+    for (tid, path), sps in spans.items():
+        if tid in unplaced or not os.path.isfile(os.path.join(root, path)):
+            continue
+        lines = files[path].split("\n")
+        changes = _changes(files[path], _read(os.path.join(root, path)))
+        if not any(_spans_meet(s, c, lines) for s in sps for c, _cur in changes):
+            out.append((tid, path))
+    return out, unplaced
+
+
+def revert_task(root: str, tree: str, files: dict, spans: dict, tid: str) -> int:
+    """Put back, in `tree`, the stamped lines of every change that meets this task's spans.
+
+    The rest of the tree stays as the developer left it. Returns how many regions were
+    reverted, 0 when the task's spans meet no change (nothing of it is on disk to take away).
+    """
+    reverted = 0
+    for (owner, path), sps in spans.items():
+        if owner != tid:
+            continue
+        current = _read(os.path.join(root, path))
+        cur, old, out, at = current.split("\n"), files[path].split("\n"), [], 0
+        for (i1, i2), (j1, j2) in _changes(files[path], current):
+            out += cur[at:j1]
+            if any(_spans_meet(s, (i1, i2), old) for s in sps):
+                out += old[i1:i2]
+                reverted += 1
+            else:
+                out += cur[j1:j2]
+            at = j2
+        out += cur[at:]
+        write_file(inside(tree, path), "\n".join(out))
+    return reverted
+
+
 def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                       scope: str = "all", base_tasks: list | None = None,
                       partial: bool = False) -> int:

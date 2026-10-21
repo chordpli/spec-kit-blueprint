@@ -140,6 +140,16 @@ function declname(t,   n, w, i, nm, head2, before) {
     }
     return ""
 }
+# isprivate: a declaration the file keeps to itself. A leading underscore, a private
+# modifier, a lower-case Go name, or a top-level JavaScript or TypeScript declaration
+# without export. Indented lines are members of something and stay public.
+function isprivate(raw, t, nm, path) {
+    if (nm ~ /^_/) return 1
+    if (t ~ /(^|[ \t])(private|fileprivate)[ \t]/) return 1
+    if (path ~ /[.]go$/ && nm ~ /^[a-z]/) return 1
+    if (path ~ /[.](m?js|cjs|jsx|ts|tsx|mts|cts)$/ && raw !~ /^[ \t]/ && t !~ /^export[ \t]/) return 1
+    return 0
+}
 # uncomment: the line without its comments. A file read for what it declares must not
 # count a name that survives only in a comment: a declared function deleted and left
 # behind as a one-line comment of its own header passed --done while the application
@@ -254,6 +264,7 @@ if [[ "$ALL" == true ]]; then
     fi
     SWEEP_RC=0
     SWEEP_BAD=()
+    SWEEP_REFUSED=()
     SWEEP_N=0
     for d in "$REPO_ROOT"/specs/*/; do
         [[ -f "$d/blueprint.md" ]] || continue
@@ -261,10 +272,18 @@ if [[ "$ALL" == true ]]; then
         rel="${d#$REPO_ROOT/}"; rel="${rel%/}"
         [[ "$MARKERS" == true ]] || echo -e "\n${CYAN}########## $rel ##########${NC}"
         # `|| true` under `set -e`: a red feature must not stop the sweep at the first one.
-        bash "$0" "$rel" "${PASSTHROUGH[@]}" || {
-            SWEEP_RC=1
+        # Exit 2 is a refusal, not a result: inside a copy without its own .git every
+        # feature is refused, and the sweep said "5 of 5 did not pass" with exit 1 where
+        # the single run says exit 2. A refusal anywhere makes the sweep a refusal.
+        feature_rc=0
+        bash "$0" "$rel" "${PASSTHROUGH[@]}" || feature_rc=$?
+        if [[ "$feature_rc" -eq 2 ]]; then
+            SWEEP_REFUSED+=("$rel")
+        elif [[ "$feature_rc" -ne 0 ]]; then
+            [[ "$SWEEP_RC" -eq 2 ]] || SWEEP_RC=1
             SWEEP_BAD+=("$rel")
-        }
+        fi
+        [[ ${#SWEEP_REFUSED[@]} -gt 0 ]] && SWEEP_RC=2
     done
     if [[ "$SWEEP_N" -eq 0 ]]; then
         echo -e "${YELLOW}no specs/*/blueprint.md found — nothing to sweep${NC}" >&2
@@ -272,8 +291,13 @@ if [[ "$ALL" == true ]]; then
     fi
     if [[ "$MARKERS" != true ]]; then
         echo -e "\n${CYAN}########## sweep ##########${NC}"
+        if [[ ${#SWEEP_REFUSED[@]} -gt 0 ]]; then
+            echo -e "  ${RED}✗ ${#SWEEP_REFUSED[@]} of $SWEEP_N feature(s) were refused (exit 2), so the sweep is refused: $(printf '%s, ' "${SWEEP_REFUSED[@]}" | sed 's/, $//')${NC}"
+        fi
         if [[ ${#SWEEP_BAD[@]} -gt 0 ]]; then
             echo -e "  ${RED}✗ ${#SWEEP_BAD[@]} of $SWEEP_N feature(s) did not pass: $(printf '%s, ' "${SWEEP_BAD[@]}" | sed 's/, $//')${NC}"
+        elif [[ ${#SWEEP_REFUSED[@]} -gt 0 ]]; then
+            :
         else
             echo -e "  ${GREEN}✓ all $SWEEP_N feature(s) passed${NC}"
         fi
@@ -800,12 +824,18 @@ if [[ ${#DECLARED[@]} -gt 0 ]]; then
                 }
                 if (armed == "") next
                 if (role == "before") { before[t] = 1; next }
+                # An export list or a CommonJS assignment makes a name public that its
+                # own declaration line does not.
+                if (t ~ /^export[ \t]*[{]/ || t ~ /(module[.])?exports[.=[ \t]/) exported[armed] = exported[armed] " " t
                 nm = declname(t)
                 if (nm == "") next
                 # A hook only introduces what its Before did not already show.
                 if (role == "after" && (t in before)) next
-                if (role == "after") print armed "\thook\t" nm
-                else if (isnew[armed]) print armed "\tnew\t" nm
+                if (role == "after") origin = "hook"
+                else if (isnew[armed]) origin = "new"
+                else next
+                rows[++nrows] = armed "\t" origin "\t" nm
+                priv[nrows] = isprivate($0, t, nm, armed)
                 next
             }
             if (fence) { in_fence = 1; next }
@@ -826,6 +856,17 @@ if [[ ${#DECLARED[@]} -gt 0 ]]; then
             if ($0 ~ /^\*\*Before\*\*/) { role = "before"; delete before; next }
             if ($0 ~ /^\*\*After\*\*/) { role = (role == "seen_before" ? "after" : ""); next }
             if ($0 ~ /^\*\*/ && $0 !~ /^\*\*`/) { if (role != "seen_before") role = "" }
+        }
+        # A name the file keeps to itself is for the implementer to choose. A private
+        # helper renamed with its behavior intact failed --done as a missing declaration,
+        # which is the completion gate overruling the one design call guide mode leaves to
+        # the developer. Tagged here; the check below does not require them.
+        END {
+            for (i = 1; i <= nrows; i++) {
+                split(rows[i], f, "\t")
+                if (priv[i] && exported[f[1]] ~ ("(^|[^A-Za-z0-9_])" f[3] "([^A-Za-z0-9_]|$)")) priv[i] = 0
+                print rows[i] (priv[i] ? "+private" : "")
+            }
         }' "$GUIDE" | sort -u; rm -f "$PATHS_FILE" "$NEWF")
 fi
 
@@ -1083,11 +1124,16 @@ if [[ "$DONE" == true ]]; then
             echo "    (modify) files against the stamp: not measured — this clone does not contain HEAD $STAMP"
         else
             UNTOUCHED=()
+            MOD_SEEN=()
             MOD_CHECKED=0
             for f in "${MODIFY_FILES[@]}"; do
+                # Once per file. The list holds a path once per task that declares it, and
+                # deduplicating against the untouched list alone counted a changed file
+                # once per task: "all 5 existing file(s)" over three files.
                 dup=false
-                for q in "${UNTOUCHED[@]}"; do [[ "$q" == "$f" ]] && dup=true && break; done
+                for q in "${MOD_SEEN[@]}"; do [[ "$q" == "$f" ]] && dup=true && break; done
                 [[ "$dup" == true ]] && continue
+                MOD_SEEN+=("$f")
                 [[ -f "$REPO_ROOT/$f" ]] || continue
                 # A file the stamped commit does not have was created by this feature, and
                 # "unchanged since" means nothing for it.
@@ -1102,6 +1148,38 @@ if [[ "$DONE" == true ]]; then
                 echo "      The task that modifies them was never done — or the blueprint was stamped after the work, and its stamp is what is wrong."
             elif [[ "$MOD_CHECKED" -gt 0 ]]; then
                 pass "all $MOD_CHECKED existing file(s) a (modify) task changes have changed since HEAD $STAMP"
+            fi
+            # Per task, not per file. Two tasks edit one file and the file has moved, so
+            # the file says nothing about the second: a reviewer left the transfer-limit
+            # task untouched beside a finished library task in the same file, and this
+            # passed. Where each task's hunks land is read off the stamped files by
+            # applying the tasks in order; a task none of whose regions differ from the
+            # stamp was not done. A file already reported above is not reported again.
+            HUNKS_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")/../python" 2>/dev/null && pwd)/task_hunks.py"
+            if ! command -v python3 >/dev/null 2>&1 || [[ ! -f "$HUNKS_PY" ]]; then
+                echo "    (modify) tasks against the stamp: not measured — python3 or task_hunks.py is not available"
+            elif ! TASK_ROWS=$(python3 "$HUNKS_PY" "$GUIDE" "$REPO_ROOT" "$STAMP" 2>/dev/null); then
+                echo "    (modify) tasks against the stamp: not measured — task_hunks.py could not read the blueprint"
+            else
+                TASK_UNTOUCHED=()
+                TASK_UNPLACED=()
+                while IFS=$'\t' read -r kind tid path; do
+                    [[ -n "$kind" ]] || continue
+                    if [[ "$kind" == untouched ]]; then
+                        dup=false
+                        for q in "${UNTOUCHED[@]}"; do [[ "$q" == "$path" ]] && dup=true && break; done
+                        [[ "$dup" == true ]] || TASK_UNTOUCHED+=("$tid ($path)")
+                    elif [[ "$kind" == unplaced ]]; then
+                        TASK_UNPLACED+=("$tid")
+                    fi
+                done <<< "$TASK_ROWS"
+                if [[ ${#TASK_UNTOUCHED[@]} -gt 0 ]]; then
+                    fail "${#TASK_UNTOUCHED[@]} (modify) task(s) left every line their hunks change as HEAD $STAMP had it, in a file other tasks changed: $(printf '%s, ' "${TASK_UNTOUCHED[@]}" | sed 's/, $//')"
+                    echo "      The file moved because of another task's work; these tasks' parts of it did not."
+                fi
+                if [[ ${#TASK_UNPLACED[@]} -gt 0 ]]; then
+                    echo "    (modify) tasks not measured — their hunks do not apply to the stamped files: $(printf '%s, ' "${TASK_UNPLACED[@]}" | sed 's/, $//')"
+                fi
             fi
         fi
     fi
@@ -1262,13 +1340,26 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
     HOOK_CHECKED=0
     HOOK_PENDING=0
     MISSING_HOOKS=()
+    PRIVATE_RENAMED=()
     for entry in "${DECLARED_SYMBOLS[@]}"; do
         sym_path="${entry%%$'\t'*}"
         sym_rest="${entry#*$'\t'}"
         sym_origin="${sym_rest%%$'\t'*}"
         sym_name="${sym_rest##*$'\t'}"
+        sym_private=false
+        if [[ "$sym_name" == *+private ]]; then
+            sym_private=true
+            sym_name="${sym_name%+private}"
+        fi
         [[ -n "$sym_path" && -n "$sym_name" ]] || continue
         [[ -f "$REPO_ROOT/$sym_path" ]] || continue
+        # A private name is not part of what the feature promises its callers, and outside
+        # a fresh scaffold, where the skeleton must hold it verbatim, its absence is the
+        # implementer's naming, not missing work. What it did is for --verify to judge.
+        if [[ "$sym_private" == true ]] && [[ "$FRESH" != true ]] && ! file_declares "$REPO_ROOT/$sym_path" "$sym_name"; then
+            PRIVATE_RENAMED+=("$sym_path \`$sym_name\`")
+            continue
+        fi
         # A declaration a (modify) hook introduces is not on disk until the developer
         # types the hunk, so on a fresh scaffold its absence is the expected state, not a
         # defect. --fresh must not fail on it; --done must.
@@ -1330,6 +1421,12 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
     fi
     if [[ "$HOOK_PENDING" -gt 0 ]]; then
         pass "$HOOK_PENDING symbol(s) a (modify) hook introduces are not judged on a fresh scaffold — the developer types those"
+    fi
+    if [[ ${#PRIVATE_RENAMED[@]} -gt 0 ]]; then
+        SHOWN=("${PRIVATE_RENAMED[@]:0:4}")
+        MORE=""
+        [[ ${#PRIVATE_RENAMED[@]} -gt 4 ]] && MORE=" (+$(( ${#PRIVATE_RENAMED[@]} - 4 )) more)"
+        echo "    ${#PRIVATE_RENAMED[@]} private declaration(s) the blueprint names are not in the file and not required — the implementer names those: $(printf '%s, ' "${SHOWN[@]}" | sed 's/, $//')${MORE}"
     fi
 fi
 
