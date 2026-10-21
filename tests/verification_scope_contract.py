@@ -532,6 +532,26 @@ class CalcTest(unittest.TestCase):
             Path(root, 'src/m.js').write_text(stamped.replace('return [];', 'return [1];'))
             self.assertEqual(applier.untouched_tasks(root, head, tasks), ([('T001', 'src/m.js')], {}))
 
+    def test_inserted_method_is_attributed_across_a_repeated_statement(self):
+        # R19 senior 002: a finished `cancel` ending in `return true;` and `}` was placed by
+        # the diff above the `return true;` that ends the method before it, two lines from
+        # where the blueprint's insertion went. Its test was then reported blind to it.
+        stamped = 'class S {\n  int put() {\n    x();\n    return 1;\n  }\n  int close() {\n    return 2;\n  }\n}\n'
+        tasks = [('T001', '**File**: `src/S.java` (modify)\n\n**Before**:\n```java\n  int close() {\n```\n\n'
+                          '**After**:\n```java\n  int cancel() {\n    throw new E("T001: cancel");\n  }\n'
+                          '  int close() {\n```\n')]
+        with tempfile.TemporaryDirectory() as root:
+            head = self.stamped_repo(root, {'src/S.java': stamped}, '{head}')
+            done = stamped.replace('  int close', '  int cancel() {\n    y();\n    return 1;\n  }\n  int close')
+            Path(root, 'src/S.java').write_text(done)
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([], {}))
+            files, spans, _ = applier.task_spans(root, head, tasks)
+            tree = tempfile.mkdtemp(dir=root)
+            self.assertEqual(applier.revert_task(root, tree, files, spans, 'T001'), 1)
+            self.assertEqual(Path(tree, 'src/S.java').read_text(), stamped)
+            Path(root, 'src/S.java').write_text(stamped.replace('return 2;', 'return 3;'))
+            self.assertEqual(applier.untouched_tasks(root, head, tasks), ([('T001', 'src/S.java')], {}))
+
     def test_private_helper_rename_passes_done_both_bash_versions(self):
         # R19 guru d5: a non-exported helper renamed with its behavior intact failed --done
         # as a missing declaration. An exported name is still required.

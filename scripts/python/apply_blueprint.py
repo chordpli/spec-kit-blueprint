@@ -289,7 +289,8 @@ def _read(path: str) -> str:
 
 def write_file(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    open(path, "w", encoding="utf-8").write(text)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 _tree = ""
@@ -1144,6 +1145,32 @@ def _changes(stamped: str, current: str) -> list:
             in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes() if tag != "equal"]
 
 
+def _reach(a: list, b: list, i1: int, i2: int, j1: int, j2: int) -> tuple:
+    """The stamped span a change could equally have been placed at.
+
+    A pure insertion or deletion slides over the lines it repeats: a `cancel` method
+    inserted after `return true;\n    }` reads the same as one inserted before them, and
+    the diff of the finished file chose one gap while the blueprint's chose the other,
+    two lines apart. Blank and bracket lines are covered by `_widen`; this covers the
+    rest. Only for asking whether spans meet — the change itself is (i1, i2).
+    """
+    if i1 == i2 and j1 < j2:
+        ins, lo, hi = b[j1:j2], i1, i1
+        while hi < len(a) and a[hi] == ins[(hi - i1) % len(ins)]:
+            hi += 1
+        while lo > 0 and a[lo - 1] == ins[(lo - 1 - i1) % len(ins)]:
+            lo -= 1
+        return lo, hi
+    if j1 == j2 and i1 < i2:
+        lo, hi = i1, i2
+        while hi < len(a) and a[hi] == a[hi - (i2 - i1)]:
+            hi += 1
+        while lo > 0 and a[lo - 1] == a[lo - 1 + (i2 - i1)]:
+            lo -= 1
+        return lo, hi
+    return i1, i2
+
+
 def untouched_tasks(root: str, head: str, tasks: list) -> tuple[list, dict]:
     """[(task, path)] whose every span still reads as the stamped commit had it, and {task: why} not measured."""
     files, spans, unplaced = task_spans(root, head, tasks)
@@ -1152,8 +1179,9 @@ def untouched_tasks(root: str, head: str, tasks: list) -> tuple[list, dict]:
         if tid in unplaced or not os.path.isfile(os.path.join(root, path)):
             continue
         lines = files[path].split("\n")
-        changes = _changes(files[path], _read(os.path.join(root, path)))
-        if not any(_spans_meet(s, c, lines) for s in sps for c, _cur in changes):
+        current = _read(os.path.join(root, path)).split("\n")
+        changes = _changes(files[path], "\n".join(current))
+        if not any(_spans_meet(s, _reach(lines, current, *c, *cur), lines) for s in sps for c, cur in changes):
             out.append((tid, path))
     return out, unplaced
 
@@ -1172,7 +1200,7 @@ def revert_task(root: str, tree: str, files: dict, spans: dict, tid: str) -> int
         cur, old, out, at = current.split("\n"), files[path].split("\n"), [], 0
         for (i1, i2), (j1, j2) in _changes(files[path], current):
             out += cur[at:j1]
-            if any(_spans_meet(s, (i1, i2), old) for s in sps):
+            if any(_spans_meet(s, _reach(old, cur, i1, i2, j1, j2), old) for s in sps):
                 out += old[i1:i2]
                 reverted += 1
             else:
