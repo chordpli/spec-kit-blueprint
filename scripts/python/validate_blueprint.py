@@ -133,6 +133,21 @@ DATE_RULE = re.compile(
 TZ_PIN = re.compile(
     r"\bTZ\s*[=:]\s*[\"'`]?[A-Za-z]|[\"'`]TZ[\"'`]|\benv\.TZ\b|\benviron\[[\"']TZ[\"']\]"
     r"|-Duser\.timezone=|TimeZone\.setDefault|\btzset\(")
+STRING_LITERAL = re.compile(r"\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\\n]|\\.)*`")
+
+
+def runnable_text(code: str) -> str:
+    """Code with its comments removed and its string literals emptied.
+
+    What pins a time zone is code that sets it, not a sentence about it. Matched against
+    the whole document, a reviewer's oracle with every `TZ: zone` renamed away passed,
+    because the prose said `TZ=Pacific/Kiritimati` in backticks; a marker message or a
+    comment that says to pin it is the same sentence inside a fence. A literal that is
+    exactly `TZ` is kept, as in `environ["TZ"]`.
+    """
+    code = STRING_LITERAL.sub(lambda m: m.group(0) if m.group(0)[1:-1] == "TZ" else m.group(0)[0] + "S" + m.group(0)[-1], code)
+    code = re.sub(r"/\*.*?\*/", " ", code, flags=re.S)
+    return re.sub(r"(?m)(?://|(?:^|(?<=\s))#(?![!\[])).*$", "", code)
 
 
 def feature_number(feature_dir: str) -> str:
@@ -222,6 +237,13 @@ def main() -> int:
 
     print(f"{CYAN}=== Blueprint Document Validator {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")
+    # Every command document starts at spec-kit's prerequisite script, and a tree with only
+    # this extension installed has none: the first step of each command failed, and each
+    # reader worked around it alone. Said once here, where it costs nothing.
+    if os.path.isdir(os.path.join(root, ".specify")) and not os.path.isfile(
+            os.path.join(root, ".specify", "scripts", "bash", "check-prerequisites.sh")):
+        print("Note: .specify/scripts/bash/check-prerequisites.sh is not installed (spec-kit's own scripts);"
+              " the commands' Step 1 takes the feature from its path instead, as these scripts do")
 
     if not os.path.isfile(bp_path):
         print(f"\n{RED}blueprint.md not found — run /speckit.blueprint.generate first.{NC}")
@@ -1688,11 +1710,16 @@ def main() -> int:
     date_rules = re.findall(DATE_RULE, outside_fences(bp))
     if date_rules:
         section("[12] Time zones")
-        texts = [bp]
+        # Runnable places only: the blueprint's code blocks, its Verification commands, and
+        # the feature directory's files that are not prose (the oracle).
+        texts = [body for _info, body in code_blocks(bp)]
+        texts += re.findall(r"`([^`\n]+)`", "\n".join(ln for ln in outside_fences(bp).split("\n")
+                                                     if ln.startswith("**Verification**")))
         for path in sorted(glob.glob(os.path.join(feature_dir, "*"))):
-            if os.path.isfile(path) and os.path.basename(path) != "blueprint.md" and os.path.getsize(path) < 2_000_000:
+            if (os.path.isfile(path) and not re.search(r"\.(?:md|markdown|txt)$", path, re.I)
+                    and os.path.getsize(path) < 2_000_000):
                 texts.append(open(path, encoding="utf-8", errors="replace").read())
-        if any(re.search(TZ_PIN, t) for t in texts):
+        if any(re.search(TZ_PIN, runnable_text(t)) for t in texts):
             record("pass", "the document states date or time rules and a check pins a time zone")
         else:
             words = sorted({w.lower() for w in date_rules})

@@ -33,7 +33,7 @@ Run the prerequisites check from the repository root:
 .specify/scripts/bash/check-prerequisites.sh --json --paths-only
 ```
 
-If that script reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
+If that script is not there (`No such file or directory`: spec-kit's own scripts are not installed in this tree), do not stop — take `specs/NNN-name` from the argument or the branch's numeric prefix; `validate_blueprint.py` names the missing script when it runs. If it reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
 
 Parse `FEATURE_DIR` and load `blueprint.md` from it. If `blueprint.md` is missing, abort with: "No blueprint.md found — run `/speckit.blueprint.generate` first."
 

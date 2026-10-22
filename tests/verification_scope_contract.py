@@ -896,6 +896,31 @@ class CalcTest(unittest.TestCase):
         self.assertIn('the document states date or time rules (calendar date, utc) and no check pins a time zone', out)
         self.assertIn('[12] Time zones — 1 check(s) passed', validate('A day is a UTC calendar date.', pinned))
         self.assertNotIn('[12] Time zones', validate('An amount is a positive integer.', unpinned))
+        # R20 guru v1: the oracle's pins renamed away, and the prose's `TZ=` passed the check.
+        prose = 'A day is a UTC calendar date; the oracle runs under `TZ=Pacific/Kiritimati`.'
+        self.assertIn('no check pins a time zone', validate(prose, unpinned))
+        self.assertIn('no check pins a time zone',
+                      validate('A day is a UTC calendar date.', unpinned + "// run with TZ: 'Pacific/Honolulu'\n"))
+        self.assertIn('[12] Time zones — 1 check(s) passed',
+                      validate('A day is a UTC calendar date.', "spawnSync(process.execPath, [], { env: { TZ: zone } });\n"))
+
+    def test_missing_prerequisite_script_is_named(self):
+        # R20 guru: every command document's Step 1 runs spec-kit's check-prerequisites.sh,
+        # which a tree with only this extension does not have.
+        validator = MODULE.with_name('validate_blueprint.py')
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            Path(root, 'specs/023-day').mkdir(parents=True)
+            Path(root, 'specs/023-day/blueprint.md').write_text('# Blueprint: day\n\n**Mode**: guide\n')
+            Path(root, '.specify/extensions').mkdir(parents=True)
+
+            def note():
+                return subprocess.run([sys.executable, str(validator), 'specs/023-day'], cwd=root, capture_output=True,
+                                      text=True, env=dict(os.environ, NO_COLOR='1')).stdout
+            self.assertIn('Note: .specify/scripts/bash/check-prerequisites.sh is not installed', note())
+            Path(root, '.specify/scripts/bash').mkdir(parents=True)
+            Path(root, '.specify/scripts/bash/check-prerequisites.sh').write_text('#!/bin/bash\n')
+            self.assertNotIn('check-prerequisites.sh', note())
 
     # --- R19: documentation examples run as the document on disk has them ---------------
 
