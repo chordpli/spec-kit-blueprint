@@ -899,6 +899,7 @@ class CalcTest(unittest.TestCase):
         # R20 guru v1: the oracle's pins renamed away, and the prose's `TZ=` passed the check.
         prose = 'A day is a UTC calendar date; the oracle runs under `TZ=Pacific/Kiritimati`.'
         self.assertIn('no check pins a time zone', validate(prose, unpinned))
+        self.assertIn('no check pins a time zone', validate(prose.replace('`', ''), unpinned))
         self.assertIn('no check pins a time zone',
                       validate('A day is a UTC calendar date.', unpinned + "// run with TZ: 'Pacific/Honolulu'\n"))
         self.assertIn('[12] Time zones — 1 check(s) passed',
