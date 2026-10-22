@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R20 — what a failed command ran; a test against its target's work
+
+- A failed task's hint names the files its failed command read that other tasks write:
+  `Code other tasks wrote that the failed commands ran — the defect can be there as well as
+  in the failed task's own lines: T011 ran src/ledger.js (T002, T010), src/statement.js
+  (T005)`. Reads are seen by access time: before each command the files the feature's tasks
+  write are given one older than their modification time in the copy. Python runs without a
+  bytecode cache, so an import reads its source. Without access times (`noatime`) the line
+  says `not measured`. It replaces `Observed there, not necessarily caused there`, which
+  named a passed dependency that wrote the failed task's own file. Every run now prints
+  `Task lines are hints, not proof of where a defect is`.
+- The target-blind probe puts a task's regions back as the stamp had them, except that a
+  span declaring a name the stamp did not have gets the blueprint's lines (the declaration
+  with its marker body). A test that only imports the new function no longer goes red on the
+  import. Then each region is put back alone; regions the test stays green over are listed
+  as a hint (`T004 <- T002 2 of 3 (src/ledger.js:58, src/ledger.js:102)`) and do not
+  change the count. A region that is only imports, or that reads the same put back, is not
+  probed alone.
+- A dependency whose files the test's command never read is not probed:
+  `Not probed against a dependency the test never ran`.
+- A test task that passes while a task it tests fails its own command (not only behind a
+  red dependency of its own) is warned about and not counted as passed. `Proof summary` ends
+  with `; test tasks green while their target is red N`. Exit code unchanged.
+- `--done` requires a JavaScript or TypeScript symbol the blueprint exports by name to be
+  exported by name: a declaration, an `export { … }` list over any number of lines,
+  `exports.f`, `module.exports = { f }`; `export *` is taken on trust. A default export alone
+  fails under `--done` and `--fresh` and warns otherwise.
+- `--done` counts a `(modify)` task with some but not all of its regions changed on its own
+  line (`T002 (src/ledger.js 1/3)`). Information only: on every finished 006 tree two tasks
+  read 1 of 2, their code typed a few lines below the marker.
+- Section [12] looks for a pinned zone only where one runs: the blueprint's code blocks, the
+  backticked `**Verification**` commands and the feature's files other than `.md` and
+  `.txt`, with comments removed and string contents emptied (a literal `"TZ"` kept). A
+  `TZ=…` in prose no longer satisfies it.
+- The validator notes a `.specify` directory without `scripts/bash/check-prerequisites.sh`;
+  cleanup and review say what to pass when the script is missing.
+- Generation guidance: a case belongs to the task whose code it runs; a rejected
+  alternative's reason becomes an oracle case run against the adopted design; an API bound
+  in a marker (`Date.UTC` and years 0–99) must pass the boundary cases; a storage change lists
+  what data earlier versions already wrote.
+- Measured this round (R20 guru 006 controls: 50 copies and the workspace; R19 guru 005
+  controls: 47; old 40b4fcb against new). `--verify` exit codes are unchanged on all 98, under
+  the host zone and under `TZ=UTC`. `--done` in both bashes and `--done --all`: `d3a`
+  (default export) 0 → 1; nothing else changes. Task-specific passed drops by one or two
+  where a test was green beside its red target: R20 `t3b`, `t4`, `l1`–`l4`, `m2a`; R19 `t3b`,
+  `l1`, `l1b`, `l2`, `l3`, `l4`, `l6`, `m4a`–`m4c` and two partial prototypes. R20 `t5` 12 → 13
+  (the honest test no longer probed against the CLI). R20 `t3` keeps 13 passed and gets the
+  region hint `T004 <- T002 2 of 3`; it is not called blind, because it does test one region.
+  Section [12]: `v1` (pins renamed away, prose `TZ=` left) now warns, `v2` warns, `p3` passes.
+  Attribution over the runs whose defect is outside the failed task (R20 `m2a`, `m2c` and
+  `m2a`–`m2c` under `TZ=UTC`; R19 `m4a`, `m4b`, `t3b`): the new line names the defect's task
+  in 6 of 8 runs, the old one in 3; on R20 `m5a`, `m5b`, `m6` (defect in the failed task's
+  own lines) the old line named T002 and the new one is silent. The new line misses R19 `m4a`
+  and `m4b`, where the defect is in another task's lines of the failed task's own file — the
+  old line caught those. It lists every file the command read, so it names more tasks than
+  the old one (77 against 15 names over 36 runs). Over the real trees (R20 ws 001–006, R19 ws
+  001–005, the six R18 trees; 246 runs, old and new) no exit code changes. ws 004 has one test
+  task blind to its target, was two (`T007 <- T003` is now not probed); ws 005 lists
+  `T009 <- T006 1 of 4 (src/ledger.js:22)` as a region hint, and one senior-complete Java test
+  gets one. `--verify` costs up to about 2.5 s more per feature where a test task is probed
+  region by region (medians of three alternating runs at load 30–47: R20 `p3` 21.2 → 22.6 s,
+  `t3` 17.8 → 20.3 s, ws 18.8 → 19.9 s; R19 `p3` 13.9 → 13.1 s, within noise). The partial
+  count's noise was not fixed: counting only regions with the task's marker hid a task whose
+  one typed region was the import the blueprint gives in full, so it was dropped.
+
 ### R19 — a task, not a file; a document's examples as written
 
 - `--done` asks the (modify) question per task, not only per file: the tasks are applied
