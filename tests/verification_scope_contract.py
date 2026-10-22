@@ -830,6 +830,50 @@ class CalcTest(unittest.TestCase):
             self.assertIn('test tasks blind to their target 0', out)
             self.assertIn('task-specific 4 passed', out)
 
+    def test_done_requires_a_named_export_where_the_blueprint_has_one_both_bash_versions(self):
+        # R20 guru d3a: the library's named export became a default export, every
+        # `import { buildStatement }` failed, and --done said all declared symbols were present.
+        bp = ("# Blueprint: lib\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+              "### T001: Build it\n\n**File**: `src/lib.js` (new)\n\n"
+              "```javascript\nexport function build(x) {\n  throw new Error(\"T001: build\");\n}\n```\n")
+        forms = {
+            'function build(x) {\n  return x;\n}\n\nexport default build;\n': 1,
+            'export default function build(x) {\n  return x;\n}\n': 1,
+            'function build(x) {\n  return x;\n}\n\nexport {\n  build,\n};\n': 0,
+            'export const build = (x) => x;\n': 0,
+            'export async function build(x) {\n  return x;\n}\n': 0,
+        }
+        for shell in self.SHELLS:
+            for text, want in forms.items():
+                with self.subTest(shell=shell, text=text), tempfile.TemporaryDirectory() as root:
+                    self.stamped_repo(root, {'README.md': 'x\n'}, bp)
+                    Path(root, 'src').mkdir()
+                    Path(root, 'src/lib.js').write_text(text)
+                    rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                    self.assertEqual(rc, want, out)
+                    if want and 'export default build' in text:
+                        self.assertIn('src/lib.js — the blueprint exports `build` by name and the file declares it'
+                                      ' without a named export (a default export, or none)', out)
+
+    def test_done_counts_a_task_with_only_some_regions_changed_both_bash_versions(self):
+        # R20 guru d4a: one of a task's three hunks typed, and --done passed without a word.
+        bp = ("# Blueprint: three\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+              "### T001: Three edits\n\n**File**: `pkg/m.py` (modify)\n\n"
+              "**Before**:\n```python\nA = 1\n```\n\n**After**:\n```python\nA = None  # T001: a\n```\n\n"
+              "**Before**:\n```python\nB = 1\n```\n\n**After**:\n```python\nB = None  # T001: b\n```\n")
+        stamped = 'A = 1\n\n\ndef f():\n    return 0\n\n\nB = 1\n'
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                head = self.stamped_repo(root, {'pkg/m.py': stamped}, bp)
+                Path(root, 'pkg/m.py').write_text(stamped.replace('A = 1', 'A = 2'))
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertEqual(rc, 0, out)
+                self.assertIn(f'(modify) tasks with only some of their regions changed since HEAD {head} (a count,'
+                              ' not a failure — code typed a few lines from its marker reads the same): T001 (pkg/m.py 1/2)', out)
+                Path(root, 'pkg/m.py').write_text(stamped.replace('A = 1', 'A = 2').replace('B = 1', 'B = 2'))
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertNotIn('only some of their regions', out)
+
     def test_date_rules_without_a_pinned_time_zone_are_warned_about(self):
         # R19 guru m3a: a local-date bug passed every oracle case under TZ=UTC.
         validator = MODULE.with_name('validate_blueprint.py')

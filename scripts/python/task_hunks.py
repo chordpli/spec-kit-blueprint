@@ -8,6 +8,11 @@ task whose every hunk region still reads as the stamped commit had it:
 
     untouched<TAB>T006<TAB>src/ledger.js
 
+one row per task some of whose regions in a file moved and some did not (a count, not a
+verdict — a hunk can be typed a few lines from where its marker sat):
+
+    partial<TAB>T002<TAB>src/ledger.js<TAB>1/3
+
 and one row per task whose hunks could not be placed on the stamped files (not measured):
 
     unplaced<TAB>T006<TAB>why
@@ -37,9 +42,12 @@ def main() -> int:
     except OSError as exc:
         print(f"cannot read {bp_path}: {exc}", file=sys.stderr)
         return 2
-    untouched, unplaced = apply_blueprint.untouched_tasks(root, head, split_tasks(bp))
+    partial: dict = {}
+    untouched, unplaced = apply_blueprint.untouched_tasks(root, head, split_tasks(bp), partial)
     for tid, path in untouched:
         print(f"untouched\t{tid}\t{path}")
+    for (tid, path), (met, total) in partial.items():
+        print(f"partial\t{tid}\t{path}\t{met}/{total}")
     for tid, why in unplaced.items():
         print(f"unplaced\t{tid}\t{why}")
     return 0
