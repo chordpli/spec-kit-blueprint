@@ -52,23 +52,44 @@ measured, and a shared command measures no single task:
   undoes every task at once, so a test of the transfer limit goes red there because transfer
   itself is gone, not because the limit is. When a discriminating test task's
   `**Dependencies**` name a `(modify)` task, `--verify` runs it once more on your tree with
-  only that task's hunks put back as the stamp had them. Green there: `blind to their target`,
-  warned about and not counted as passed. Measured on the R19 guru copies: the three test
+  only that task's regions put back: their stamped lines, except that a function or type the
+  task adds keeps its declaration with the blueprint's marker body. Green there: `blind to
+  their target`, warned about and not counted as passed. Putting the whole region back as the
+  stamp had it took the new declarations away too, so a test that only imported one failed on
+  the import and was counted as seeing the task (R20 `t3`). The test is then run once per
+  region, each put back alone; regions it stays green over are listed as a hint, with their
+  stamped line, and do not change the count. A region whose lines are only imports is not
+  probed alone: a test that passes its own day leaves an import of the clock unused, and
+  every R19 copy listed that line. Measured on the R19 guru copies: the three test
   tasks of the copy whose tests skip the limit (`t3`, `t3b`) are now named, the finished
   copy's are not. A dependency that only creates files is not probed this way — removing it
   breaks the test's import, so red there would mean nothing. The probe takes the
-  `**Dependencies**` line as the test's target. Where the line names something else, it
-  misfires: the finished R19 workspace's feature 004 has a library-rejection test whose line
-  names the CLI task and a history-compatibility test whose line names the same task, and both
-  are reported blind (2 of 6 test tasks; 0 on the six R18 trees).
+  `**Dependencies**` line as the test's target, but only a task whose files the test's command
+  read: an honest library test whose line named the CLI task was reported blind to it (R19 ws
+  004, R20 `t5`). Such a task is listed as `Not probed against a dependency the test never ran`.
+- **A test that passes while the task it tests fails** is warned about and not counted as
+  passed: a test that only parsed the output as JSON passed beside a statement command that
+  printed `{}` (R20 `t4`). A target that is red only behind its own red dependency does not
+  count against the test: what is wrong there cannot be told from the dependency.
 - **A red task that depends on a red task** (its `**Dependencies**` line, followed through)
   is listed as failed *behind* that dependency. A test of the CLI is red when the CLI is
   missing, whether or not the test was written; the result is still a failure, but it cannot
   be told apart from the task it depends on, and the output no longer claims it can.
-- **A failure is reported where it was observed.** When a task's command fails and a
-  dependency whose own cases passed wrote one of the same files, the failure carries
-  `Observed there, not necessarily caused there` and names both: a helper the earlier task
-  wrote wrong and its cases never reached shows up as the later task's failure.
+- **A failure is reported where it was observed, and that is a hint, not a location.** A
+  library task's lines can be wrong while its own cases pass; the CLI task that runs the
+  library goes red. Before each command the files the feature's tasks write are given an
+  access time older than their modification time in the copy; the ones whose access time moved
+  were read. A failed task's line then names the files its failed command read that other
+  tasks write: `Code other tasks wrote that the failed commands ran … T011 ran src/ledger.js
+  (T002, T010)`. Its own files are left out: the line that named "a passed dependency wrote the
+  same file" named the wrong task on the three R20 controls whose defect was in the failed
+  task's own lines, and none of the five R20 runs whose defect was in another file. Measured
+  over the R19 and R20 controls whose defect is outside the failed task, the new line names it
+  in 6 of 8 runs (the old one 3); it misses a defect in another task's lines of the failed
+  task's own file (R19 `m4a`, `m4b`), which the old line caught. Python runs
+  without a bytecode cache so its imports are read from source. A `noatime` file system makes
+  the line `not measured`; a command that compiles the whole tree reads every file, and the
+  line then says nothing useful.
 - **Documentation tasks** get a static assertion on the text the spec fixes, and their
   example commands are run. A shell-fenced block (`sh`, `bash`, `shell`, `console`, `zsh`)
   that a doc task's After adds is a promise that the example runs. So `--verify` reads the
@@ -108,8 +129,8 @@ gate. Shared-only results, non-discriminating or target-blind test tasks, human 
 supplied and unmeasured test files never change the exit code — exit 0 means the commands
 passed. A pipeline that needs per-task proof reads the `Proof summary:` line and requires
 `test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0` (each
-`Human review:` recorded in `human-evidence.md`), `test files unmeasured 0` and
-`test tasks blind to their target 0`.
+`Human review:` recorded in `human-evidence.md`), `test files unmeasured 0`,
+`test tasks blind to their target 0` and `test tasks green while their target is red 0`.
 
 Why non-discriminating is not exit 1: measured on the R18 guru feature's 22 control copies
 and on 16 feature runs of three earlier projects, it fired only on the copy whose tests were
