@@ -423,6 +423,12 @@ would carry the same assertions, write them once as an acceptance oracle **in th
 directory** (`specs/NNN-feature/acceptance.mjs`, or the project's language) with one shared
 fixture and named cases (`library`, `cli`, `errors`, `readonly` …), and give each task the
 cases it owns. The oracle is a spec artifact beside the blueprint, not an application file.
+**A case belongs to the task that writes the code it runs.** A case that runs the library
+through the CLI is the CLI task's; a library rule checked in a child process with `TZ`
+pinned runs the library there (`node --input-type=module -e "import …"`) and belongs to the
+library task. Measured: the library's time-zone check sat in the CLI task's case, so a
+library bug was reported against the CLI task, and against the library task or not
+depending on the host's zone.
 A script repeated under ten tasks fails all ten at its first assertion, so "library done,
 CLI not" and "nothing done" print the same; named cases print which contract is red.
 
@@ -464,6 +470,11 @@ regression case that fixes it, owned by the behavior task that could break it �
 To find what to check, list every existing reader of each stored structure the feature
 writes a new field into: a reversal that adds `reversedBy` to a stored transfer record also
 reaches every command that replays or prints that record, not only the one the plan names.
+List the data as well as the readers: records an earlier version already wrote lack the new
+field. Say what the feature does with them, in a case or a blocking Open Question. Measured:
+a statement that needs a reversal's day refused every month, permanently, for any account
+holding a reversal made before the feature, and the one Open Question was marked
+non-blocking.
 
 **A date or time rule is checked in more than the host's time zone.** When the spec states a
 calendar day, a UTC rule, midnight, or local time, the case that checks it runs the code in a
@@ -578,19 +589,26 @@ What no script can check, and what you must therefore check yourself before fina
   message missing the what, the reference, or the pitfall when one is known. Read the Contract
   Reference too: a table of numbered internal steps is body logic the validator does not see.
 - **Unchanged behavior**: every "unchanged" sentence in the spec has an oracle case, and every
-  existing reader of a structure the feature adds a field to is covered by one.
+  existing reader of a structure the feature adds a field to is covered by one, as is the data
+  earlier versions already wrote.
+- **Case owners**: every oracle case belongs to the task that writes the code it runs.
 - **Documentation examples**: every command a documentation After shows runs, as written, against
   files the repository holds. Runnable ones sit in a shell fence, which `--verify` runs from the
   document on disk; synopses with placeholders sit in a `text` fence.
 - **Time zones**: every case that checks a date or time rule pins `TZ` in a child process, on
   both sides of UTC.
 - **Rejected alternatives**: test each adopted decision against every reason the Key Decisions
-  table gives for rejecting an alternative. If the adopted option has the property the
-  rejection names, the table contradicts itself: say what bounds it in the adopted option, or
-  record the contradiction as an Open Question. Measured: a decision rejected `--on DATE`
-  because it "lets the caller choose the day", and adopted a `LEDGER_NOW` variable that lets
-  the caller choose the day; every gate passed and a limit could be bypassed by dating a
-  transfer in 2030.
+  table gives for rejecting an alternative. Where the reason is behavior, write it as an
+  oracle case run against the adopted option ("a reversal dated after the month closed does
+  not change that month's closing balance"); red means the table contradicts itself, so
+  record it as a blocking Open Question. A sentence that bounds the adopted option is not a
+  check. Measured twice: a decision rejected `--on DATE` because it "lets the caller choose
+  the day" and adopted `LEDGER_NOW`, which does the same; the next round rejected dating a
+  reversal by its original because it rewrites a closed month, bounded the adopted option in
+  prose, and `LEDGER_NOW` backdating rewrote the closed month. A bound that restricts an API
+  in a marker is code advice, so it must pass the oracle's boundary cases: "use only the UTC
+  constructor" sent the implementer to `Date.UTC`, which reads years 0–99 as 1900–1999 and
+  rejects the `0001-01-01` the oracle accepts.
 - **Test targets**: a test-writing task's `**Dependencies**` names the task whose code its
   test exercises, and nothing else. `--verify` reverts that task's regions alone and expects the
   test to go red; a test of the library whose line names the CLI task, or a compatibility test

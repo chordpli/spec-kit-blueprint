@@ -836,6 +836,9 @@ if [[ ${#DECLARED[@]} -gt 0 ]]; then
                 else next
                 rows[++nrows] = armed "\t" origin "\t" nm
                 priv[nrows] = isprivate($0, t, nm, armed)
+                # Exported by name in the blueprint: callers write `import { nm }`.
+                named[nrows] = (armed ~ /[.](m?js|cjs|jsx|ts|tsx|mts|cts)$/ && t ~ /^export[ \t]/ \
+                                && t !~ /^export[ \t]+default[ \t]/)
                 next
             }
             if (fence) { in_fence = 1; next }
@@ -865,7 +868,7 @@ if [[ ${#DECLARED[@]} -gt 0 ]]; then
             for (i = 1; i <= nrows; i++) {
                 split(rows[i], f, "\t")
                 if (priv[i] && exported[f[1]] ~ ("(^|[^A-Za-z0-9_])" f[3] "([^A-Za-z0-9_]|$)")) priv[i] = 0
-                print rows[i] (priv[i] ? "+private" : "")
+                print rows[i] (priv[i] ? "+private" : (named[i] ? "+named" : ""))
             }
         }' "$GUIDE" | sort -u; rm -f "$PATHS_FILE" "$NEWF")
 fi
@@ -1163,7 +1166,8 @@ if [[ "$DONE" == true ]]; then
             else
                 TASK_UNTOUCHED=()
                 TASK_UNPLACED=()
-                while IFS=$'\t' read -r kind tid path; do
+                TASK_PARTIAL=()
+                while IFS=$'\t' read -r kind tid path count; do
                     [[ -n "$kind" ]] || continue
                     if [[ "$kind" == untouched ]]; then
                         dup=false
@@ -1171,11 +1175,19 @@ if [[ "$DONE" == true ]]; then
                         [[ "$dup" == true ]] || TASK_UNTOUCHED+=("$tid ($path)")
                     elif [[ "$kind" == unplaced ]]; then
                         TASK_UNPLACED+=("$tid")
+                    elif [[ "$kind" == partial ]]; then
+                        TASK_PARTIAL+=("$tid ($path $count)")
                     fi
                 done <<< "$TASK_ROWS"
                 if [[ ${#TASK_UNTOUCHED[@]} -gt 0 ]]; then
                     fail "${#TASK_UNTOUCHED[@]} (modify) task(s) left every line their hunks change as HEAD $STAMP had it, in a file other tasks changed: $(printf '%s, ' "${TASK_UNTOUCHED[@]}" | sed 's/, $//')"
                     echo "      The file moved because of another task's work; these tasks' parts of it did not."
+                fi
+                # A count, not a verdict. A reviewer typed one of a task's three hunks and
+                # this passed; but on every finished tree of the same feature two tasks read
+                # 1 of 2 as well, their code typed a few lines from where the marker sat.
+                if [[ ${#TASK_PARTIAL[@]} -gt 0 ]]; then
+                    echo "    (modify) tasks with only some of their regions changed since HEAD $STAMP (a count, not a failure — code typed a few lines from its marker reads the same): $(printf '%s, ' "${TASK_PARTIAL[@]}" | sed 's/, $//')"
                 fi
                 if [[ ${#TASK_UNPLACED[@]} -gt 0 ]]; then
                     echo "    (modify) tasks not measured — their hunks do not apply to the stamped files: $(printf '%s, ' "${TASK_UNPLACED[@]}" | sed 's/, $//')"
@@ -1332,6 +1344,53 @@ file_declares() {
     printf '%s\n' "$DISK_SYMBOL_CACHE" | grep -qx -- "$name"
 }
 
+# Names a JavaScript or TypeScript file exports by name, cached per file: `export function`,
+# `export const`, `export class`, an `export { a, b as c }` list over one line or several,
+# and the CommonJS `exports.a =` and `module.exports = { a }`. `*` stands for an
+# `export * from`, whose names cannot be read here. A default export is not one of them.
+DISK_EXPORT_CACHE_KEY=""
+DISK_EXPORT_CACHE=""
+file_exports() {
+    local file="$1" name="$2"
+    if [[ "$DISK_EXPORT_CACHE_KEY" != "$file" ]]; then
+        DISK_EXPORT_CACHE_KEY="$file"
+        DISK_EXPORT_CACHE=$(awk "$DECL_AWK"'
+            function emit(b,   n, parts, i, x) {
+                sub(/^[^{]*[{]/, "", b); sub(/[}].*$/, "", b)
+                n = split(b, parts, ",")
+                for (i = 1; i <= n; i++) {
+                    x = parts[i]; gsub(/^[ \t]+|[ \t]+$/, "", x); sub(/^type[ \t]+/, "", x)
+                    if (x ~ /[ \t]as[ \t]/) sub(/^.*[ \t]as[ \t]+/, "", x)
+                    else if (cjs) sub(/:.*$/, "", x)
+                    sub(/[^A-Za-z0-9_$].*$/, "", x)
+                    if (x != "" && x != "default") print x
+                }
+            }
+            {
+                s = uncomment($0)
+                t = s; sub(/^[ \t]+/, "", t)
+                if (inlist) { buf = buf " " t; if (t ~ /[}]/) { emit(buf); inlist = 0 }; next }
+                if (t ~ /^export[ \t]+default[ \t]/) next
+                if (t ~ /^export[ \t]*[*]/) { print "*"; next }
+                cjs = (t ~ /^module[.]exports[ \t]*=[ \t]*[{]/)
+                if (cjs || t ~ /^export[ \t]+(type[ \t]+)?[{]/ || t ~ /^export[{]/) {
+                    buf = t
+                    if (t ~ /[}]/) emit(buf); else inlist = 1
+                    next
+                }
+                if (t ~ /^export[ \t]/ || t ~ /^(module[.])?exports[.]/) {
+                    nm = declname(t)
+                    if (nm == "") nm = declbinding(t)
+                    if (nm == "" && match(t, /^export[ \t]+(declare[ \t]+)?(type|interface|enum|namespace)[ \t]+[A-Za-z_$][A-Za-z0-9_$]*/)) {
+                        nm = substr(t, RSTART, RLENGTH); sub(/^.*[ \t]/, "", nm)
+                    }
+                    if (nm != "") print nm
+                }
+            }' "$file" 2>/dev/null | sort -u)
+    fi
+    printf '%s\n' "$DISK_EXPORT_CACHE" | grep -qx -- "$name" || printf '%s\n' "$DISK_EXPORT_CACHE" | grep -qx -- '[*]'
+}
+
 if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
     echo ""
     echo -e "${CYAN}=== Declared symbols ===${NC}"
@@ -1347,9 +1406,13 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
         sym_origin="${sym_rest%%$'\t'*}"
         sym_name="${sym_rest##*$'\t'}"
         sym_private=false
+        sym_named=false
         if [[ "$sym_name" == *+private ]]; then
             sym_private=true
             sym_name="${sym_name%+private}"
+        elif [[ "$sym_name" == *+named ]]; then
+            sym_named=true
+            sym_name="${sym_name%+named}"
         fi
         [[ -n "$sym_path" && -n "$sym_name" ]] || continue
         [[ -f "$REPO_ROOT/$sym_path" ]] || continue
@@ -1400,6 +1463,18 @@ if [[ ${#DECLARED_SYMBOLS[@]} -gt 0 ]]; then
                 fail "$sym_path — the blueprint declares \`$sym_name\`, the file does not declare it, and the file carries no marker: nothing here is unfinished, so the name was renamed or removed"
             else
                 warn "$sym_path — the blueprint declares \`$sym_name\` and the file does not declare it (renamed, or the task never landed)"
+            fi
+        elif [[ "$sym_named" == true ]] && ! file_exports "$REPO_ROOT/$sym_path" "$sym_name"; then
+            # Declared, but not under the name callers import. A reviewer turned the
+            # library's named export into a default export; every caller's
+            # `import { buildStatement }` failed, the whole CLI with it, and --done said
+            # "all 2 declared symbol(s) are present".
+            MISSING_SYMBOLS=$((MISSING_SYMBOLS + 1))
+            MSG="$sym_path — the blueprint exports \`$sym_name\` by name and the file declares it without a named export (a default export, or none): \`import { $sym_name }\` of it fails"
+            if [[ "$FRESH" == true ]] || [[ "$DONE" == true ]]; then
+                fail "$MSG"
+            else
+                warn "$MSG"
             fi
         fi
     done

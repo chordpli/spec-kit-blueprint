@@ -40,7 +40,7 @@ Run the prerequisites check from the repository root:
 .specify/scripts/bash/check-prerequisites.sh --json --paths-only
 ```
 
-If that script reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
+If that script is not there (`No such file or directory`: spec-kit's own scripts are not installed in this tree), do not stop — take `specs/NNN-name` from the argument or the branch's numeric prefix; `validate_blueprint.py` names the missing script when it runs. If it reports `Feature directory not found … .specify/feature.json`, the installed spec-kit resolves the feature from `.specify/feature.json` rather than the branch name; set `SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` for the session, or run the specify command that writes that file. The extension's own scripts resolve the feature from the branch prefix themselves, so they are unaffected either way.
 
 **Check that it answered about the feature you are on.** `check-prerequisites.sh` resolves the feature from `.specify/feature.json`, which is written by whichever specify command ran last and is not updated by switching branches — on branch `005-…` it will answer `specs/004-…` with exit 0 and no error if that file is stale, and this command would then quiz the wrong feature. Compare the directory it returned against the branch's own numeric prefix; if they disagree, **stop and ask** which feature is meant.
 

@@ -640,9 +640,10 @@ class CalcTest(unittest.TestCase):
                     self.assertIn('task-specific 3 passed, 0 failed', out)
                     self.assertIn('test tasks blind to their target 0', out)
 
-    def test_failure_names_passed_dependencies_that_wrote_the_same_file(self):
-        # R19 guru m4b: the defect was in a helper T002 wrote and T006 was reported failed
-        # with nothing to say T002's code was in the path.
+    def test_failure_in_its_own_file_names_no_neighbour(self):
+        # R20 guru m5a/m5b/m6: "a passed dependency wrote the same file" named T002 every time
+        # the defect sat in the failing task's own lines of that file — three false leads, no
+        # true one. The failing command ran only the file the failing task writes itself.
         bp = self.SCALE_BP.replace("### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n",
                                    "### T002: Scale by a factor\n\n**File**: `pkg/calc.py` (modify)\n\n"
                                    "**Dependencies**: T001\n\n")
@@ -654,8 +655,224 @@ class CalcTest(unittest.TestCase):
             rc, out = self.verify_feature(root)
             self.assertEqual(rc, 1, out)
             self.assertIn('Task-specific command results failed: specs/022-two/T002\n', out)
-            self.assertIn('Observed there, not necessarily caused there — a passed dependency wrote the same'
-                          ' file(s): specs/022-two/T002 with T001 (pkg/calc.py)', out)
+            self.assertNotIn('Observed there', out)
+            self.assertNotIn('Code other tasks wrote that the failed commands ran', out)
+            self.assertIn('Task lines are hints, not proof of where a defect is', out)
+
+    LAYERS_BP = ("# Blueprint: layers\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                 "### T001: Halve in the library\n\n**File**: `pkg/lib.py` (new)\n\n"
+                 "```python\ndef halve(x):\n    raise NotImplementedError(\"T001: half of x\")\n```\n\n"
+                 "**Verification**: `python3 -c \"from pkg.lib import halve; assert halve(4) == 2\"`\n\n"
+                 "### T002: Route halve\n\n**File**: `pkg/cli.py` (new)\n\n**Dependencies**: T001\n\n"
+                 "```python\nfrom pkg.lib import halve\n\n\ndef main(n):\n"
+                 "    raise NotImplementedError(\"T002: return halve(n)\")\n```\n\n"
+                 "**Verification**: `python3 -c \"from pkg.cli import main; assert main(5) == 2.5\"`\n")
+
+    def test_failure_names_the_files_its_command_ran_that_other_tasks_wrote(self):
+        # R20 guru m2a/m2c: the library task's lines were wrong and its own case passed; the
+        # CLI task that runs the library went red, and nothing pointed at the library.
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'pkg/__init__.py': ''}, self.LAYERS_BP)
+            Path(root, 'pkg/lib.py').write_text('def halve(x):\n    return x // 2\n')
+            Path(root, 'pkg/cli.py').write_text('from pkg.lib import halve\n\n\ndef main(n):\n    return halve(n)\n')
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('Task-specific command results failed: specs/022-two/T002\n', out)
+            self.assertIn('Code other tasks wrote that the failed commands ran — the defect can be there as well as'
+                          " in the failed task's own lines: T002 ran pkg/lib.py (T001)", out)
+            # The library's own case red: it ran only its own file, and nothing is named.
+            Path(root, 'pkg/lib.py').write_text('def halve(x):\n    return x\n')
+            rc, out = self.verify_feature(root)
+            self.assertIn('Task-specific command results failed: specs/022-two/T001\n', out)
+            self.assertNotIn('Code other tasks wrote', out)
+        with tempfile.TemporaryDirectory() as where:
+            self.assertTrue(applier.reads_recorded(where))
+            Path(where, 'a.py').write_text('x = 1\n')
+            Path(where, 'b.py').write_text('y = 1\n')
+            armed = applier.arm_reads(where, ['a.py', 'b.py', 'gone.py'])
+            Path(where, 'a.py').read_text()
+            self.assertEqual(applier.reads_since(where, armed), {'a.py'})
+
+    # --- R20: the probe keeps what the target declares; a test green over a red target --
+
+    PROBE_BP = ("# Blueprint: probe\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                "### T001: Triple a number\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\ndef double(x):\n```\n\n"
+                "**After**:\n```python\ndef triple(x):\n    raise NotImplementedError(\"T001: three times x\")\n\n\n"
+                "def double(x):\n```\n\n"
+                "**Before**:\n```python\nLIMIT = 1\n```\n\n"
+                "**After**:\n```python\nLIMIT = None  # T001: three\n```\n\n"
+                "**Verification**: `python3 -c \"from pkg.calc import triple; assert triple(1) == 3\"`\n\n"
+                "### T002: Double properly\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\n    return x\n```\n\n"
+                "**After**:\n```python\n    raise NotImplementedError(\"T002: twice x\")\n```\n\n"
+                "**Verification**: `python3 -c \"from pkg.calc import double; assert double(2) == 4\"`\n\n"
+                "### T003: Test tripling\n\n**File**: `tests/test_calc.py` (new)\n\n**Dependencies**: T001\n\n"
+                "```python\nimport unittest\n\n\nclass CalcTest(unittest.TestCase):\n    def test_triple(self):\n"
+                "        raise NotImplementedError(\"T003: triple(2) is 6\")\n```\n\n"
+                "**Verification**: `python3 -m unittest tests.test_calc`\n")
+    PROBE_STAMPED = 'LIMIT = 1\nNAME = "calc"\n\n\ndef double(x):\n    return x\n'
+    PROBE_DONE = 'LIMIT = 3\nNAME = "calc"\n\n\ndef triple(x):\n    return 3 * x\n\n\ndef double(x):\n    return x + x\n'
+    PROBE_TEST = ("import unittest\nfrom pkg.calc import LIMIT, double, triple\n\n\nclass CalcTest(unittest.TestCase):\n"
+                  "    def test_triple(self):\n        {body}\n")
+
+    def probe_repo(self, root, body, bp=None, done=None, extra=None):
+        files = {'pkg/__init__.py': '', 'pkg/calc.py': self.PROBE_STAMPED, **(extra or {})}
+        self.stamped_repo(root, files, bp or self.PROBE_BP)
+        Path(root, 'pkg/calc.py').write_text(done or self.PROBE_DONE)
+        Path(root, 'tests').mkdir()
+        Path(root, 'tests/__init__.py').write_text('')
+        Path(root, 'tests/test_calc.py').write_text(self.PROBE_TEST.replace('{body}', body))
+        return self.verify_feature(root)
+
+    def test_probe_keeps_the_declarations_its_target_adds(self):
+        # R20 guru t3: put back as the stamp had them, the target's new function went with
+        # its body, a test that only imported it failed on the import, and that red read as
+        # the test seeing the target's work. Put back as the blueprint leaves them, the
+        # declarations stay and only the work goes.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.probe_repo(root, 'self.assertEqual(double(2), 4)')
+            self.assertEqual(rc, 0, out)
+            self.assertIn('so not counted as passed: specs/022-two/T003 <- T001', out)
+            self.assertIn('test tasks blind to their target 1', out)
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.probe_repo(root, 'self.assertEqual(triple(2), 6)\n        self.assertEqual(LIMIT, 3)')
+            self.assertEqual(rc, 0, out)
+            self.assertIn('(the test discriminates): specs/022-two/T003', out)
+            self.assertIn('task-specific 3 passed', out)
+            self.assertNotIn('one region of the task they test put back alone', out)
+        # Red with the whole task put back, green with one of its regions put back alone.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.probe_repo(root, 'self.assertEqual(triple(2), 6)')
+            self.assertIn('task-specific 3 passed', out)
+            self.assertIn("Test tasks green with one region of the task they test put back alone (a hint — those"
+                          " regions' work is not seen by the test): specs/022-two/T003 <- T001 1 of 2 (pkg/calc.py:1)", out)
+
+    def test_one_region_put_back_is_that_region_alone(self):
+        # Widened over the blank line between them, both of a task's regions met each change;
+        # put back one region alone, the other went with it.
+        tasks = [('T001', '**File**: `pkg/m.py` (modify)\n\n'
+                          '**Before**:\n```python\nA = 1\n```\n\n**After**:\n```python\nA = None  # T001: a\n```\n\n'
+                          '**Before**:\n```python\nB = 1\n```\n\n**After**:\n```python\nB = None  # T001: b\n```\n\n'
+                          '**Before**:\n```python\nC = 1\n```\n\n**After**:\n```python\nC = 1\ndef top(): return 3\n```\n')]
+        stamped = 'A = 1\n\nB = 1\nx = 0\nC = 1\n'
+        with tempfile.TemporaryDirectory() as root:
+            head = self.stamped_repo(root, {'pkg/m.py': stamped}, '{head}')
+            Path(root, 'pkg/m.py').write_text('A = 2\n\nB = 2\nx = 0\nC = 1\ndef top(): return 3\n')
+            skel = {}
+            files, spans, _ = applier.task_spans(root, head, tasks, skel)
+            self.assertEqual(len(spans[('T001', 'pkg/m.py')]), 3)
+            tree = tempfile.mkdtemp(dir=root)
+            self.assertEqual(applier.revert_task(root, tree, files, spans, 'T001', skel, only=('pkg/m.py', 0)), 1)
+            self.assertEqual(Path(tree, 'pkg/m.py').read_text(), 'A = 1\n\nB = 2\nx = 0\nC = 1\ndef top(): return 3\n')
+            # A region the blueprint gives in full reads the same put back: nothing to probe.
+            self.assertEqual(applier.revert_task(root, tree, files, spans, 'T001', skel, only=('pkg/m.py', 2)), 0)
+
+    def test_an_import_alone_is_not_a_region_a_test_must_see(self):
+        # R19 guru p3, every 005 copy: T006's `import { utcDay }` line, put back alone, left
+        # every test green (they pass the day), and was reported as work the tests miss.
+        for line in ('import { utcDay } from "./clock.js";', 'from pkg.clock import utc_day',
+                     'const { utcDay } = require("./clock");', 'import os', 'use std::fmt;'):
+            self.assertTrue(applier._imports_only([line, '']), line)
+        for lines in (['import os', 'X = 1'], [''], ['def f():'], ['important = 1']):
+            self.assertFalse(applier._imports_only(lines), lines)
+        bp = self.PROBE_BP.replace("**Verification**: `python3 -c \"from pkg.calc import triple",
+                                   "**Before**:\n```python\nimport sys\n```\n\n**After**:\n```python\nimport sys\nimport os\n```\n\n"
+                                   "**Verification**: `python3 -c \"from pkg.calc import triple", 1)
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.probe_repo(root, 'self.assertEqual(triple(2), 6)\n        self.assertEqual(LIMIT, 3)', bp=bp,
+                                      extra={'pkg/calc.py': 'import sys\n\n\n' + self.PROBE_STAMPED},
+                                      done='import sys\nimport os\n\n\n' + self.PROBE_DONE)
+            self.assertEqual(rc, 0, out)
+            self.assertIn('(the test discriminates): specs/022-two/T003', out)
+            self.assertNotIn('one region of the task they test put back alone', out)
+
+    def test_test_green_while_its_target_is_red_is_not_counted(self):
+        # R20 guru t3b/t4: the task a test tests was red and the test, weak, passed and was
+        # counted as that task's proof.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 3', 'self.assertEqual(double(0), 0)')
+            self.assertEqual(rc, 1, out)
+            self.assertIn('1 test task(s) pass while the task they test fails — the test does not see what is'
+                          ' wrong there, so they are not counted as passed: specs/020-calc/T002 <- T001', out)
+            self.assertIn('task-specific 0 passed, 1 failed', out)
+            self.assertIn('test tasks green while their target is red 1', out)
+        # A target red only behind its own red dependency: what is wrong there cannot be
+        # told from the dependency, so it is not held against the test (R20 m1a: T005 red,
+        # T006 behind it, and T008, its test, was flagged).
+        bp = self.CALC_BP.replace('### T002: Test doubling', (
+            '### T003: Base\n\n**File**: `pkg/base.py` (new)\n\n```python\ndef ok():\n'
+            '    raise NotImplementedError("T003: say yes")\n```\n\n'
+            '**Verification**: `python3 -c "from pkg.base import ok; assert ok()"`\n\n'
+            '### T002: Test doubling')).replace('**Why**: one function doubles.', '**Dependencies**: T003\n\n**Why**: one function doubles.')
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.calc_repo(root, 'x * 3', 'self.assertEqual(double(0), 0)', bp=bp)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('specs/020-calc/T001 <- T003', out)
+            self.assertIn('test tasks green while their target is red 0', out)
+
+    def test_dependency_the_test_never_ran_is_not_probed(self):
+        # R20 guru t5, R19 ws 004: an honest test whose Dependencies line named a task whose
+        # code it never runs was reported blind to it and not counted.
+        bp = self.PROBE_BP.replace("**Dependencies**: T001", "**Dependencies**: T004") + (
+            "\n### T004: Name it\n\n**File**: `pkg/other.py` (modify)\n\n"
+            "**Before**:\n```python\n    return \"a\"\n```\n\n"
+            "**After**:\n```python\n    raise NotImplementedError(\"T004: b\")\n```\n\n"
+            "**Verification**: `python3 -c \"from pkg.other import name; assert name() == 'b'\"`\n")
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.probe_repo(root, 'self.assertEqual(triple(2), 6)', bp=bp,
+                                      extra={'pkg/other.py': 'def name():\n    return "a"\n'})
+            Path(root, 'pkg/other.py').write_text('def name():\n    return "b"\n')
+            rc, out = self.verify_feature(root)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("Not probed against a dependency the test never ran (no file that task writes was read by"
+                          " the test's command): specs/022-two/T003 <- T004", out)
+            self.assertIn('test tasks blind to their target 0', out)
+            self.assertIn('task-specific 4 passed', out)
+
+    def test_done_requires_a_named_export_where_the_blueprint_has_one_both_bash_versions(self):
+        # R20 guru d3a: the library's named export became a default export, every
+        # `import { buildStatement }` failed, and --done said all declared symbols were present.
+        bp = ("# Blueprint: lib\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+              "### T001: Build it\n\n**File**: `src/lib.js` (new)\n\n"
+              "```javascript\nexport function build(x) {\n  throw new Error(\"T001: build\");\n}\n```\n")
+        forms = {
+            'function build(x) {\n  return x;\n}\n\nexport default build;\n': 1,
+            'export default function build(x) {\n  return x;\n}\n': 1,
+            'function build(x) {\n  return x;\n}\n\nexport {\n  build,\n};\n': 0,
+            'export const build = (x) => x;\n': 0,
+            'export async function build(x) {\n  return x;\n}\n': 0,
+        }
+        for shell in self.SHELLS:
+            for text, want in forms.items():
+                with self.subTest(shell=shell, text=text), tempfile.TemporaryDirectory() as root:
+                    self.stamped_repo(root, {'README.md': 'x\n'}, bp)
+                    Path(root, 'src').mkdir()
+                    Path(root, 'src/lib.js').write_text(text)
+                    rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                    self.assertEqual(rc, want, out)
+                    if want and 'export default build' in text:
+                        self.assertIn('src/lib.js — the blueprint exports `build` by name and the file declares it'
+                                      ' without a named export (a default export, or none)', out)
+
+    def test_done_counts_a_task_with_only_some_regions_changed_both_bash_versions(self):
+        # R20 guru d4a: one of a task's three hunks typed, and --done passed without a word.
+        bp = ("# Blueprint: three\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+              "### T001: Three edits\n\n**File**: `pkg/m.py` (modify)\n\n"
+              "**Before**:\n```python\nA = 1\n```\n\n**After**:\n```python\nA = None  # T001: a\n```\n\n"
+              "**Before**:\n```python\nB = 1\n```\n\n**After**:\n```python\nB = None  # T001: b\n```\n")
+        stamped = 'A = 1\n\n\ndef f():\n    return 0\n\n\nB = 1\n'
+        for shell in self.SHELLS:
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as root:
+                head = self.stamped_repo(root, {'pkg/m.py': stamped}, bp)
+                Path(root, 'pkg/m.py').write_text(stamped.replace('A = 1', 'A = 2'))
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertEqual(rc, 0, out)
+                self.assertIn(f'(modify) tasks with only some of their regions changed since HEAD {head} (a count,'
+                              ' not a failure — code typed a few lines from its marker reads the same): T001 (pkg/m.py 1/2)', out)
+                Path(root, 'pkg/m.py').write_text(stamped.replace('A = 1', 'A = 2').replace('B = 1', 'B = 2'))
+                rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                self.assertNotIn('only some of their regions', out)
 
     def test_date_rules_without_a_pinned_time_zone_are_warned_about(self):
         # R19 guru m3a: a local-date bug passed every oracle case under TZ=UTC.
@@ -679,6 +896,32 @@ class CalcTest(unittest.TestCase):
         self.assertIn('the document states date or time rules (calendar date, utc) and no check pins a time zone', out)
         self.assertIn('[12] Time zones — 1 check(s) passed', validate('A day is a UTC calendar date.', pinned))
         self.assertNotIn('[12] Time zones', validate('An amount is a positive integer.', unpinned))
+        # R20 guru v1: the oracle's pins renamed away, and the prose's `TZ=` passed the check.
+        prose = 'A day is a UTC calendar date; the oracle runs under `TZ=Pacific/Kiritimati`.'
+        self.assertIn('no check pins a time zone', validate(prose, unpinned))
+        self.assertIn('no check pins a time zone', validate(prose.replace('`', ''), unpinned))
+        self.assertIn('no check pins a time zone',
+                      validate('A day is a UTC calendar date.', unpinned + "// run with TZ: 'Pacific/Honolulu'\n"))
+        self.assertIn('[12] Time zones — 1 check(s) passed',
+                      validate('A day is a UTC calendar date.', "spawnSync(process.execPath, [], { env: { TZ: zone } });\n"))
+
+    def test_missing_prerequisite_script_is_named(self):
+        # R20 guru: every command document's Step 1 runs spec-kit's check-prerequisites.sh,
+        # which a tree with only this extension does not have.
+        validator = MODULE.with_name('validate_blueprint.py')
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
+            Path(root, 'specs/023-day').mkdir(parents=True)
+            Path(root, 'specs/023-day/blueprint.md').write_text('# Blueprint: day\n\n**Mode**: guide\n')
+            Path(root, '.specify/extensions').mkdir(parents=True)
+
+            def note():
+                return subprocess.run([sys.executable, str(validator), 'specs/023-day'], cwd=root, capture_output=True,
+                                      text=True, env=dict(os.environ, NO_COLOR='1')).stdout
+            self.assertIn('Note: .specify/scripts/bash/check-prerequisites.sh is not installed', note())
+            Path(root, '.specify/scripts/bash').mkdir(parents=True)
+            Path(root, '.specify/scripts/bash/check-prerequisites.sh').write_text('#!/bin/bash\n')
+            self.assertNotIn('check-prerequisites.sh', note())
 
     # --- R19: documentation examples run as the document on disk has them ---------------
 

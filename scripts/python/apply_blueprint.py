@@ -807,9 +807,11 @@ def verify_excerpt(stdout: str, stderr: str) -> list:
 
 
 def _run_one(cmd: str, cwd: str):
+    # No bytecode cache in the copy: a module imported from a cache is not read from its
+    # source, and which source files a command read is what places a failure (below).
     try:
-        proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
-                              text=True, timeout=VERIFY_TIMEOUT)
+        proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=VERIFY_TIMEOUT,
+                              env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
         return proc.returncode, verify_excerpt(proc.stdout, proc.stderr)
     except subprocess.TimeoutExpired:
         return 124, [f"did not finish within {VERIFY_TIMEOUT}s"]
@@ -1044,7 +1046,7 @@ def _git_blob(root: str, head: str, path: str) -> str | None:
     return proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else None
 
 
-def task_spans(root: str, head: str, tasks: list) -> tuple[dict, dict, dict]:
+def task_spans(root: str, head: str, tasks: list, skel: dict | None = None) -> tuple[dict, dict, dict]:
     """Where each task's hunks land in each existing file, in the stamped commit's lines.
 
     "Has this (modify) file changed since the stamp" is a question about a file, and two
@@ -1055,7 +1057,9 @@ def task_spans(root: str, head: str, tasks: list) -> tuple[dict, dict, dict]:
     (a, b) covers lines a..b-1, and (g, g) is the gap above line g where a task only
     inserts. A span inside lines an earlier task inserted maps to that task's gap, so the
     two share it. Returns ({path: stamped text}, {(task, path): [spans]}, {task: why}) for
-    the tasks whose hunks could not be placed.
+    the tasks whose hunks could not be placed. Given `skel`, it also fills {(task, path):
+    [lines]}, beside each span the lines the blueprint puts there — the declarations with
+    their marker bodies.
     """
     import difflib
     global _tree
@@ -1104,6 +1108,8 @@ def task_spans(root: str, head: str, tasks: list) -> tuple[dict, dict, dict]:
                         gap = above[-1] + 1 if above else 0
                         span = (gap, gap)
                     spans.setdefault((tid, path), []).append(span)
+                    if skel is not None:
+                        skel.setdefault((tid, path), []).append(b[j1:j2])
                     now += [None] * (j2 - j1)
                 origin[path] = now
     finally:
@@ -1171,8 +1177,15 @@ def _reach(a: list, b: list, i1: int, i2: int, j1: int, j2: int) -> tuple:
     return i1, i2
 
 
-def untouched_tasks(root: str, head: str, tasks: list) -> tuple[list, dict]:
-    """[(task, path)] whose every span still reads as the stamped commit had it, and {task: why} not measured."""
+def untouched_tasks(root: str, head: str, tasks: list, partial: dict | None = None) -> tuple[list, dict]:
+    """[(task, path)] whose every span still reads as the stamped commit had it, and {task: why} not measured.
+
+    Given `partial`, it also fills {(task, path): (spans met, spans)} for a task some of
+    whose spans in a file moved and some did not. A reviewer did one of a task's three
+    hunks and --done passed, because one moved span is enough to call the task touched.
+    That is not proof of missing work — a hunk's code can be typed a few lines away from
+    the line its marker sat on — so the count is reported, not failed.
+    """
     files, spans, unplaced = task_spans(root, head, tasks)
     out = []
     for (tid, path), sps in spans.items():
@@ -1181,34 +1194,150 @@ def untouched_tasks(root: str, head: str, tasks: list) -> tuple[list, dict]:
         lines = files[path].split("\n")
         current = _read(os.path.join(root, path)).split("\n")
         changes = _changes(files[path], "\n".join(current))
-        if not any(_spans_meet(s, _reach(lines, current, *c, *cur), lines) for s in sps for c, cur in changes):
+        met = sum(1 for s in sps if any(_spans_meet(s, _reach(lines, current, *c, *cur), lines) for c, cur in changes))
+        if not met:
             out.append((tid, path))
+        elif partial is not None and met < len(sps):
+            partial[(tid, path)] = (met, len(sps))
     return out, unplaced
 
 
-def revert_task(root: str, tree: str, files: dict, spans: dict, tid: str) -> int:
-    """Put back, in `tree`, the stamped lines of every change that meets this task's spans.
+# A line that declares a name: a function, a class or a type, a bound const, a method.
+DECLARES = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:def|function|class|interface|fun|func|struct|enum|trait|record|type)"
+    r"\s+([A-Za-z_$][\w$]*)"
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=]"
+    r"|^\s*(?:(?:public|protected|private|internal|static|final|abstract|override|suspend)\s+)+[\w<>\[\],.?\s]*?\b([A-Za-z_]\w*)\s*\(")
 
-    The rest of the tree stays as the developer left it. Returns how many regions were
-    reverted, 0 when the task's spans meet no change (nothing of it is on disk to take away).
+
+def _declared(lines: list) -> set:
+    return {next(g for g in m.groups() if g) for m in map(DECLARES.match, lines) if m}
+
+
+# A line that only brings a name in: an import, a require, a use or an include.
+IMPORTS = re.compile(r"^\s*(?:import\b|from\s+\S+\s+import\b|using\b|use\b|#include\b|package\b"
+                     r"|(?:const|let|var)\s+[\w${}\s,:]+=\s*require\()")
+
+
+def _imports_only(lines: list) -> bool:
+    body = [l for l in lines if l.strip()]
+    return bool(body) and all(IMPORTS.match(l) for l in body)
+
+
+def revert_task(root: str, tree: str, files: dict, spans: dict, tid: str,
+                skel: dict | None = None, only: tuple | None = None) -> int:
+    """Put back, in `tree`, every change that meets this task's spans.
+
+    The rest of the tree stays as the developer left it, and a change goes back to the
+    stamped lines — the old behavior, which is what a test that sees the task's work must
+    fail on. Given `skel`, a span that declares a name the stamped lines did not gets the
+    blueprint's lines instead, the declaration with its marker body: put back as the stamp
+    had it, a function the task adds went away with its body, a reviewer's test that only
+    imported it failed on the import, and that red was read as the test seeing the task's
+    work. `only=(path, i)` puts back the changes nearest that one span and nothing else of
+    the task. Returns how many regions were put back and differ from what is on disk.
     """
     reverted = 0
     for (owner, path), sps in spans.items():
         if owner != tid or not os.path.isfile(os.path.join(root, path)):
             continue
+        if only is not None and only[0] != path:
+            continue
+        lines = (skel or {}).get((owner, path))
         current = _read(os.path.join(root, path))
-        cur, old, out, at = current.split("\n"), files[path].split("\n"), [], 0
+        cur, old, out, at, used = current.split("\n"), files[path].split("\n"), [], 0, set()
         for (i1, i2), (j1, j2) in _changes(files[path], current):
             out += cur[at:j1]
-            if any(_spans_meet(s, _reach(old, cur, i1, i2, j1, j2), old) for s in sps):
-                out += old[i1:i2]
-                reverted += 1
-            else:
+            reach = _reach(old, cur, i1, i2, j1, j2)
+            hit = [i for i in range(len(sps)) if _spans_meet(sps[i], reach, old)]
+            if only is not None:
+                # Widened over blank lines, two spans a blank line apart both meet a change;
+                # the region it belongs to is the nearest one.
+                near = min(hit, key=lambda i: max(sps[i][0] - reach[1], reach[0] - sps[i][1], 0), default=None)
+                hit = [i for i in hit if i == near == only[1]]
+            back = len(out)
+            if not hit:
                 out += cur[j1:j2]
+            else:
+                # The stamped lines of this change, with each span in it that declares a new
+                # name replaced by the blueprint's lines. A span the diff placed a line or two
+                # outside the change is clamped into it; none is written twice.
+                pos = i1
+                for a, b, i in sorted((min(max(sps[i][0], i1), i2), min(max(sps[i][1], i1), i2), i)
+                                      for i in hit if i not in used):
+                    used.add(i)
+                    if lines is None or not _declared(lines[i]) - _declared(old[sps[i][0]:sps[i][1]]):
+                        continue
+                    a = max(a, pos)
+                    out += old[pos:a] + lines[i]
+                    pos = max(b, a)
+                out += old[pos:i2]
+            # A region whose lines the blueprint gives in full — a signature, a changed
+            # argument — can read the same put back as implemented; nothing was taken away.
+            reverted += bool(hit) and out[back:] != cur[j1:j2]
             at = j2
         out += cur[at:]
         write_file(inside(tree, path), "\n".join(out))
     return reverted
+
+
+# A file this run wrote or read is told apart by its access time. Each command's files are
+# set to an access time older than their modification time before it runs; a read moves it.
+_AN_HOUR_NS = 3_600_000_000_000
+
+
+def reads_recorded(where: str) -> bool:
+    """Does the file system under `where` move a file's access time when it is read?
+
+    `noatime` mounts do not, and there "which files did this command run" has no answer.
+    """
+    try:
+        fd, probe = tempfile.mkstemp(prefix="blueprint-atime-", dir=where)
+    except OSError:
+        return False
+    try:
+        os.write(fd, b"x")
+        os.close(fd)
+        st = os.stat(probe)
+        os.utime(probe, ns=(st.st_mtime_ns - _AN_HOUR_NS, st.st_mtime_ns))
+        with open(probe, "rb") as f:
+            f.read()
+        return os.stat(probe).st_atime_ns != st.st_mtime_ns - _AN_HOUR_NS
+    except OSError:
+        return False
+    finally:
+        try:
+            os.remove(probe)
+        except OSError:
+            pass
+
+
+def arm_reads(tree: str, paths) -> dict:
+    """Age the access time of each path in `tree`; returns what `reads_since` compares with."""
+    armed = {}
+    for p in paths:
+        full = os.path.join(tree, p)
+        try:
+            st = os.stat(full)
+            os.utime(full, ns=(st.st_mtime_ns - _AN_HOUR_NS, st.st_mtime_ns))
+        except OSError:
+            continue
+        armed[p] = (st.st_mtime_ns - _AN_HOUR_NS, st.st_mtime_ns)
+    return armed
+
+
+def reads_since(tree: str, armed: dict) -> set:
+    """The armed paths read, written or removed since `arm_reads`."""
+    out = set()
+    for p, (at, mt) in armed.items():
+        try:
+            st = os.stat(os.path.join(tree, p))
+        except OSError:
+            out.add(p)
+            continue
+        if st.st_atime_ns != at or st.st_mtime_ns != mt:
+            out.add(p)
+    return out
 
 
 def run_verifications(root: str, tasks: list, bp: str, keep: bool,
@@ -1301,6 +1430,18 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         passed_tasks, failed_tasks = set(), set()
         code_of: dict[str, int] = {}
         header_code = None
+        # Which of the feature's files each command ran. A failure is reported against the
+        # task whose command saw it, and in guide mode that is seldom where the defect is: a
+        # library task's lines were wrong and its own cases passed, while the CLI task and a
+        # test task that run the library went red. Which files a command reads is a fact
+        # about the run, not a guess from the Dependencies line or from sharing a file.
+        writers: dict[str, list[str]] = {}
+        for tid, section in run_tasks:
+            for p, k in file_kinds(section):
+                if k in ("new", "modify") and tid not in writers.setdefault(p, []):
+                    writers[p].append(tid)
+        traced = bool(writers) and reads_recorded(os.path.dirname(tree))
+        ran: dict[str, set] = {}
         for cmd in order:
             who = owners[cmd]
             labels = list(who)
@@ -1313,7 +1454,10 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                 display += f" (+{len(display_lines) - 1} script line(s))"
             if cmd in doc_runs and doc_tree is None:
                 doc_tree = copy_tree(root)
+            armed = arm_reads(tree, writers) if traced and cmd not in doc_runs else None
             code, tail = _run_one(cmd, doc_tree if cmd in doc_runs else tree)
+            if armed is not None:
+                ran[cmd] = reads_since(tree, armed)
             code_of[cmd] = code
             if include_header and cmd == test_cmd:
                 header_code = code
@@ -1422,25 +1566,49 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         # there every new function throws, so a test that merely calls one is red. A
         # reviewer's tests that checked only "a transfer under the limit succeeds" counted
         # as discriminating while the limit itself was a no-op. So each discriminating test
-        # runs once more on the tree as it is with only the hunks of the (modify) task it
-        # depends on put back as the stamp had them. Green there, the test does not see
-        # that task's change. A dependency that only creates files has no hunks to put back
-        # and is not probed this way; the whole-skeleton probe already removed its files.
+        # runs once more on the tree as it is with only the (modify) task it depends on put
+        # back as the blueprint leaves it — its declarations in place, its bodies markers.
+        # Green there, the test does not see that task's change. A dependency that only
+        # creates files has no hunks to put back and is not probed this way; the
+        # whole-skeleton probe already removed its files.
         weak_against: dict[str, list[str]] = {}
         new_only: dict[str, list[str]] = {}
+        not_run: dict[str, list[str]] = {}
+        partly: dict[tuple, list] = {}
+        regions_of: dict[tuple, int] = {}
+        sections = dict(run_tasks)
+
+        def ran_by(tid: str):
+            """The feature files a task's own commands ran, or None where that was not traced."""
+            seen = [ran[c] for c in task_cmds[tid] if c in ran and c not in shared]
+            return set().union(*seen) if seen else None
+
+        def short(t: str) -> str:
+            return t.rsplit("/", 1)[-1]
+
         if discriminating and not partial:
             head = stamped_head(bp)
-            sections = dict(run_tasks)
-            files, spans, unplaced = task_spans(root, head, tasks) if head and commit_known(root, head) else ({}, {}, {})
+            skel: dict = {}
+            files, spans, unplaced = (task_spans(root, head, tasks, skel) if head and commit_known(root, head)
+                                      else ({}, {}, {}))
             testers: dict[str, list[str]] = {}
             for tid in sorted(discriminating):
                 prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+                seen = ran_by(tid)
                 for dep in (prefix + d for d in dependencies(selected_sections[tid])):
                     if dep not in sections or test_files(sections[dep]):
                         continue
+                    # A Dependencies line can name a task whose code the test never runs:
+                    # an honest library test whose line named the CLI task was reported
+                    # blind to it, which says nothing about the test. A test that read no
+                    # file the task writes is not probed against it.
+                    dep_files = {p for p, k in file_kinds(sections[dep]) if k in ("new", "modify")}
+                    if seen is not None and dep_files and not dep_files & seen:
+                        not_run.setdefault(tid, []).append(short(dep))
+                        continue
                     if not any(owner == dep for owner, _p in spans) or dep in unplaced:
                         if all(k == "new" for _p, k in file_kinds(sections[dep])):
-                            new_only.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
+                            new_only.setdefault(tid, []).append(short(dep))
                         continue
                     testers.setdefault(dep, []).append(tid)
             if testers:
@@ -1448,50 +1616,91 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                 part = copy_tree(root)
                 try:
                     for dep, tids in testers.items():
-                        if revert_task(root, part, files, spans, dep):
+                        paths = [p for (owner, p) in spans if owner == dep and os.path.isfile(os.path.join(root, p))]
+
+                        def restore():
+                            for path in paths:
+                                shutil.copyfile(os.path.join(root, path), inside(part, path))
+
+                        if revert_task(root, part, files, spans, dep, skel):
                             for tid in tids:
                                 if all(_run_one(c, part)[0] == 0 for c in probes[tid][1]):
-                                    weak_against.setdefault(tid, []).append(dep.rsplit("/", 1)[-1])
-                        for (owner, path) in spans:
-                            if owner == dep and os.path.isfile(os.path.join(root, path)):
-                                shutil.copyfile(os.path.join(root, path), inside(part, path))
+                                    weak_against.setdefault(tid, []).append(short(dep))
+                        restore()
+                        # Region by region. A test that calls the one function a task adds
+                        # and never the write the same task makes is red when the whole task
+                        # is taken away; with each region taken away alone, the regions it
+                        # stays green over are the work it does not see.
+                        live = [t for t in tids if short(dep) not in weak_against.get(t, [])]
+                        # An import alone is not work a test sees: put back, it leaves the
+                        # name unbound only where nothing calls it.
+                        regions = [(p, i) for (owner, p), sps in spans.items() if owner == dep
+                                   and p in paths for i in range(len(sps))
+                                   if not _imports_only(skel.get((dep, p), [[]] * len(sps))[i])]
+                        if not live or len(regions) < 2:
+                            continue
+                        for region in regions:
+                            if not revert_task(root, part, files, spans, dep, skel, only=region):
+                                continue
+                            for tid in live:
+                                regions_of[(tid, dep)] = regions_of.get((tid, dep), 0) + 1
+                                if all(_run_one(c, part)[0] == 0 for c in probes[tid][1]):
+                                    a = spans[(dep, region[0])][region[1]][0]
+                                    partly.setdefault((tid, dep), []).append(f"{region[0]}:{a + 1}")
+                            restore()
                 finally:
                     shutil.rmtree(part, ignore_errors=True)
-        task_passed = own_pass - non_discriminating - set(weak_against)
         behind = blocked_by(run_tasks, own_fail | shared_fail)
         own_blocked = {t for t in own_fail if t in behind}
+        # A test that passes while the task it tests fails did not see what is wrong there:
+        # a reviewer's test that only parsed the command's output as JSON passed beside a
+        # statement command that printed `{}`, and was counted as the task's proof. A target
+        # red only behind its own red dependency is not held against the test: what is wrong
+        # there cannot be told apart from what is wrong in the dependency.
+        red = (own_fail - own_blocked) | shared_fail
+        target_red: dict[str, list[str]] = {}
+        for tid in sorted(own_pass):
+            if not test_files(sections[tid]):
+                continue
+            prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
+            seen = ran_by(tid)
+            bad = [short(prefix + d) for d in dependencies(sections[tid]) if prefix + d in red
+                   and (seen is None or {p for p, k in file_kinds(sections[prefix + d]) if k in ("new", "modify")} & seen)]
+            if bad:
+                target_red[tid] = bad
+        task_passed = own_pass - non_discriminating - set(weak_against) - set(target_red)
         print("  Task proof — what each task's own Verification measured:")
         if task_passed:
             print(f"    Task-specific command results passed: {_ids(task_passed)}")
-        if discriminating - set(weak_against):
-            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating - set(weak_against))}")
+        if discriminating - set(weak_against) - set(target_red):
+            print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating - set(weak_against) - set(target_red))}")
         if own_fail - own_blocked:
             print(f"    Task-specific command results failed: {_ids(own_fail - own_blocked)}")
-            # A failure is reported where it was observed. A reviewer put the defect in a
-            # helper an earlier task wrote, whose own cases did not reach it, and the
-            # output read "T006 failed" beside "T002 passed". Nothing here can tell which
-            # task's lines are wrong; it can say which passed tasks wrote the same files.
-            sections = dict(run_tasks)
-            passed_any = own_pass | shared_pass
-            shared_code = []
-            for tid in sorted(own_fail - own_blocked):
-                mine = {p for p, k in file_kinds(sections[tid]) if k in ("new", "modify")}
-                prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
-                seen, stack, hits = set(), [prefix + d for d in dependencies(sections[tid])], []
-                while stack:
-                    d = stack.pop()
-                    if d in seen or d not in sections:
-                        continue
-                    seen.add(d)
-                    stack += [prefix + x for x in dependencies(sections[d])]
-                    common = sorted(mine & {p for p, k in file_kinds(sections[d]) if k in ("new", "modify")})
-                    if d in passed_any and common:
-                        hits.append(f"{d.rsplit('/', 1)[-1]} ({', '.join(common)})")
-                if hits:
-                    shared_code.append(f"{tid} with {', '.join(sorted(hits))}")
-            if shared_code:
-                print("    Observed there, not necessarily caused there — a passed dependency wrote the same file(s): "
-                      + "; ".join(shared_code[:6]) + (f" (+{len(shared_code) - 6} more)" if len(shared_code) > 6 else ""))
+            # A failure is reported where it was observed. "A passed dependency wrote the
+            # same file" named the right task twice in one round and, the next round, the
+            # wrong one every time it spoke: the defect sat in the failing task's own lines
+            # and the line pointed at its neighbour in the file, while every library defect
+            # seen from the CLI went unnamed. What the failed command ran is measured; the
+            # files it ran that other tasks wrote are where else the defect can be.
+            if not traced:
+                print("    Code the failed commands ran: not measured — this file system does not record reads")
+            else:
+                passed_any = own_pass | shared_pass
+                hints = []
+                for tid in sorted(own_fail - own_blocked):
+                    mine = {p for p, k in file_kinds(sections[tid]) if k in ("new", "modify")}
+                    seen = set().union(*(ran.get(c, set()) for c in task_cmds[tid] if code_of.get(c)))
+                    others = []
+                    for path in sorted(seen - mine):
+                        who = [w for w in writers.get(path, []) if w != tid]
+                        if who:
+                            others.append(f"{path} ({', '.join(short(w) + ('' if w in passed_any else ' red') for w in who)})")
+                    if others:
+                        hints.append(f"{short(tid)} ran {', '.join(others)}")
+                if hints:
+                    print("    Code other tasks wrote that the failed commands ran — the defect can be there as well as"
+                          " in the failed task's own lines: " + "; ".join(hints[:6])
+                          + (f" (+{len(hints) - 6} more)" if len(hints) > 6 else ""))
         if own_blocked:
             print("    Task-specific command results failed behind a failed dependency (not separable from it): "
                   + ", ".join(f"{t} <- {'/'.join(d.rsplit('/', 1)[-1] for d in behind[t])}"
@@ -1521,6 +1730,18 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                    " as the stamp had it — red on the whole skeleton, but blind to that task's change, so not"
                    " counted as passed: " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(weak_against.items())[:12]),
                    always=True)
+        if target_red:
+            record("warn", f"{len(target_red)} test task(s) pass while the task they test fails — the test does not"
+                   " see what is wrong there, so they are not counted as passed: "
+                   + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(target_red.items())[:12]), always=True)
+        if partly:
+            print("    Test tasks green with one region of the task they test put back alone (a hint — those regions'"
+                  " work is not seen by the test): "
+                  + ", ".join(f"{t} <- {short(d)} {len(r)} of {regions_of[(t, d)]} ({', '.join(r[:3])})"
+                              for (t, d), r in sorted(partly.items())[:8]))
+        if not_run:
+            print("    Not probed against a dependency the test never ran (no file that task writes was read by the"
+                  " test's command): " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(not_run.items())[:12]))
         if new_only:
             print("    Not probed against their dependency alone (it only creates files, so the whole-skeleton probe"
                   " is the only one): " + ", ".join(f"{t} <- {'/'.join(d)}" for t, d in sorted(new_only.items())[:12]))
@@ -1564,10 +1785,13 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
               f" shared-only {len(shared_pass) + len(shared_fail)};"
               f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale) + len(invalid)};"
               f" no command {len(silent)}; test files unmeasured {len(unexercised)};"
-              f" test tasks blind to their target {len(weak_against)}")
+              f" test tasks blind to their target {len(weak_against)}; test tasks green while their target is red"
+              f" {len(target_red)}")
         print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
+        print("  Task lines are hints, not proof of where a defect is: a failure is reported against the task"
+              " whose command saw it, and that command ran other tasks' code too.")
         print("  Exit status reflects command results and missing proof only; shared-only, human,"
-              " non-discriminating, blind-to-target and unmeasured-test rows above do not change it.")
+              " non-discriminating, blind-to-target, green-while-target-red and unmeasured-test rows above do not change it.")
         if partial:
             print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
         elif failures or selected_silent and not (include_header and header_scope == "feature"):
