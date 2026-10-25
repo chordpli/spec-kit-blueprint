@@ -996,6 +996,9 @@ class CalcTest(unittest.TestCase):
         # tree complete, and --done failed two tasks by their position. R21 d1 / R19 d3: a
         # guard never started still fails; it brings no name to look for. R20 d1b: a line never
         # typed whose names a helper beside it uses still fails; names alone are not the line.
+        # Names are read past comments and strings; a JavaScript `#private` name is code.
+        self.assertEqual(applier.code_names('x = f("y")  # z\n', 'a.py'), {'x', 'f'})
+        self.assertEqual(applier.code_names('this.#count = g(); // h\n', 'a.js'), {'this', 'count', 'g'})
         elsewhere = '\n\nfrom pkg.lib import halve\n\n\ndef routed(verb, n):\n    return halve(n) if verb == "halve" else None\n'
         trees = {
             'placed elsewhere': (self.MOVED_FILE.replace('return 1\n', 'return 2\n') + elsewhere, 0, 'T001 (pkg/cli.py: halve)'),

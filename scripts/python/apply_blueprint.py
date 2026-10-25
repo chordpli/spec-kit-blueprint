@@ -1217,20 +1217,17 @@ TRIVIAL_LINE = re.compile(r"^[\s{}()\[\];,]*$")
 # The names a piece of code uses, read past its comments and string literals: a marker's
 # message is prose, and its words are not code anyone was asked to write.
 HASH_COMMENTS = re.compile(r"\.(?:py|sh|bash|rb|ya?ml|toml|r|pl)$", re.I)
-_CODE_TOKEN = re.compile(
-    r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|`(?:\\.|[^`\\])*`'
-    r"|/\*[\s\S]*?\*/|//[^\n]*|(?P<hash>#[^\n]*)|(?P<name>[A-Za-z_$][\w$]*)")
+_CODE_TOKEN = (r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|`(?:\\.|[^`\\])*`'
+               r"|/\*[\s\S]*?\*/|//[^\n]*|{hash}|(?P<name>[A-Za-z_$][\w$]*)")
+# Where `#` opens a comment it runs to the end of the line; elsewhere (`#private` in
+# JavaScript, `#include`) it is one character and the name after it is code.
+_HASH_TOKENS = re.compile(_CODE_TOKEN.format(hash="#[^\n]*"))
+_PLAIN_TOKENS = re.compile(_CODE_TOKEN.format(hash="#"))
 
 
 def code_names(text: str, path: str) -> set:
-    hashes = bool(HASH_COMMENTS.search(path))
-    names = set()
-    for m in _CODE_TOKEN.finditer(text):
-        if m.group("name"):
-            names.add(m.group("name"))
-        elif m.group("hash") and not hashes:
-            names.update(re.findall(r"[A-Za-z_$][\w$]*", m.group("hash")))
-    return names
+    tokens = _HASH_TOKENS if HASH_COMMENTS.search(path) else _PLAIN_TOKENS
+    return {m.group("name") for m in tokens.finditer(text) if m.group("name")}
 
 
 def _widen(span: tuple, lines: list) -> tuple:
