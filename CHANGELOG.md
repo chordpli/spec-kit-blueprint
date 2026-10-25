@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R21 — what is red, and who runs it; examples that can fail
+
+- `--verify` no longer says where a defect is. The failed-task hint (`Code other tasks wrote
+  that the failed commands ran…`), the `failed behind a failed dependency` row and its count
+  in `Proof summary` are gone, with `Task lines are hints, not proof…`. In their place:
+  `Red: N — each oracle case a command stopped on, and each failed command that names no
+  case, with the tasks whose Verification runs it`, one row per red unit with every owner
+  (`movecompat (specs/007-account-freeze/acceptance.mjs): T010, T011`, `**Test** header` when
+  the feature's test header runs it), and one closing line: `Ownership is not location: a
+  task owns a case because its Verification runs it, and a red case runs code other tasks
+  wrote too. Nothing here says which task's code is wrong.` A case is read off an oracle
+  command (`node specs/…/acceptance.mjs a b`): the case its `[case X]` error names, or the
+  first one it did not print `case X: passed` for. Exit codes are unchanged. Access-time read
+  tracing now runs only for test tasks' commands, where the blind-to-target probe still uses it.
+- A test task green beside a red target is warned about and not counted only when a red case
+  (or a failed command naming no case) is owned by that target alone. A case two tasks run is
+  not held against the test of one of them; the feature's test header is not a task and does
+  not share a case. The test's command must still have read a file the target writes. A target that has a red task among its own dependencies is
+  still not held against its test (R20's rule, kept after measuring its removal: R20 `m1a`,
+  `m1b` and R21 `s04` each lost an honest CLI test to a library's or parser's defect, and no
+  control gained a correct demotion). It is no longer printed as `behind`.
+- `--done` judges a `(modify)` task whose regions read as HEAD had them by the names its lines
+  bring: if every one of them (outside comments and strings) is in the file elsewhere, the
+  task is reported `placed differently, not missing` as a warning in every mode, not as an
+  untouched task, provided each code line it adds is also in the file as written (whitespace
+  aside) or is an import. A task whose lines bring no name (a marker only) still fails
+  untouched, and so does R20 `d1b`, whose one destructuring line was never typed though a
+  helper used both of its names.
+- A documentation example block that keeps a failing command from failing it (`|| echo`,
+  `|| true`, a trailing `; true` or `; :`, `set +e`, `$?`, a leading `!`) is not counted as a
+  passing example, and its task is not counted as passed; a warning names the block. Exit code
+  unchanged. A block of `$ ` lines is a transcript: its commands run in one shell, each must
+  exit 0, and the lines under each command must equal what it printed (trailing blanks
+  ignored). A refusal is written `$ cmd; echo "exit $?"` with the shown output under it.
+- `apply_blueprint.py --show-final PATH` prints a declared file as the stamp plus every task's
+  hunks (honouring `--through T###`), so a guide blueprint no longer carries a consolidated
+  copy of a file modified by several tasks; the generation guidance drops that appendix.
+- Generation guidance: show a refused command as a transcript, never behind `|| echo`; test
+  each adopted option against every reason given for rejecting the others, and put a match in
+  Open Questions; keep the Open Questions section and write `None.` when there are none.
+- Measured this round (old 2aec552 against new; R21 guru 007 controls: 51 copies and the
+  workspace, R20 006: 51, R19 005: 47; `--verify`, `--done` and `--done --all` in bash 3.2 and
+  5, validate). Exit codes change on one control only: R21 `d5` (finished, placed differently)
+  `--done` and `--done --all` 1 → 0 in both bashes. R21 `d1`, `b3`, R19 `d3`, `d4` and R20
+  `d1b` still fail `--done`; R21 `d3` (partial) still passes with its count. Test tasks no
+  longer demoted: R21 `l1`, `l1b` (T012, T013), `l3`, `l4`, `s03` (T003); R20 `l1`, `l2`,
+  `l3a`, `l3b` (T004). Still demoted: R21 `t5`, `d2`; R20 `t3b`, `t4`, `l4`, `m2a`; every R19
+  one. With the dependency exception removed, R20 `m1a`, `m1b`, `m2b`, `m3`, `m4a`, `m4b`, R21
+  `s04` and six R19 controls (`T010 <- T007`) would have gained a demotion; it was kept. Every
+  R21 tree whose README shows a refusal behind `|| echo` has its documentation task out of
+  the passed count (44 controls with 2 masked blocks, 4 with 1); `r3` (typo behind `|| echo`)
+  stays exit 0, and so do the finished trees. Written as transcripts, the `r3` and `r4`
+  prototypes fail and the finished one passes. Over the real trees (R21 ws 001–007, R20 ws,
+  R19 ws, the six R18 trees; 318 runs, old and new) no exit code changes; R21 ws 005–007 each
+  count one task fewer passed for masked examples. `--verify` time is unchanged (medians of
+  three alternating runs at load 6–11: R21 ws 21.1 → 21.2 s, `l1` 19.4 → 19.5 s, R20 `p3`
+  17.1 → 16.5 s, R19 `p3` 10.3 → 10.0 s).
+
 ### R20 — what a failed command ran; a test against its target's work
 
 - A failed task's hint names the files its failed command read that other tasks write:

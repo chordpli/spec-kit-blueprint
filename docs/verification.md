@@ -69,27 +69,30 @@ measured, and a shared command measures no single task:
   004, R20 `t5`). Such a task is listed as `Not probed against a dependency the test never ran`.
 - **A test that passes while the task it tests fails** is warned about and not counted as
   passed: a test that only parsed the output as JSON passed beside a statement command that
-  printed `{}` (R20 `t4`). A target that is red only behind its own red dependency does not
-  count against the test: what is wrong there cannot be told from the dependency.
-- **A red task that depends on a red task** (its `**Dependencies**` line, followed through)
-  is listed as failed *behind* that dependency. A test of the CLI is red when the CLI is
-  missing, whether or not the test was written; the result is still a failure, but it cannot
-  be told apart from the task it depends on, and the output no longer claims it can.
-- **A failure is reported where it was observed, and that is a hint, not a location.** A
-  library task's lines can be wrong while its own cases pass; the CLI task that runs the
-  library goes red. Before each command the files the feature's tasks write are given an
-  access time older than their modification time in the copy; the ones whose access time moved
-  were read. A failed task's line then names the files its failed command read that other
-  tasks write: `Code other tasks wrote that the failed commands ran … T011 ran src/ledger.js
-  (T002, T010)`. Its own files are left out: the line that named "a passed dependency wrote the
-  same file" named the wrong task on the three R20 controls whose defect was in the failed
-  task's own lines, and none of the five R20 runs whose defect was in another file. Measured
-  over the R19 and R20 controls whose defect is outside the failed task, the new line names it
-  in 6 of 8 runs (the old one 3); it misses a defect in another task's lines of the failed
-  task's own file (R19 `m4a`, `m4b`), which the old line caught. Python runs
-  without a bytecode cache so its imports are read from source. A `noatime` file system makes
-  the line `not measured`; a command that compiles the whole tree reads every file, and the
-  line then says nothing useful.
+  printed `{}` (R20 `t4`). "Fails" means a red oracle case — or a failed command that names no
+  case — that the target task **alone** owns. A case several tasks own, such as a
+  compatibility case every task that could break it runs, is red for a reason that can be any
+  owner's: held against the tests of each, it took seven honest tests out of the count on the
+  R21 controls (one of them did what its task's Why said, leaving unchanged transfers to that
+  shared case) and kept the two weak ones it should. A target that also has a red task among
+  its own dependencies is not held against its test either: its red can be what it ran of
+  theirs. Without that, R20 `m1a`, `m1b` and R21 `s04` each lost an honest CLI test to a
+  library's or parser's defect.
+- **What is red is stated about what ran, not about who wrote it.** A failed command is
+  reported with the oracle case it stopped on — the case its error names as `[case NAME]`, or
+  else the first of its cases that did not print `case NAME: passed` — and every task whose
+  Verification runs that case: `movecompat (specs/007-account-freeze/acceptance.mjs): T010,
+  T011, **Test** header`. A failed command that names no case is listed with its owners. A task
+  owns a case because its Verification runs it; that is not where the defect is. Four releases
+  tried to place defects by task — the task whose command failed, a dependency it failed
+  "behind", the files its command read that other tasks wrote — and on the R21 controls, where
+  three tasks share each file, the failed task held the defect in none of eight controls whose
+  defect lay elsewhere, the read-file hint held it in 0 of 12, and a defective task was excused
+  as failing behind a clean one. Those lines are gone. Test tasks' commands are still traced
+  (the access time of each file the feature writes is set older than its modification time in
+  the copy, and a read moves it), because the probes below use it; Python runs without a
+  bytecode cache so imports are read from source, and so a probe that puts a region back
+  within the same second is not served the cache of what it replaced.
 - **Documentation tasks** get a static assertion on the text the spec fixes, and their
   example commands are run. A shell-fenced block (`sh`, `bash`, `shell`, `console`, `zsh`)
   that a doc task's After adds is a promise that the example runs. So `--verify` reads the
@@ -100,6 +103,17 @@ measured, and a shared command measures no single task:
   synopsis with placeholders (`ledger transfer <from> <to>`) is not a runnable example; put
   it in a `text` fence. Without the stamped commit the run is `not measured`. A tree that has
   moved past later features also runs their new blocks.
+  **A transcript is compared, not only run.** In a block with `$ ` prompts, each command runs
+  in one shell, in order, with stdout and stderr together, and must end 0; the lines under it
+  are what it prints and must match (trailing blanks ignored). A refusal is shown that way:
+  `$ cmd; echo "exit $?"` with the error and `exit 1` under it. A plain block, or a transcript
+  command with nothing under it, that holds `|| echo`, `|| true`, `; true`, `set +e`, `$?` or a
+  leading `!` ends 0 whatever its command did: it is warned about, not counted as a passing
+  example, and its task is not counted as passed (`documentation examples masking a failure
+  N`). The exit code does not change — the block ran and passed; what it proves is nothing.
+  Measured on the R21 copies: a mistyped `--too` behind `|| echo` and a README "refused" line
+  that succeeded both ended 0 and their task passed; now both are warned about, and the same
+  READMEs written as transcripts fail on the first and pass on the finished tree.
   Judgement goes on a line that starts with `Human review:`.
   Nothing on that line is executed — a backticked example in it is a thing to look for, not
   a command. The reviewer records the review in the feature's `human-evidence.md`, one line
@@ -125,12 +139,14 @@ instead of all ten red. The converted blueprint was written by hand, not by the 
 
 Exit 1: a command failed, or under `--verify-scope feature` a selected task has neither a
 command nor a `Human review:` line and no feature-scoped header covers it. Exit 2: a refused
-gate. Shared-only results, non-discriminating or target-blind test tasks, human evidence not
+gate. Shared-only results, non-discriminating or target-blind test tasks, masked documentation
+examples, human evidence not
 supplied and unmeasured test files never change the exit code — exit 0 means the commands
 passed. A pipeline that needs per-task proof reads the `Proof summary:` line and requires
 `test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0` (each
 `Human review:` recorded in `human-evidence.md`), `test files unmeasured 0`,
-`test tasks blind to their target 0` and `test tasks green while their target is red 0`.
+`test tasks blind to their target 0`, `test tasks green while their target is red 0` and
+`documentation examples masking a failure 0`.
 
 Why non-discriminating is not exit 1: measured on the R18 guru feature's 22 control copies
 and on 16 feature runs of three earlier projects, it fired only on the copy whose tests were
@@ -198,7 +214,7 @@ still exercise more than that prefix, so report its declared scope separately.
 | State | Evidence | Guarantee |
 |---|---|---|
 | document-valid | document validator command and exit | document structure; no runtime behavior |
-| scaffold-complete | feature `--done` command and exit | declared files and public symbols, no remaining markers, and every `(modify)` task changed its own regions of an existing file since the stamp; no runtime behavior |
+| scaffold-complete | feature `--done` command and exit | declared files and public symbols, no remaining markers, and every `(modify)` task changed its own regions of an existing file since the stamp, or brings names the file now has elsewhere with each non-import code line it adds (a warning); no runtime behavior |
 | behavior-verified | focused assertion command, exit, tested scope and unmeasured contracts | the named assertions passed against the working tree |
 
 Record **pass**, **fail**, or **not run** for each state, with the actual command.

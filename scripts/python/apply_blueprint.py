@@ -806,17 +806,73 @@ def verify_excerpt(stdout: str, stderr: str) -> list:
     return ["(the command printed nothing)"]
 
 
-def _run_one(cmd: str, cwd: str):
+def _run_one(cmd: str, cwd: str, full: bool = False):
     # No bytecode cache in the copy: a module imported from a cache is not read from its
-    # source, and which source files a command read is what places a failure (below).
+    # source, so the reads a test's command made would go unseen (below), and a probe that
+    # puts a region back within the same second can be served the cache of what it replaced.
     try:
         proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=VERIFY_TIMEOUT,
                               env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-        return proc.returncode, verify_excerpt(proc.stdout, proc.stderr)
+        out = (proc.returncode, verify_excerpt(proc.stdout, proc.stderr))
+        return out + (proc.stdout + "\n" + proc.stderr,) if full else out
     except subprocess.TimeoutExpired:
-        return 124, [f"did not finish within {VERIFY_TIMEOUT}s"]
+        out = (124, [f"did not finish within {VERIFY_TIMEOUT}s"])
     except OSError as exc:
-        return 127, [str(exc)]
+        out = (127, [str(exc)])
+    return out + ("",) if full else out
+
+
+# An oracle in the feature directory run with the names of the cases a task owns:
+# `node specs/007-account-freeze/acceptance.mjs transferguard movecompat compatlib`. The
+# oracle prints `case NAME: passed` for each case and stops at the first one that fails,
+# whose error it prefixes with `[case NAME]` (docs/examples/verification/acceptance-cases.mjs).
+ORACLE_PATH = re.compile(r"^(?:\./)?specs/[^\s]+\.(?:mjs|cjs|js|ts|py|rb|sh)$")
+CASE_NAME = re.compile(r"^[A-Za-z][\w.-]*$")
+
+
+def oracle_cases(cmd: str) -> list:
+    """[(oracle path, case name)] a command runs, in the order it runs them."""
+    body = cmd[len("set -e\n"):] if cmd.startswith("set -e\n") else cmd
+    out = []
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("$ "):
+            line = line[2:]
+        if not line or line.startswith("#"):
+            continue
+        try:
+            lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            words = list(lexer)
+        except ValueError:
+            words = line.split()
+        for i, word in enumerate(words):
+            if ORACLE_PATH.match(word):
+                for case in words[i + 1:]:
+                    if not CASE_NAME.match(case):
+                        break
+                    out.append((word[2:] if word.startswith("./") else word, case))
+                break
+    return out
+
+
+def case_results(cases: list, code: int, text: str) -> tuple[set, tuple | None]:
+    """(cases the run printed as passed, the case it stopped on or None) for one command.
+
+    A failed run stopped on the case its error names (`[case NAME]`), or else on the first
+    of its cases that did not print `case NAME: passed`. A run that printed every case
+    passed and still failed stopped on something that is not a case: None.
+    """
+    passed = {c for c in cases if re.search(r"^case " + re.escape(c[1]) + r": passed\s*$", text, re.M)}
+    if code == 0:
+        return set(cases), None
+    named = re.search(r"\[case ([A-Za-z][\w.-]*)\]", text)
+    if named:
+        hit = [c for c in cases if c[1] == named.group(1) and c not in passed]
+        if hit:
+            return passed, hit[0]
+    rest = [c for c in cases if c not in passed]
+    return passed, rest[0] if rest else None
 
 
 def test_scope(blueprint: str) -> str:
@@ -836,34 +892,6 @@ def dependencies(section: str) -> list[str]:
     """The task ids a section's `**Dependencies**:` line names, in order."""
     m = re.search(r"^\*\*Dependencies\*\*:?(.*)$", outside_fences(section), re.M)
     return re.findall(r"\bT\d{3,}\b", m.group(1)) if m else []
-
-
-def blocked_by(tasks: list, red: set) -> dict:
-    """Each red task that depends, directly or through others, on another red task.
-
-    A test task's command runs the code its dependency writes, so when that code is red
-    the test is red too, written or not. Reported against the test, the behavior task's
-    failure was counted twice and the test was called unfinished: a tree whose CLI alone
-    was missing printed two finished test tasks failed, and a library off by one printed
-    three. The result is still a failure. What changes is the claim: it cannot be told
-    apart from the red task it depends on.
-    """
-    prefix = {tid: tid.rsplit("/", 1)[0] + "/" if "/" in tid else "" for tid, _s in tasks}
-    deps = {tid: [prefix[tid] + d for d in dependencies(sec)] for tid, sec in tasks}
-    out: dict[str, list[str]] = {}
-    for tid in red:
-        seen, stack, hit = set(), list(deps.get(tid, [])), []
-        while stack:
-            d = stack.pop()
-            if d in seen or d == tid:
-                continue
-            seen.add(d)
-            if d in red:
-                hit.append(d)
-            stack.extend(deps.get(d, []))
-        if hit:
-            out[tid] = sorted(hit)
-    return out
 
 
 def _blob_sha(path: str) -> str:
@@ -1034,11 +1062,69 @@ def doc_example_scripts(root: str, head: str, section: str) -> tuple[list, list]
             continue
         for n, body in enumerate(blocks, 1):
             lines = [ln for ln in body.rstrip("\n").split("\n")]
-            # A console transcript: `$ ` marks the commands, the other lines are output.
+            # A console transcript: `$ ` marks the commands, the lines under one are its output.
             if any(ln.startswith("$ ") for ln in lines):
-                lines = [ln[2:] for ln in lines if ln.startswith("$ ")]
-            scripts.append((path, f"set -e\n# {path} example {n}, as written there\n" + "\n".join(lines)))
+                script, masked = transcript_script(path, n, lines)
+            else:
+                script = f"set -e\n# {path} example {n}, as written there\n" + "\n".join(lines)
+                masked = [ln.strip() for ln in lines if masks_failure(ln)]
+            scripts.append((path, script, masked))
     return scripts, problems
+
+
+# A line that keeps a failure from failing the example: `cmd || echo "exit $?"` ends 0
+# whatever cmd did. A reviewer mistyped a flag in such a line and the usage error exited 0;
+# another removed the guard the line demonstrates and the success it printed exited 0 (R21
+# r3, r4). Quoted text is read past, so `node -e "a || b"` is not one.
+MASKING = re.compile(r"\|\||\bset\s+\+e\b|\$\?|;\s*(?:true|:)\s*$|^\s*!\s")
+_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'[^\']*\'')
+
+
+def masks_failure(line: str) -> bool:
+    line = line.strip()
+    return bool(line) and not line.startswith("#") and bool(MASKING.search(_QUOTED.sub('""', line)))
+
+
+# Compares a command's output with the lines a transcript shows under it: each line without
+# its trailing blanks, trailing blank lines dropped, and a unified diff on a mismatch.
+_COMPARE = ("import sys, difflib\n"
+            "norm = lambda t: t.rstrip().split('\\n') if t.strip() else []\n"
+            "want = norm(sys.stdin.read()); got = norm(open(sys.argv[1], encoding='utf-8', errors='replace').read())\n"
+            "want = [l.rstrip() for l in want]; got = [l.rstrip() for l in got]\n"
+            "if want != got:\n"
+            "    sys.stderr.write(sys.argv[2] + ' printed other lines than the transcript shows:\\n')\n"
+            "    sys.stderr.write('\\n'.join(difflib.unified_diff(want, got, 'shown', 'printed', lineterm='')) + '\\n')\n"
+            "    sys.exit(1)\n")
+
+
+def transcript_script(path: str, n: int, lines: list) -> tuple[str, list]:
+    """A script that runs a console transcript's `$ ` commands and compares their output.
+
+    Each command runs in one shell, in order, its stdout and stderr together, and must end 0.
+    The lines under a command are what it prints, and they are compared. That is how a
+    transcript shows a refusal: `$ cmd; echo "exit $?"` and, under it, the error and
+    `exit 1` — exit and output both checked. A command with no lines under it shows nothing
+    to compare, so a line there that keeps a failure from failing is reported like one in
+    a plain block.
+    """
+    steps, masked = [], []
+    for ln in lines:
+        if ln.startswith("$ "):
+            steps.append([ln[2:], []])
+        elif steps:
+            steps[-1][1].append(ln)
+    out = [f"set -e\n# {path} example {n}, a transcript: each command's output is compared with the lines under it",
+           '__bp_out="$(mktemp)"', "trap 'rm -f \"$__bp_out\"' EXIT"]
+    for cmd, shown in steps:
+        label = shlex.quote(f"{path} example {n}: `{cmd}`")
+        out.append(f"{{ {cmd}\n}} >\"$__bp_out\" 2>&1 || {{ __bp_rc=$?; cat \"$__bp_out\" >&2;"
+                   f" echo {label}\" exited $__bp_rc\" >&2; exit 1; }}")
+        if any(s.strip() for s in shown):
+            out.append(f"{shlex.quote(sys.executable)} -c {shlex.quote(_COMPARE)} \"$__bp_out\" {label}"
+                       " <<'__BLUEPRINT_SHOWN__'\n" + "\n".join(shown) + "\n__BLUEPRINT_SHOWN__")
+        elif masks_failure(cmd):
+            masked.append(cmd.strip())
+    return "\n".join(out), masked
 
 
 def _git_blob(root: str, head: str, path: str) -> str | None:
@@ -1046,7 +1132,8 @@ def _git_blob(root: str, head: str, path: str) -> str | None:
     return proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else None
 
 
-def task_spans(root: str, head: str, tasks: list, skel: dict | None = None) -> tuple[dict, dict, dict]:
+def task_spans(root: str, head: str, tasks: list, skel: dict | None = None,
+               intro: dict | None = None) -> tuple[dict, dict, dict]:
     """Where each task's hunks land in each existing file, in the stamped commit's lines.
 
     "Has this (modify) file changed since the stamp" is a question about a file, and two
@@ -1059,7 +1146,9 @@ def task_spans(root: str, head: str, tasks: list, skel: dict | None = None) -> t
     two share it. Returns ({path: stamped text}, {(task, path): [spans]}, {task: why}) for
     the tasks whose hunks could not be placed. Given `skel`, it also fills {(task, path):
     [lines]}, beside each span the lines the blueprint puts there — the declarations with
-    their marker bodies.
+    their marker bodies. Given `intro`, it fills {(task, path): (names, lines)}: the names the
+    task's lines bring into the file, outside comments and strings, that it did not hold, and
+    the lines it adds that use a name.
     """
     import difflib
     global _tree
@@ -1095,6 +1184,11 @@ def task_spans(root: str, head: str, tasks: list, skel: dict | None = None) -> t
                 if new == old[path]:
                     continue
                 a, b = old[path].split("\n"), new.split("\n")
+                if intro is not None:
+                    names, lines = intro.setdefault((tid, path), (set(), []))
+                    names.update(code_names(new, path) - code_names(old[path], path))
+                    have = set(a)
+                    lines += [x for x in b if x not in have and code_names(x, path)]
                 was, now = origin[path], []
                 for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
                     if tag == "equal":
@@ -1119,6 +1213,21 @@ def task_spans(root: str, head: str, tasks: list, skel: dict | None = None) -> t
 
 
 TRIVIAL_LINE = re.compile(r"^[\s{}()\[\];,]*$")
+
+# The names a piece of code uses, read past its comments and string literals: a marker's
+# message is prose, and its words are not code anyone was asked to write.
+HASH_COMMENTS = re.compile(r"\.(?:py|sh|bash|rb|ya?ml|toml|r|pl)$", re.I)
+_CODE_TOKEN = (r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|`(?:\\.|[^`\\])*`'
+               r"|/\*[\s\S]*?\*/|//[^\n]*|{hash}|(?P<name>[A-Za-z_$][\w$]*)")
+# Where `#` opens a comment it runs to the end of the line; elsewhere (`#private` in
+# JavaScript, `#include`) it is one character and the name after it is code.
+_HASH_TOKENS = re.compile(_CODE_TOKEN.format(hash="#[^\n]*"))
+_PLAIN_TOKENS = re.compile(_CODE_TOKEN.format(hash="#"))
+
+
+def code_names(text: str, path: str) -> set:
+    tokens = _HASH_TOKENS if HASH_COMMENTS.search(path) else _PLAIN_TOKENS
+    return {m.group("name") for m in tokens.finditer(text) if m.group("name")}
 
 
 def _widen(span: tuple, lines: list) -> tuple:
@@ -1177,7 +1286,8 @@ def _reach(a: list, b: list, i1: int, i2: int, j1: int, j2: int) -> tuple:
     return i1, i2
 
 
-def untouched_tasks(root: str, head: str, tasks: list, partial: dict | None = None) -> tuple[list, dict]:
+def untouched_tasks(root: str, head: str, tasks: list, partial: dict | None = None,
+                    moved: dict | None = None) -> tuple[list, dict]:
     """[(task, path)] whose every span still reads as the stamped commit had it, and {task: why} not measured.
 
     Given `partial`, it also fills {(task, path): (spans met, spans)} for a task some of
@@ -1185,8 +1295,20 @@ def untouched_tasks(root: str, head: str, tasks: list, partial: dict | None = No
     hunks and --done passed, because one moved span is enough to call the task touched.
     That is not proof of missing work — a hunk's code can be typed a few lines away from
     the line its marker sat on — so the count is reported, not failed.
+
+    Given `moved`, a task whose spans all read as stamped but whose lines bring names into
+    the file, every one of which the file now has, goes there as {(task, path): names}
+    instead of into the list: its code is in the file, somewhere other than where the
+    blueprint put it. A finished tree whose three CLI branches sat in another order, and
+    whose import was split in two, failed --done for two of the three tasks (R21 d5). A
+    task that brings no name — a marker comment over existing code — is still judged by
+    its lines alone; a never-started guard reads exactly like that. Names are not enough on
+    their own: a task whose one code line destructured `since` and `until` was never typed,
+    and a helper beside it used both names (R20 d1b). So each code line the task adds must be
+    in the file as written, whitespace aside, unless it is an import, whose names are enough.
     """
-    files, spans, unplaced = task_spans(root, head, tasks)
+    intro: dict = {}
+    files, spans, unplaced = task_spans(root, head, tasks, intro=intro if moved is not None else None)
     out = []
     for (tid, path), sps in spans.items():
         if tid in unplaced or not os.path.isfile(os.path.join(root, path)):
@@ -1196,10 +1318,21 @@ def untouched_tasks(root: str, head: str, tasks: list, partial: dict | None = No
         changes = _changes(files[path], "\n".join(current))
         met = sum(1 for s in sps if any(_spans_meet(s, _reach(lines, current, *c, *cur), lines) for c, cur in changes))
         if not met:
+            names, added = intro.get((tid, path), (set(), []))
+            text = "\n".join(current)
+            if moved is not None and names and names <= code_names(text, path) and _lines_there(added, current):
+                moved[(tid, path)] = sorted(names)
+                continue
             out.append((tid, path))
         elif partial is not None and met < len(sps):
             partial[(tid, path)] = (met, len(sps))
     return out, unplaced
+
+
+def _lines_there(added: list, current: list) -> bool:
+    """Is each added line in `current` as written, whitespace aside, or an import?"""
+    there = {" ".join(x.split()) for x in current}
+    return all(IMPORTS.match(x) or " ".join(x.split()) in there for x in added)
 
 
 # A line that declares a name: a function, a class or a type, a bound const, a method.
@@ -1378,11 +1511,14 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
     doc_runs: dict[str, str] = {}
     doc_missing: set[str] = set()
     doc_unmeasured = []
+    doc_masked: dict[str, list] = {}
     for tid, section in run_tasks:
         scripts, problems = doc_example_scripts(root, stamped_head(bp), section)
-        for path, script in scripts:
+        for path, script, masked in scripts:
             task_cmds[tid].append(script)
             doc_runs[script] = path
+            if masked:
+                doc_masked[script] = masked
         for path, why in problems:
             if why.startswith("not measured"):
                 doc_unmeasured.append(f"{tid} {path}: {why}")
@@ -1430,18 +1566,23 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         passed_tasks, failed_tasks = set(), set()
         code_of: dict[str, int] = {}
         header_code = None
-        # Which of the feature's files each command ran. A failure is reported against the
-        # task whose command saw it, and in guide mode that is seldom where the defect is: a
-        # library task's lines were wrong and its own cases passed, while the CLI task and a
-        # test task that run the library went red. Which files a command reads is a fact
-        # about the run, not a guess from the Dependencies line or from sharing a file.
+        # Which of the feature's files a test task's command ran. The probes below take the
+        # `**Dependencies**` line as the test's target only where the test read a file that
+        # target writes: an honest library test whose line named the CLI task was reported
+        # blind to it. Only test tasks' commands are traced; nothing else reads the result.
         writers: dict[str, list[str]] = {}
         for tid, section in run_tasks:
             for p, k in file_kinds(section):
                 if k in ("new", "modify") and tid not in writers.setdefault(p, []):
                     writers[p].append(tid)
-        traced = bool(writers) and reads_recorded(os.path.dirname(tree))
+        testers_of = {tid for tid, section in run_tasks if test_files(section)}
+        traced = bool(writers) and bool(testers_of) and reads_recorded(os.path.dirname(tree))
         ran: dict[str, set] = {}
+        # Which oracle cases each command ran, and how each ended. A case is the unit a red
+        # result can be stated about; a task is only the one whose Verification lists it.
+        cases_of: dict[str, list] = {}
+        case_state: dict[tuple, str] = {}
+        stopped_on: dict[str, tuple | None] = {}
         for cmd in order:
             who = owners[cmd]
             labels = list(who)
@@ -1454,11 +1595,19 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                 display += f" (+{len(display_lines) - 1} script line(s))"
             if cmd in doc_runs and doc_tree is None:
                 doc_tree = copy_tree(root)
-            armed = arm_reads(tree, writers) if traced and cmd not in doc_runs else None
-            code, tail = _run_one(cmd, doc_tree if cmd in doc_runs else tree)
+            armed = (arm_reads(tree, writers) if traced and cmd not in doc_runs and testers_of & set(who)
+                     else None)
+            code, tail, text = _run_one(cmd, doc_tree if cmd in doc_runs else tree, full=True)
             if armed is not None:
                 ran[cmd] = reads_since(tree, armed)
             code_of[cmd] = code
+            cases_of[cmd] = oracle_cases(cmd) if cmd not in doc_runs else []
+            if cases_of[cmd]:
+                passed_cases, stopped_on[cmd] = case_results(cases_of[cmd], code, text)
+                for case in passed_cases:
+                    case_state.setdefault(case, "passed")
+                if stopped_on[cmd] is not None:
+                    case_state[stopped_on[cmd]] = "red"
             if include_header and cmd == test_cmd:
                 header_code = code
             if code == 0:
@@ -1650,62 +1799,105 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                             restore()
                 finally:
                     shutil.rmtree(part, ignore_errors=True)
-        behind = blocked_by(run_tasks, own_fail | shared_fail)
-        own_blocked = {t for t in own_fail if t in behind}
+        # What is red, stated about what ran: each red oracle case, and each failed command
+        # that names no case, with every task whose Verification runs it. The tasks own the
+        # result; none of them is thereby where the defect is. Four rounds placed defects by
+        # task — the task whose command failed, the dependency it failed "behind", the files
+        # it read that other tasks wrote — and each round's controls found a new way for that
+        # to name clean code: with three tasks in one file, the failed task was the defect's
+        # in none of eight controls, and a defective task was excused as failing behind a
+        # clean one (R21 s03).
+        task_owners: dict[tuple, list] = {}
+        header_owned: set = set()
+        for cmd in order:
+            for case in cases_of.get(cmd, []):
+                bucket = task_owners.setdefault(case, [])
+                bucket += [t for t in owners[cmd] if t not in bucket]
+                if include_header and cmd == test_cmd:
+                    header_owned.add(case)
+        red_units: list = []
+        for cmd in order:
+            if not code_of.get(cmd):
+                continue
+            hit = stopped_on.get(cmd)
+            unit = ("case", hit) if hit is not None else ("command", cmd)
+            if unit not in red_units:
+                red_units.append(unit)
+        def unit_owners(unit) -> list:
+            return task_owners.get(unit[1], []) if unit[0] == "case" else list(owners[unit[1]])
         # A test that passes while the task it tests fails did not see what is wrong there:
         # a reviewer's test that only parsed the command's output as JSON passed beside a
-        # statement command that printed `{}`, and was counted as the task's proof. A target
-        # red only behind its own red dependency is not held against the test: what is wrong
-        # there cannot be told apart from what is wrong in the dependency.
-        red = (own_fail - own_blocked) | shared_fail
+        # statement command that printed `{}`, and was counted as the task's proof. "Fails"
+        # means a red case that task alone owns. A case several tasks own — a compatibility
+        # case every task that could break it runs — is red for a reason that can be any of
+        # theirs: held against the tests of each, it took seven honest tests out of the
+        # count in R21 and kept two weak ones in, among them a test that did what its task's
+        # Why said and left unchanged transfers to that shared case.
+        sole_red = {unit_owners(u)[0] for u in red_units if len(unit_owners(u)) == 1}
+        # A target red with a red task among its own dependencies, at any depth, is not held
+        # against its test: the red can be what it ran of theirs, and which it is cannot be
+        # read off the run. Without this, R20 m1a and m1b (defect in T005's library) and R21
+        # s04 (defect in T004's parser) each took an honest CLI test out of the count. It
+        # says nothing about where the defect is, and nothing is printed for it.
+        red_tasks = own_fail | shared_fail
+        deps_of = {t: [(t.rsplit("/", 1)[0] + "/" if "/" in t else "") + d for d in dependencies(sec)]
+                   for t, sec in run_tasks}
+        for t in list(sole_red):
+            seen, stack = set(), list(deps_of.get(t, []))
+            while stack:
+                d = stack.pop()
+                if d in seen or d == t:
+                    continue
+                seen.add(d)
+                if d in red_tasks:
+                    sole_red.discard(t)
+                    break
+                stack.extend(deps_of.get(d, []))
         target_red: dict[str, list[str]] = {}
         for tid in sorted(own_pass):
             if not test_files(sections[tid]):
                 continue
             prefix = tid.rsplit("/", 1)[0] + "/" if "/" in tid else ""
             seen = ran_by(tid)
-            bad = [short(prefix + d) for d in dependencies(sections[tid]) if prefix + d in red
+            bad = [short(prefix + d) for d in dependencies(sections[tid]) if prefix + d in sole_red
                    and (seen is None or {p for p, k in file_kinds(sections[prefix + d]) if k in ("new", "modify")} & seen)]
             if bad:
                 target_red[tid] = bad
-        task_passed = own_pass - non_discriminating - set(weak_against) - set(target_red)
+        # An example that cannot fail is not a passing example, and the documentation task
+        # it belongs to is not counted as passed on it. The run's exit stays the commands'.
+        masked_runs = [c for c in order if c in doc_masked and code_of.get(c) == 0]
+        masked_tasks = {t for c in masked_runs for t in owners[c]}
+        task_passed = own_pass - non_discriminating - set(weak_against) - set(target_red) - masked_tasks
         print("  Task proof — what each task's own Verification measured:")
         if task_passed:
             print(f"    Task-specific command results passed: {_ids(task_passed)}")
         if discriminating - set(weak_against) - set(target_red):
             print(f"    Test tasks red on the blueprint's skeleton and green here (the test discriminates): {_ids(discriminating - set(weak_against) - set(target_red))}")
-        if own_fail - own_blocked:
-            print(f"    Task-specific command results failed: {_ids(own_fail - own_blocked)}")
-            # A failure is reported where it was observed. "A passed dependency wrote the
-            # same file" named the right task twice in one round and, the next round, the
-            # wrong one every time it spoke: the defect sat in the failing task's own lines
-            # and the line pointed at its neighbour in the file, while every library defect
-            # seen from the CLI went unnamed. What the failed command ran is measured; the
-            # files it ran that other tasks wrote are where else the defect can be.
-            if not traced:
-                print("    Code the failed commands ran: not measured — this file system does not record reads")
-            else:
-                passed_any = own_pass | shared_pass
-                hints = []
-                for tid in sorted(own_fail - own_blocked):
-                    mine = {p for p, k in file_kinds(sections[tid]) if k in ("new", "modify")}
-                    seen = set().union(*(ran.get(c, set()) for c in task_cmds[tid] if code_of.get(c)))
-                    others = []
-                    for path in sorted(seen - mine):
-                        who = [w for w in writers.get(path, []) if w != tid]
-                        if who:
-                            others.append(f"{path} ({', '.join(short(w) + ('' if w in passed_any else ' red') for w in who)})")
-                    if others:
-                        hints.append(f"{short(tid)} ran {', '.join(others)}")
-                if hints:
-                    print("    Code other tasks wrote that the failed commands ran — the defect can be there as well as"
-                          " in the failed task's own lines: " + "; ".join(hints[:6])
-                          + (f" (+{len(hints) - 6} more)" if len(hints) > 6 else ""))
-        if own_blocked:
-            print("    Task-specific command results failed behind a failed dependency (not separable from it): "
-                  + ", ".join(f"{t} <- {'/'.join(d.rsplit('/', 1)[-1] for d in behind[t])}"
-                              for t in sorted(own_blocked)[:12])
-                  + (f" (+{len(own_blocked) - 12} more)" if len(own_blocked) > 12 else ""))
+        if red_units:
+            # A task is named by its id alone unless another feature's task has the same id.
+            bare = [short(t) for t, _section in run_tasks]
+
+            def owned_by(unit) -> str:
+                who = [short(t) if bare.count(short(t)) == 1 else t for t in unit_owners(unit)]
+                if unit[0] == "case" and unit[1] in header_owned:
+                    who.append("**Test** header")
+                elif unit[0] == "command" and include_header and unit[1] == test_cmd:
+                    who.append("**Test** header")
+                return ", ".join(who) or "no task"
+
+            def shown(cmd: str) -> str:
+                lines = cmd.splitlines()
+                first = lines[1] if lines[0] == "set -e" and len(lines) > 1 else lines[0]
+                return first + (f" (+{len(lines) - 1} line(s))" if len(lines) > 1 else "")
+
+            rows = [f"{u[1][1]} ({u[1][0]}): {owned_by(u)}" if u[0] == "case"
+                    else f"$ {shown(u[1])}: {owned_by(u)}" for u in red_units]
+            print(f"    Red: {len(red_units)} — each oracle case a command stopped on, and each failed command that"
+                  " names no case, with the tasks whose Verification runs it:")
+            for row in rows[:12]:
+                print(f"      {row}")
+            if len(rows) > 12:
+                print(f"      (+{len(rows) - 12} more)")
         n_shared = len({c for c in shared if set(owners[c]) & (shared_pass | shared_fail)})
         if shared_pass:
             print(f"    Shared command results passed ({n_shared} command(s) claimed by several tasks;"
@@ -1722,6 +1914,13 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
         if set(doc_runs) - doc_missing:
             print(f"  Documentation examples: {len(set(doc_runs) - doc_missing)} shell block(s) run as the document on disk has them"
                   f" ({', '.join(sorted(set(doc_runs.values())))}), in order, in a copy apart from the other commands")
+        if masked_runs:
+            record("warn", f"{len(masked_runs)} documentation example block(s) keep a failing command from failing"
+                   " the block, so they are not counted as passing examples, and their tasks are not counted as"
+                   f" passed: {_ids(masked_tasks)}",
+                   "\n".join(f"{doc_runs[c]}: {line}" for c in masked_runs[:4] for line in doc_masked[c][:2])
+                   + "\nshow a refusal in a ```console transcript instead: `$ cmd; echo \"exit $?\"` with the"
+                   " error and `exit N` on the lines under it, which are compared", always=True)
         if doc_unmeasured:
             record("warn", f"{len(doc_unmeasured)} documentation file(s) promise runnable examples that were not run",
                    "\n".join(doc_unmeasured[:4]), always=True)
@@ -1780,18 +1979,19 @@ def run_verifications(root: str, tasks: list, bp: str, keep: bool,
                    "\n".join(unexercised[:8]) + (f"\n(+{len(unexercised) - 8} more)" if len(unexercised) > 8 else ""),
                    always=True)
         print(f"  Proof summary: commands passed {n_pass}/{len(order)}; task-specific {len(task_passed)} passed,"
-              f" {len(own_fail)} failed ({len(own_blocked)} behind a failed dependency);"
+              f" {len(own_fail)} failed;"
               f" test tasks non-discriminating {len(non_discriminating)}, not measured {len(undiscriminated)};"
               f" shared-only {len(shared_pass) + len(shared_fail)};"
               f" human evidence supplied {len(supplied)}, not supplied {len(missing) + len(stale) + len(invalid)};"
               f" no command {len(silent)}; test files unmeasured {len(unexercised)};"
               f" test tasks blind to their target {len(weak_against)}; test tasks green while their target is red"
-              f" {len(target_red)}")
+              f" {len(target_red)}; documentation examples masking a failure {len(masked_runs)}")
         print("  Behavior claim: declared command results only; semantic acceptance depends on their assertions.")
-        print("  Task lines are hints, not proof of where a defect is: a failure is reported against the task"
-              " whose command saw it, and that command ran other tasks' code too.")
+        print("  Ownership is not location: a task owns a case because its Verification runs it, and a red case"
+              " runs code other tasks wrote too. Nothing here says which task's code is wrong.")
         print("  Exit status reflects command results and missing proof only; shared-only, human,"
-              " non-discriminating, blind-to-target, green-while-target-red and unmeasured-test rows above do not change it.")
+              " non-discriminating, blind-to-target, green-while-target-red, masked-example and unmeasured-test rows"
+              " above do not change it.")
         if partial:
             print("  Partial --through selection: future tasks and complete feature behavior are unverified.")
         elif failures or selected_silent and not (include_header and header_scope == "feature"):
@@ -1895,6 +2095,8 @@ def main() -> int:
         print("  --verify           run every task's **Verification** command against YOUR tree; alone, does not apply")
         print("  --verbose          print the per-task line for every task, not just the failures")
         print("  --through T0NN     limit application, or --verify commands, to that task — a build bisector")
+        print("  --show-final PATH  print PATH as the stamped commit had it with every task (through --through)")
+        print("                     applied — the file a consolidated appendix would show, made from the document")
         print("\nExit 0 applied cleanly, 1 a task or the build failed, 2 feature directory not resolved or")
         print("     not in the repository root's specs/ (a copy without its own .git),")
         print("     3 the tree has moved past the stamp so the build failure says nothing about the document.")
@@ -1930,10 +2132,24 @@ def main() -> int:
             through = a.split("=", 1)[1].strip()
         elif a == "--through" and i + 1 < len(argv):
             through = argv[i + 1].strip()
+    # --show-final PATH: the file as the document leaves it. A consolidated appendix in the
+    # blueprint was measured byte for byte equal to the stamped file with every hunk
+    # applied (R21, 488 of 1,424 lines); nothing read it, and it carried every existing body
+    # into a guide-mode document. The file is made from the document instead, on demand.
+    show_final = None
+    for i, a in enumerate(argv):
+        if a.startswith("--show-final="):
+            show_final = a.split("=", 1)[1].strip()
+        elif a == "--show-final":
+            show_final = argv[i + 1].strip() if i + 1 < len(argv) else ""
+    if show_final == "":
+        print("ERROR: --show-final takes a path the blueprint writes, like src/cli.js")
+        return 2
     KNOWN = {"--build", "--keep", "--require-anchors", "--scaffold", "--verify", "--verbose",
-             "--through", "--verify-scope"}
+             "--through", "--verify-scope", "--show-final"}
     unknown = [a for a in argv
-               if a.startswith("-") and a not in KNOWN and not a.startswith("--through=") and not a.startswith("--verify-scope=")]
+               if a.startswith("-") and a not in KNOWN and not a.startswith("--through=") and not a.startswith("--verify-scope=")
+               and not a.startswith("--show-final=")]
     if unknown:
         # A typo in --build looked like a run that simply chose not to build.
         print(f"{RED}ERROR: unknown option(s): {' '.join(unknown)}{NC}")
@@ -1945,6 +2161,8 @@ def main() -> int:
         # be named "feature" or "all".
         scope_values = {i + 1 for i, a in enumerate(argv) if a == "--verify-scope"}
         args = [a for i, a in enumerate(argv) if not a.startswith("--") and i not in scope_values]
+    if show_final is not None:
+        args = [a for a in args if a != show_final]
     if through is not None:
         args = [a for a in args if a != through]
         if not re.fullmatch(r"T\d+", through):
@@ -1994,6 +2212,26 @@ def main() -> int:
         tasks = tasks[: cut + 1]
     _stamped_head = stamped_head(bp)
     _root = root
+    if show_final is not None:
+        declared = {p for _tid, sec in tasks for p, _k in file_kinds(sec)}
+        if show_final not in declared:
+            print(f"ERROR: --show-final {show_final}: no task of this blueprint writes that path"
+                  + (f" (it writes {', '.join(sorted(declared)[:8])})" if declared else ""), file=sys.stderr)
+            return 2
+        final, why = skeleton_tree(root, bp, tasks)
+        if final is None:
+            print(f"ERROR: --show-final: {why}", file=sys.stderr)
+            return 2
+        try:
+            full = os.path.join(final, show_final)
+            if not os.path.isfile(full):
+                print(f"ERROR: --show-final: the document leaves no {show_final} (a delete, or no content)", file=sys.stderr)
+                return 2
+            with open(full, "rb") as f:
+                sys.stdout.buffer.write(f.read())
+            return 0
+        finally:
+            shutil.rmtree(final, ignore_errors=True)
 
     print(f"{CYAN}=== Blueprint Applier {SCRIPT_VERSION} ==={NC}")
     print(f"Feature: {os.path.relpath(feature_dir, root)}")

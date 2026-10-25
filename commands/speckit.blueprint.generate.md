@@ -213,7 +213,7 @@ what should be independently functional/testable at this point}
 
 ## Open Questions
 
-> Only include this section when the artifacts left something undetermined. Omit it entirely when they did not.
+> Always keep this section. When the artifacts left nothing undetermined, write `None.` and one sentence on what you checked — `validate_blueprint.py` [11] warns when the section is missing, because a missing section and "the generator had none" look the same.
 
 | # | Undecided | Blocks | Blocking? | Who can answer |
 |---|-----------|--------|-----------|----------------|
@@ -456,7 +456,28 @@ CLI not" and "nothing done" print the same; named cases print which contract is 
   block that exits non-zero, or a document that has none, fails the task. Do not restate the
   commands in the Verification: a restated copy keeps passing after the README's own example
   breaks. A usage synopsis with placeholders (`--file PATH`) is not runnable; put it in a
-  ```` ```text ```` fence or inline, never a shell fence. Keep only
+  ```` ```text ```` fence or inline, never a shell fence.
+  **Show a refused command as a transcript, never behind `|| echo`.** A plain block's commands
+  must succeed. A command the reader should see fail goes in a ```` ```console ```` block:
+  `$ ` before the command, ending it with `; echo "exit $?"`, and under it the exact lines it
+  prints, the error and `exit 1` included. `--verify` compares every line under a `$ ` command
+  with what the command printed (stdout and stderr together), so the example proves the
+  refusal, its message and its exit. Pin what would vary (`LEDGER_NOW=…`, a fixture file) so
+  the lines are exact. Never write `|| echo "exit $?"`, `|| true`, `; true`, `set +e` or `$?` in
+  a plain block: they make the block end 0 whatever the command did, and `--verify` reports such
+  a block as masking a failure and does not count the task as passed. Measured: a mistyped flag
+  (`--too`) behind `|| echo` exited 0 as a usage error, and a removed guard printed a success
+  where the README promised a refusal, and both blocks passed.
+
+  ````markdown
+  ```console
+  $ node bin/ledger.js transfer --file examples/freeze-ledger.json --request n-001 --from alice --to carol --amount 50; echo "exit $?"
+  {"error":"ACCOUNT_FROZEN","message":"account frozen: carol"}
+  exit 1
+  ```
+  ````
+
+  Keep only
   judgement for a line that **starts with** `Human review:` — nothing on that line is run,
   even a backticked example. The reviewer records the result in the feature's
   `human-evidence.md` (`T011: <reviewer> <YYYY-MM-DD> README.md@<git hash-object>`); until
@@ -594,7 +615,8 @@ What no script can check, and what you must therefore check yourself before fina
 - **Case owners**: every oracle case belongs to the task that writes the code it runs.
 - **Documentation examples**: every command a documentation After shows runs, as written, against
   files the repository holds. Runnable ones sit in a shell fence, which `--verify` runs from the
-  document on disk; synopses with placeholders sit in a `text` fence.
+  document on disk; synopses with placeholders sit in a `text` fence. A refusal is a `console`
+  transcript with its exact output and `exit N` under it — no `|| echo`, `|| true` or `set +e`.
 - **Time zones**: every case that checks a date or time rule pins `TZ` in a child process, on
   both sides of UTC.
 - **Rejected alternatives**: test each adopted decision against every reason the Key Decisions
@@ -609,6 +631,17 @@ What no script can check, and what you must therefore check yourself before fina
   in a marker is code advice, so it must pass the oracle's boundary cases: "use only the UTC
   constructor" sent the implementer to `Date.UTC`, which reads years 0–99 as 1900–1999 and
   rejects the `0001-01-01` the oracle accepts.
+- **Adopted options against the rejection reasons**: for each Key Decision, read every reason
+  the table gives for rejecting an alternative and ask whether the option you adopted has that
+  property too — not only whether the rejected one comes back. Where it does, the decision is
+  not settled: write an Open Questions row naming the decision, the reason and the way the
+  adopted option meets it, mark it blocking for the tasks that implement it, and do not paper
+  over it with a marker or a sentence. Measured three rounds running, and found each time only
+  when a reviewer filled the review table by hand: `--on DATE` rejected because the caller
+  picks the day, then `LEDGER_NOW` adopted, which lets the caller pick the day (the same
+  variable dated a freeze 2001-01-01 and 2099-12-31 a year later); `FREEZE_CONFLICT` adopted so
+  that a retry cannot rewrite who froze an account and why, beside an `unfreeze` that deletes
+  the entry, so `unfreeze` then `freeze` rewrites the reason with no trace.
 - **Test targets**: a test-writing task's `**Dependencies**` names the task whose code its
   test exercises, and nothing else. `--verify` reverts that task's regions alone and expects the
   test to go red; a test of the library whose line names the CLI task, or a compatibility test
@@ -637,7 +670,7 @@ The rules that live in a Step are stated there once and not again here: no place
 
 - **Mirror tasks.md structure**: Phases, ordering, `[P]` markers, `[US#]` story labels, and Checkpoint lines come from `tasks.md` verbatim. The blueprint adds content and rationale — it never reorganizes the plan.
 - **Read before generating**: Before generating content that calls or references existing modules/files, read their actual signatures and APIs from disk. Never assume interface shapes — verify against actual implementation to prevent mismatched names, parameters, or contracts.
-- **Final version for multi-modified files**: If a file is modified 3 or more times across different phases, include a final consolidated version of the complete file as an appendix at the end of its last phase.
+- **No consolidated file appendix.** Do not copy a whole file into the document after the tasks that modify it. Such an appendix is the stamped file with every hunk applied, byte for byte — measured, 488 of a 1,424-line guide blueprint, read by no tool and by neither implementer — and in guide mode it reprints every existing body the hunks were written to avoid quoting. Whoever wants the file as the document leaves it makes it: `apply_blueprint.py specs/NNN-feature --show-final src/cli.js` prints it, `--through T006` stops after that task. When hunks are hard to place, say so in the task's Why ("three hunks; type them bottom-to-top") instead.
 - **Dependency completeness**: When a task introduces new dependencies between modules, packages, or external libraries, include all necessary build/dependency configuration changes (build manifests, dependency declarations, module registrations) as explicit content blocks in the relevant task.
 - **ZERO SECRETS**: `blueprint.md` and any files created on disk must NEVER contain real or realistic-looking secrets, passwords, API keys, tokens, or connection strings. Use obviously fake placeholders. For environment/config files with sensitive values, always use placeholder values and note that real values must be configured separately.
 - **Configuration completeness**: When generated content references environment variables, config keys, or external service endpoints, the blueprint MUST include a corresponding configuration file change listing every new variable with a placeholder value and a comment explaining its purpose.

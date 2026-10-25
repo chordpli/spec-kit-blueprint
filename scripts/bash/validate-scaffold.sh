@@ -1167,6 +1167,7 @@ if [[ "$DONE" == true ]]; then
                 TASK_UNTOUCHED=()
                 TASK_UNPLACED=()
                 TASK_PARTIAL=()
+                TASK_MOVED=()
                 while IFS=$'\t' read -r kind tid path count; do
                     [[ -n "$kind" ]] || continue
                     if [[ "$kind" == untouched ]]; then
@@ -1177,11 +1178,24 @@ if [[ "$DONE" == true ]]; then
                         TASK_UNPLACED+=("$tid")
                     elif [[ "$kind" == partial ]]; then
                         TASK_PARTIAL+=("$tid ($path $count)")
+                    elif [[ "$kind" == moved ]]; then
+                        TASK_MOVED+=("$tid ($path: $count)")
                     fi
                 done <<< "$TASK_ROWS"
                 if [[ ${#TASK_UNTOUCHED[@]} -gt 0 ]]; then
                     fail "${#TASK_UNTOUCHED[@]} (modify) task(s) left every line their hunks change as HEAD $STAMP had it, in a file other tasks changed: $(printf '%s, ' "${TASK_UNTOUCHED[@]}" | sed 's/, $//')"
                     echo "      The file moved because of another task's work; these tasks' parts of it did not."
+                fi
+                # Where a hunk's code goes is the generator's suggestion. A finished tree with
+                # its three CLI branches in another order and its import split in two failed
+                # here for two tasks whose code was all in the file (R21 d5). A task whose
+                # lines bring names into the file, every one of which the file now has, wrote
+                # its code somewhere else: a warning, when each code line it adds is in the
+                # file as written or is an import (R20 d1b). A task that brings no name — a marker
+                # over existing code — has nothing to look for, and a guard never started
+                # reads exactly like that, so it still fails above.
+                if [[ ${#TASK_MOVED[@]} -gt 0 ]]; then
+                    warn "${#TASK_MOVED[@]} (modify) task(s) left their hunks' lines as HEAD $STAMP had them, and every name their lines bring is in the file elsewhere — placed differently, not missing: $(printf '%s, ' "${TASK_MOVED[@]}" | sed 's/, $//')"
                 fi
                 # A count, not a verdict. A reviewer typed one of a task's three hunks and
                 # this passed; but on every finished tree of the same feature two tasks read
