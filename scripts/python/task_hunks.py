@@ -13,6 +13,11 @@ verdict — a hunk can be typed a few lines from where its marker sat):
 
     partial<TAB>T002<TAB>src/ledger.js<TAB>1/3
 
+one row per task whose every region reads as stamped while every name its lines bring
+into the file is there, somewhere else (its code moved, not missing — a warning):
+
+    moved<TAB>T005<TAB>src/cli.js<TAB>unfreezeAccount
+
 and one row per task whose hunks could not be placed on the stamped files (not measured):
 
     unplaced<TAB>T006<TAB>why
@@ -43,11 +48,14 @@ def main() -> int:
         print(f"cannot read {bp_path}: {exc}", file=sys.stderr)
         return 2
     partial: dict = {}
-    untouched, unplaced = apply_blueprint.untouched_tasks(root, head, split_tasks(bp), partial)
+    moved: dict = {}
+    untouched, unplaced = apply_blueprint.untouched_tasks(root, head, split_tasks(bp), partial, moved)
     for tid, path in untouched:
         print(f"untouched\t{tid}\t{path}")
     for (tid, path), (met, total) in partial.items():
         print(f"partial\t{tid}\t{path}\t{met}/{total}")
+    for (tid, path), names in moved.items():
+        print(f"moved\t{tid}\t{path}\t{' '.join(names)}")
     for tid, why in unplaced.items():
         print(f"unplaced\t{tid}\t{why}")
     return 0
