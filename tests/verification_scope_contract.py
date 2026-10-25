@@ -47,7 +47,7 @@ class ScopeContracts(unittest.TestCase):
         rc, out = self.run_gate(b, base=a)
         self.assertEqual(rc, 1)
         self.assertIn('results passed: specs/a/T001', out)
-        self.assertIn('results failed: specs/b/T001', out)
+        self.assertIn('      $ python3 b.py: specs/b/T001\n', out)
         self.assertIn('Selected task proof: 1 covered; 0 without runnable commands', out)
         self.assertIn('Base task proof: 1 covered; 0 without runnable commands', out)
 
@@ -360,16 +360,25 @@ class CalcTest(unittest.TestCase):
             rc, out = self.calc_repo(root, 'x * 2', 'self.assertTrue(True)', extra=('--through', 'T002'))
             self.assertIn('test tasks non-discriminating 0, not measured 1', out)
 
-    def test_red_test_task_behind_a_red_dependency_is_not_its_own_failure(self):
-        # R18 guru: a finished test task was reported failed because the code it tests was.
+    BLAME = ('behind a failed dependency', 'Code other tasks wrote', 'hints, not proof',
+             'Task-specific command results failed', 'the defect can be there')
+
+    def test_red_commands_are_listed_with_their_owners_and_nobody_is_blamed(self):
+        # R18 guru: a finished test task was reported failed because the code it tests was;
+        # R21 guru s03: the defective task was excused as failing "behind" a clean one. The
+        # output says which commands are red and whose they are, and stops there.
         with tempfile.TemporaryDirectory() as root:
             rc, out = self.calc_repo(root, 'x * 3', 'self.assertEqual(double(3), 6)')
             self.assertEqual(rc, 1, out)
-            self.assertIn('Task-specific command results failed: specs/020-calc/T001\n', out)
-            self.assertIn('failed behind a failed dependency (not separable from it): specs/020-calc/T002 <- T001', out)
-            self.assertIn('2 failed (1 behind a failed dependency)', out)
-        self.assertEqual(applier.blocked_by([('a/T001', ''), ('a/T002', '**Dependencies**: T001')],
-                                            {'a/T002'}), {})
+            self.assertIn('    Red: 2 — each oracle case a command stopped on, and each failed command that names'
+                          ' no case, with the tasks whose Verification runs it:\n'
+                          '      $ python3 -c "from pkg.calc import double; assert double(2) == 4": T001\n'
+                          '      $ python3 -m unittest tests.test_calc: T002\n', out)
+            self.assertIn('task-specific 0 passed, 2 failed; test tasks', out)
+            self.assertIn('Ownership is not location', out)
+            for phrase in self.BLAME:
+                self.assertNotIn(phrase, out)
+        self.assertFalse(hasattr(applier, 'blocked_by'))
 
     def test_human_evidence_is_tied_to_the_bytes_reviewed(self):
         section = '**File**: `README.md` (modify)\n\n**Verification**: Human review: reads well.'
@@ -654,10 +663,9 @@ class CalcTest(unittest.TestCase):
             Path(root, 'tests/test_calc.py').write_text('import unittest\n')
             rc, out = self.verify_feature(root)
             self.assertEqual(rc, 1, out)
-            self.assertIn('Task-specific command results failed: specs/022-two/T002\n', out)
-            self.assertNotIn('Observed there', out)
-            self.assertNotIn('Code other tasks wrote that the failed commands ran', out)
-            self.assertIn('Task lines are hints, not proof of where a defect is', out)
+            self.assertIn('      $ python3 -c "from pkg.calc import scale; assert scale(3, 2) == 6": T002\n', out)
+            for phrase in self.BLAME + ('Observed there',):
+                self.assertNotIn(phrase, out)
 
     LAYERS_BP = ("# Blueprint: layers\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
                  "### T001: Halve in the library\n\n**File**: `pkg/lib.py` (new)\n\n"
@@ -668,23 +676,21 @@ class CalcTest(unittest.TestCase):
                  "    raise NotImplementedError(\"T002: return halve(n)\")\n```\n\n"
                  "**Verification**: `python3 -c \"from pkg.cli import main; assert main(5) == 2.5\"`\n")
 
-    def test_failure_names_the_files_its_command_ran_that_other_tasks_wrote(self):
-        # R20 guru m2a/m2c: the library task's lines were wrong and its own case passed; the
-        # CLI task that runs the library went red, and nothing pointed at the library.
+    def test_a_red_command_names_its_owner_not_the_code_it_ran(self):
+        # R20 guru m2a/m2c, R21 guru (0 of 12): the library's lines were wrong and the CLI
+        # task's command went red. Neither the CLI task nor a list of files its command read
+        # is where the defect is; the output names the red command and the task that owns it.
         with tempfile.TemporaryDirectory() as root:
             self.stamped_repo(root, {'pkg/__init__.py': ''}, self.LAYERS_BP)
             Path(root, 'pkg/lib.py').write_text('def halve(x):\n    return x // 2\n')
             Path(root, 'pkg/cli.py').write_text('from pkg.lib import halve\n\n\ndef main(n):\n    return halve(n)\n')
             rc, out = self.verify_feature(root)
             self.assertEqual(rc, 1, out)
-            self.assertIn('Task-specific command results failed: specs/022-two/T002\n', out)
-            self.assertIn('Code other tasks wrote that the failed commands ran — the defect can be there as well as'
-                          " in the failed task's own lines: T002 ran pkg/lib.py (T001)", out)
-            # The library's own case red: it ran only its own file, and nothing is named.
-            Path(root, 'pkg/lib.py').write_text('def halve(x):\n    return x\n')
-            rc, out = self.verify_feature(root)
-            self.assertIn('Task-specific command results failed: specs/022-two/T001\n', out)
-            self.assertNotIn('Code other tasks wrote', out)
+            self.assertIn('      $ python3 -c "from pkg.cli import main; assert main(5) == 2.5": T002\n', out)
+            self.assertNotIn('pkg/lib.py (T001)', out)
+            for phrase in self.BLAME:
+                self.assertNotIn(phrase, out)
+        # The reads of a test task's command are still traced: the probes use them.
         with tempfile.TemporaryDirectory() as where:
             self.assertTrue(applier.reads_recorded(where))
             Path(where, 'a.py').write_text('x = 1\n')
@@ -797,9 +803,9 @@ class CalcTest(unittest.TestCase):
                           ' wrong there, so they are not counted as passed: specs/020-calc/T002 <- T001', out)
             self.assertIn('task-specific 0 passed, 1 failed', out)
             self.assertIn('test tasks green while their target is red 1', out)
-        # A target red only behind its own red dependency: what is wrong there cannot be
-        # told from the dependency, so it is not held against the test (R20 m1a: T005 red,
-        # T006 behind it, and T008, its test, was flagged).
+        # A target red beside a red dependency of its own is not held against its test: the
+        # red can be what it ran of the dependency's (R20 m1a and m1b, R21 s04: an honest CLI
+        # test taken out of the count for a library's defect). Nothing names a culprit.
         bp = self.CALC_BP.replace('### T002: Test doubling', (
             '### T003: Base\n\n**File**: `pkg/base.py` (new)\n\n```python\ndef ok():\n'
             '    raise NotImplementedError("T003: say yes")\n```\n\n'
@@ -808,8 +814,8 @@ class CalcTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             rc, out = self.calc_repo(root, 'x * 3', 'self.assertEqual(double(0), 0)', bp=bp)
             self.assertEqual(rc, 1, out)
-            self.assertIn('specs/020-calc/T001 <- T003', out)
             self.assertIn('test tasks green while their target is red 0', out)
+            self.assertNotIn('behind', out)
 
     def test_dependency_the_test_never_ran_is_not_probed(self):
         # R20 guru t5, R19 ws 004: an honest test whose Dependencies line named a task whose
@@ -829,6 +835,195 @@ class CalcTest(unittest.TestCase):
                           " the test's command): specs/022-two/T003 <- T004", out)
             self.assertIn('test tasks blind to their target 0', out)
             self.assertIn('task-specific 4 passed', out)
+
+    # --- R21: red cases and their owners; target red only on a case the target owns alone --
+
+    ORACLE = ("import sys\nsys.path.insert(0, '.')\nfrom pkg.calc import double, half\n"
+              "CASES = {'lib': lambda: double(2) == 4, 'half': lambda: half(4) == 2,\n"
+              "         'compat': lambda: double(0) == 0 and half(0) == 0}\n"
+              "for c in sys.argv[1:]:\n"
+              "    if not CASES[c]():\n"
+              "        sys.exit(f'[case {c}] wrong')\n"
+              "    print(f'case {c}: passed')\n")
+    CASES_BP = ("# Blueprint: cases\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                "### T001: Double\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\ndef double(x):\n    return x\n```\n\n"
+                "**After**:\n```python\ndef double(x):\n    raise NotImplementedError(\"T001: twice x\")\n```\n\n"
+                "**Verification**: `python3 specs/022-two/acceptance.py lib compat`\n\n"
+                "### T002: Half\n\n**File**: `pkg/calc.py` (modify)\n\n"
+                "**Before**:\n```python\ndef half(x):\n    return x\n```\n\n"
+                "**After**:\n```python\ndef half(x):\n    raise NotImplementedError(\"T002: half of x\")\n```\n\n"
+                "**Verification**: `python3 specs/022-two/acceptance.py half compat`\n\n"
+                "### T003: Test doubling\n\n**File**: `tests/test_calc.py` (new)\n\n**Dependencies**: T001\n\n"
+                "```python\nimport unittest\n\n\nclass CalcTest(unittest.TestCase):\n    def test_double(self):\n"
+                "        raise NotImplementedError(\"T003: double(0) is 0\")\n```\n\n"
+                "**Verification**: `python3 -m unittest tests.test_calc`\n")
+    CASES_STAMPED = 'def double(x):\n    return x\n\n\ndef half(x):\n    return x\n'
+
+    def cases_repo(self, root, double, half):
+        self.stamped_repo(root, {'pkg/__init__.py': '', 'pkg/calc.py': self.CASES_STAMPED}, self.CASES_BP)
+        Path(root, 'specs/022-two/acceptance.py').write_text(self.ORACLE)
+        Path(root, 'pkg/calc.py').write_text(f'def double(x):\n    return {double}\n\n\ndef half(x):\n    return {half}\n')
+        Path(root, 'tests').mkdir()
+        Path(root, 'tests/__init__.py').write_text('')
+        Path(root, 'tests/test_calc.py').write_text(
+            'import unittest\nfrom pkg.calc import double\n\n\nclass CalcTest(unittest.TestCase):\n'
+            '    def test_double(self):\n        self.assertEqual(double(0), 0)\n')
+        return self.verify_feature(root)
+
+    def test_a_red_case_is_listed_with_every_task_that_runs_it(self):
+        # R21 guru l1: `movecompat` was red, T010 and T011 both run it, and the output named
+        # T010 and T011 failed and read like two defects. One case is red; two tasks own it.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.cases_repo(root, 'x + x', 'x // 2 + 1')
+            self.assertEqual(rc, 1, out)
+            self.assertIn('    Red: 2 — each oracle case a command stopped on, and each failed command that names'
+                          ' no case, with the tasks whose Verification runs it:\n'
+                          '      compat (specs/022-two/acceptance.py): T001, T002\n'
+                          '      half (specs/022-two/acceptance.py): T002\n', out)
+            for phrase in self.BLAME:
+                self.assertNotIn(phrase, out)
+        self.assertEqual(applier.oracle_cases('node specs/007-x/acceptance.mjs a b-c d.e > out.txt'),
+                         [('specs/007-x/acceptance.mjs', c) for c in ('a', 'b-c', 'd.e')])
+        self.assertEqual(applier.oracle_cases('set -e\n$ node ./specs/7/o.mjs one && node --test test/x.test.js'),
+                         [('specs/7/o.mjs', 'one')])
+        self.assertEqual(applier.oracle_cases('node --test test/x.test.js'), [])
+        cases = [('o', 'a'), ('o', 'b'), ('o', 'c')]
+        self.assertEqual(applier.case_results(cases, 1, 'case a: passed\nboom'), ({('o', 'a')}, ('o', 'b')))
+        self.assertEqual(applier.case_results(cases, 1, 'case a: passed\n[case c] wrong'), ({('o', 'a')}, ('o', 'c')))
+        self.assertEqual(applier.case_results(cases, 1, 'case a: passed\ncase b: passed\ncase c: passed\n'),
+                         (set(cases), None))
+        self.assertEqual(applier.case_results(cases, 0, ''), (set(cases), None))
+
+    def test_target_red_needs_a_red_case_the_target_owns_alone(self):
+        # R21 guru: target-red took seven honest tests out of the count for a red case their
+        # target shared with other tasks, and kept the two weak ones for a case it owned alone.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.cases_repo(root, 'x + x', 'x // 2 + 1')
+            self.assertEqual(rc, 1, out)
+            self.assertIn('test tasks green while their target is red 0', out)
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.cases_repo(root, 'x * 3', 'x // 2')
+            self.assertEqual(rc, 1, out)
+            self.assertIn('      lib (specs/022-two/acceptance.py): T001\n', out)
+            self.assertIn('so they are not counted as passed: specs/022-two/T003 <- T001', out)
+            self.assertIn('test tasks green while their target is red 1', out)
+
+    # --- R21: documentation examples that cannot fail; transcripts compared ---------------
+
+    def readme_repo(self, root, block):
+        self.stamped_repo(root, {'README.md': self.README_OLD}, self.README_BP.replace('{fence}', 'sh'))
+        Path(root, 'README.md').write_text(self.README_OLD + '\n' + block)
+        return self.verify_feature(root)
+
+    def test_an_example_that_cannot_fail_is_not_a_passing_example(self):
+        # R21 guru r3/r4: a mistyped flag behind `|| echo "exit $?"` exited 2 and the block
+        # exited 0; a guard removed, the "refused" example succeeded and the block exited 0.
+        for line in ('python3 -c "raise SystemExit(2)" || echo "exit $?"', 'set +e', 'python3 x.py || true',
+                     'python3 x.py; true', 'python3 x.py; echo $?', '! python3 x.py'):
+            self.assertTrue(applier.masks_failure(line), line)
+        for line in ('python3 -c "print(1 or 2)"', "node -e 'a || b'", '# a || b', 'true'):
+            self.assertFalse(applier.masks_failure(line), line)
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.readme_repo(root, '```sh\npython3 -c "raise SystemExit(2)" || echo "exit $?"\n```\n')
+            self.assertEqual(rc, 0, out)
+            self.assertIn('1 documentation example block(s) keep a failing command from failing the block, so they'
+                          ' are not counted as passing examples, and their tasks are not counted as passed:'
+                          ' specs/022-two/T001', out)
+            self.assertIn('task-specific 0 passed, 0 failed', out)
+            self.assertIn('documentation examples masking a failure 1', out)
+
+    def test_a_transcript_compares_what_its_commands_print(self):
+        refusal = ('```console\n$ python3 -c "import sys; print(\'no such verb\'); sys.exit(2)"; echo "exit $?"\n'
+                   'no such verb\nexit 2\n```\n')
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.readme_repo(root, refusal)
+            self.assertEqual(rc, 0, out)
+            self.assertIn('task-specific 1 passed, 0 failed', out)
+            self.assertIn('documentation examples masking a failure 0', out)
+        # The refusal's message or its exit drifts, and the transcript says so.
+        for drift in (refusal.replace('\nno such verb\n', '\nno such word\n'), refusal.replace('exit 2\n```', 'exit 1\n```')):
+            with tempfile.TemporaryDirectory() as root:
+                rc, out = self.readme_repo(root, drift)
+                self.assertEqual(rc, 1, out)
+                self.assertIn('printed other lines than the transcript shows', out)
+        # A command with no lines under it must still end 0.
+        with tempfile.TemporaryDirectory() as root:
+            rc, out = self.readme_repo(root, '```console\n$ python3 -c "raise SystemExit(4)"\n```\n')
+            self.assertEqual(rc, 1, out)
+            self.assertIn('exited 4', out)
+
+    # --- R21: the file as the document leaves it, made on demand -----------------------
+
+    def test_show_final_prints_the_stamped_file_with_the_hunks_applied(self):
+        # R21 guru: a 488-line appendix was the stamped file with every hunk applied, byte for byte.
+        def show(root, *extra):
+            r = subprocess.run([sys.executable, str(MODULE), 'specs/022-two', '--show-final', 'pkg/calc.py', *extra],
+                               cwd=root, capture_output=True, text=True)
+            return r.returncode, r.stdout, r.stderr
+        with tempfile.TemporaryDirectory() as root:
+            self.stamped_repo(root, {'pkg/__init__.py': '', 'pkg/calc.py': self.SCALE_STAMPED}, self.SCALE_BP)
+            Path(root, 'pkg/calc.py').write_text(self.SCALE_DONE)
+            rc, out, err = show(root)
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(out, 'def triple(x):\n    raise NotImplementedError("T001: three times x")\n\n\n'
+                                  'def double(x):\n    return x + x\n\n\n'
+                                  'def scale(x, k=1):\n    raise NotImplementedError("T002: x times k")\n')
+            rc, out, err = show(root, '--through', 'T001')
+            self.assertEqual(rc, 0, err)
+            self.assertTrue(out.endswith('def scale(x):\n    return x\n'), out)
+            r = subprocess.run([sys.executable, str(MODULE), 'specs/022-two', '--show-final', 'pkg/other.py'],
+                               cwd=root, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn('no task of this blueprint writes that path', r.stderr)
+
+    # --- R21: --done judges where a task's code went by the names it brings --------------
+
+    MOVED_BP = ("# Blueprint: moved\n\n**Mode**: guide\n**Sources**: HEAD {head}\n\n"
+                "### T001: Route halve\n\n**File**: `pkg/cli.py` (modify)\n\n"
+                "**Before**:\n```python\nfrom pkg.lib import double\n```\n\n"
+                "**After**:\n```python\nfrom pkg.lib import double, halve\n```\n\n"
+                "**Before**:\n```python\n    if verb == \"double\":\n```\n\n"
+                "**After**:\n```python\n    # T001: send halve to halve(n)\n    if verb == \"double\":\n```\n\n"
+                "### T002: Count others\n\n**File**: `pkg/cli.py` (modify)\n\n"
+                "**Before**:\n```python\ndef other():\n    return 1\n```\n\n"
+                "**After**:\n```python\ndef other():\n    # T002: return 2\n    return 1\n```\n")
+    MOVED_FILE = ('from pkg.lib import double\n\n\ndef main(verb, n):\n    if verb == "double":\n        return double(n)\n'
+                  '    return routed(verb, n)\n\n\ndef spacer():\n    return 0\n\n\ndef other():\n    return 1\n')
+
+    def test_done_warns_on_code_placed_elsewhere_and_fails_on_code_not_written_both_bash_versions(self):
+        # R21 guru d5: three CLI branches in another order and an import split in two, the
+        # tree complete, and --done failed two tasks by their position. R21 d1 / R19 d3: a
+        # guard never started still fails; it brings no name to look for. R20 d1b: a line never
+        # typed whose names a helper beside it uses still fails; names alone are not the line.
+        elsewhere = '\n\nfrom pkg.lib import halve\n\n\ndef routed(verb, n):\n    return halve(n) if verb == "halve" else None\n'
+        trees = {
+            'placed elsewhere': (self.MOVED_FILE.replace('return 1\n', 'return 2\n') + elsewhere, 0, 'T001 (pkg/cli.py: halve)'),
+            'names missing': (self.MOVED_FILE.replace('return 1\n', 'return 2\n')
+                              + elsewhere.replace('halve', 'third'), 1, 'other tasks changed: T001 (pkg/cli.py)'),
+            'marker task not started': (self.MOVED_FILE.replace('import double\n', 'import double, halve\n')
+                                        .replace('    if verb == "double":', '    if verb == "halve":\n        return halve(n)\n'
+                                                 '    if verb == "double":'), 1, 'other tasks changed: T002 (pkg/cli.py)'),
+            'code line not typed': (self.MOVED_FILE.replace('return 1\n', 'return 2\n')
+                                    + '\n\nfrom pkg.lib import halve\n\n\ndef routed(HALF, n):\n    return halve(HALF)\n',
+                                    1, 'other tasks changed: T001 (pkg/cli.py)'),
+        }
+        line_bp = self.MOVED_BP.replace('**After**:\n```python\nfrom pkg.lib import double, halve\n```',
+                                        '**After**:\n```python\nfrom pkg.lib import double\nHALF = halve(8)\n```')
+        for shell in self.SHELLS:
+            for name, (text, want, line) in trees.items():
+                with self.subTest(shell=shell, tree=name), tempfile.TemporaryDirectory() as root:
+                    head = self.stamped_repo(root, {'pkg/cli.py': self.MOVED_FILE},
+                                             line_bp if name == 'code line not typed' else self.MOVED_BP)
+                    Path(root, 'pkg/cli.py').write_text(text)
+                    rc, out = self.scaffold(shell, root, 'specs/022-two', '--done')
+                    self.assertEqual(rc, want, out)
+                    self.assertIn(line, out)
+                    if want == 0:
+                        self.assertIn(f'1 (modify) task(s) left their hunks\' lines as HEAD {head} had them, and every'
+                                      ' name their lines bring is in the file elsewhere — placed differently, not'
+                                      ' missing: T001 (pkg/cli.py: halve)', out)
+                        self.assertNotIn('left every line', out)
 
     def test_done_requires_a_named_export_where_the_blueprint_has_one_both_bash_versions(self):
         # R20 guru d3a: the library's named export became a default export, every

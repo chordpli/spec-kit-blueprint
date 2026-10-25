@@ -30,14 +30,23 @@ def sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# What --verify no longer says: it states which commands and cases are red and which tasks
+# own them, never which task's code is wrong (R21: each way of placing a defect by task was
+# wrong on that round's controls).
+BLAME = ("behind a failed dependency", "Code other tasks wrote", "hints, not proof",
+         "Task-specific command results failed")
+
+
 def run_case(root: pathlib.Path, name: str, argv: list[str], evidence: pathlib.Path | None,
-             expected: int, required_output: str | None = None) -> dict:
+             expected: int, required_output: str | None = None, forbidden: tuple = ()) -> dict:
     result = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=900)
-    matched = required_output is None or required_output in result.stdout + result.stderr
+    text = result.stdout + result.stderr
+    matched = required_output is None or required_output in text
+    said = [phrase for phrase in forbidden if phrase in text]
     row = {"case": name, "command": argv, "exit": result.returncode,
            "expected": expected, "required_output": required_output,
-           "output_matched": matched,
-           "passed": result.returncode == expected and matched}
+           "output_matched": matched, "forbidden_found": said,
+           "passed": result.returncode == expected and matched and not said}
     if evidence:
         evidence.mkdir(parents=True, exist_ok=True)
         (evidence / f"{name}.log").write_text(
@@ -90,7 +99,7 @@ def run_all(evidence: pathlib.Path | None) -> list[dict]:
                     project, f"{state}-{key}",
                     [sys.executable, str(PYTHON / "apply_blueprint.py"),
                      f"specs/{feature}", "--verify", "--verify-scope", "feature"],
-                    evidence, expected[key]))
+                    evidence, expected[key], forbidden=BLAME))
             results.append(run_case(project, f"{state}-repository",
                                     ["npm", "test"], evidence, expected["repository"]))
         # Three independent behavior mutants run only on disposable complete-app copies.
@@ -132,7 +141,7 @@ def run_all(evidence: pathlib.Path | None) -> list[dict]:
                 mutant, name,
                 [sys.executable, str(PYTHON / "apply_blueprint.py"),
                  "specs/002-transfer-history", "--verify", "--verify-scope", "feature"],
-                evidence, 1, required_output=required))
+                evidence, 1, required_output=required, forbidden=BLAME))
         results.extend(run_runner_attacks(tmp, evidence))
     return results
 
