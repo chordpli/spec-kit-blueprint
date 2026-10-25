@@ -1004,6 +1004,8 @@ class CalcTest(unittest.TestCase):
             'marker task not started': (self.MOVED_FILE.replace('import double\n', 'import double, halve\n')
                                         .replace('    if verb == "double":', '    if verb == "halve":\n        return halve(n)\n'
                                                  '    if verb == "double":'), 1, 'other tasks changed: T002 (pkg/cli.py)'),
+            'name only in a comment': (self.MOVED_FILE.replace('return 1\n', 'return 2\n') + '\n\n# halve(n) belongs here\n',
+                                       1, 'other tasks changed: T001 (pkg/cli.py)'),
             'code line not typed': (self.MOVED_FILE.replace('return 1\n', 'return 2\n')
                                     + '\n\nfrom pkg.lib import halve\n\n\ndef routed(HALF, n):\n    return halve(HALF)\n',
                                     1, 'other tasks changed: T001 (pkg/cli.py)'),
