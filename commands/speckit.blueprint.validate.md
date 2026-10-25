@@ -54,9 +54,10 @@ python3 .specify/extensions/blueprint/scripts/python/validate_blueprint.py "$FEA
 # specs/ — a copy with no .git of its own inside another repository
 python3 .specify/extensions/blueprint/scripts/python/apply_blueprint.py "$FEATURE_DIR" --verify
 # read its two axes before the exit code: `Feature behavior proof` (command results) and
-# `Task proof` (task-specific, behind a failed dependency, non-discriminating test tasks,
+# `Task proof` (task-specific, red cases and their owners, non-discriminating test tasks,
 # shared, human evidence, unmeasured test files). Exit 0 = the commands passed, not every
-# task proven; a script reads the `Proof summary:` line.
+# task proven; a script reads the `Proof summary:` line. No line says which task's code
+# is wrong.
 # no declared file still carries a marker, no declared public name is missing, no ticked row
 # lies, and no (modify) task left its part of an existing file as the blueprint's HEAD stamp had it
 bash .specify/extensions/blueprint/scripts/bash/validate-scaffold.sh "$FEATURE_DIR" --done
@@ -121,17 +122,18 @@ Verification measured, and it is a different question:
 
 | Line | Means | Does not mean |
 |---|---|---|
-| `Task-specific command results passed/failed` | a command only this task names passed or failed; a test task counts as passed only when its test also discriminates (next row) | that the command's assertions cover the whole task |
+| `Task-specific command results passed` | a command only this task names passed; a test task counts as passed only when its test also discriminates (next row) | that the command's assertions cover the whole task |
+| `Red: N — each oracle case a command stopped on …` then `movecompat (specs/…/acceptance.mjs): T010, T011, **Test** header` | the oracle case a failed command stopped on (the case its error names as `[case NAME]`, or the first of its cases that did not print `case NAME: passed`), with **every** task whose Verification runs that case; a failed command that names no case is listed as `$ command: owners` | where the defect is, or which owner is unfinished. A task owns a case because its Verification runs it; a red case runs code several tasks wrote, and code no task wrote. `Proof summary`'s `task-specific … failed` counts tasks with a red command of their own, nothing more. Earlier releases named a failed task, a dependency it failed "behind", and files its command read that other tasks wrote; each round's controls found a new way for those lines to point at clean code (R21: 0 of 12 hints held the defect, and a defective task was excused as behind a clean one), so they are gone |
 | `Test tasks red on the blueprint's skeleton and green here` | the lines that name the task's test file were rerun on the skeleton — this feature's declared files at the stamped commit, the blueprint applied over them — and failed there | that the test is strong: a test a no-op implementation also passes is still listed here |
 | `⚠ N test task(s) pass on the blueprint's skeleton as well as here` | the test passes without the feature: an emptied body, `assert.ok(true)`. **Not counted as passed** | that the test is wrong when it tests something the skeleton writes complete, or behavior the feature leaves unchanged — those pass on the skeleton by design |
 | `⚠ N test task(s) also pass with only the (modify) task they test put back as the stamp had it` | a discriminating test task was run once more on your tree with only the regions of the `(modify)` task its `**Dependencies**` name put back — their stamped lines, except that a function or type the task adds keeps its declaration with the blueprint's marker body, so an import of it still works — and it passed: it does not see that task's change — "a transfer under the limit succeeds" passes with the limit removed. **Not counted as passed**; `Proof summary` counts `test tasks blind to their target N` | that the test is useless. A dependency that only creates files is not probed this way (the line `Not probed against their dependency alone` names those) |
-| `⚠ N test task(s) pass while the task they test fails` | the test's command passed and a task its `**Dependencies**` name, whose files the test ran, failed its own command, not behind a failed dependency of its own: the test does not see what is wrong there. **Not counted as passed**; `test tasks green while their target is red N` | that the test is weak in general — only that it missed this failure |
+| `⚠ N test task(s) pass while the task they test fails` | the test's command passed, and a red case (or a failed command) that a task its `**Dependencies**` name owns **alone**, whose files the test ran, is red: the test does not see what is wrong there. **Not counted as passed**; `test tasks green while their target is red N` | that the test is weak in general — only that it missed this failure. A case several tasks own (a compatibility case) does not count: it is red for a reason that can be any owner's, and held against the tests it took seven honest tests out of the count on the R21 controls. Nor does a target that has a red task among its own dependencies: its red can be what it ran of theirs (R20 `m1a`, R21 `s04`) |
 | `Test tasks green with one region of the task they test put back alone … T004 <- T002 1 of 3 (src/ledger.js:103)` | each region of the target task was put back alone, and with these ones the test stayed green: work of the task the test does not see, at stamped line N. A region that is only imports is not probed. A hint, counted as passed | that the region is untested by anything — another test or an oracle case may cover it |
 | `Not probed against a dependency the test never ran` | the test's command read no file that the named task writes, so its `**Dependencies**` line names something it does not test; the test is not probed against it and keeps its count | that the line is harmless: the task it does test goes unprobed |
 | `⚠ … whether their tests discriminate was not measured` | no `| HEAD` stamp, a stamp this clone lacks, a blueprint that does not apply to its stamp, a `--through` run, or no line of the task's own that names its test file. Counted as passed, with the reason | — |
-| `failed behind a failed dependency (… <- T003)` | the task is red and a task its `**Dependencies**` reach is red too | that it is done, or not done: its result cannot be told apart from the dependency's |
-| `Code other tasks wrote that the failed commands ran … T006 ran src/statement.js (T005), src/ledger.js (T002, T010)` | the failed command read these files — read, measured from their access times in the copy — and other tasks write them; `red` marks a writer that failed too. Files the failed task writes itself are not listed | where the defect is. Every task line is a hint: a failure is reported against the task whose command saw it, and a library task's lines can be wrong while its own cases pass. On a file system that does not record reads the line says `not measured`; a command that compiles the whole tree reads every file |
 | `$ # README.md example 1, as written there` | a documentation task's After adds a shell-fenced block (`sh`, `bash`, `shell`, `console`), so the shell blocks of that file on disk which the stamped commit did not have are run as written, in order, in a copy of their own, and must exit 0. A task that promised one and a file that has none fail | that every example in the file was run: blocks the stamped commit already had are not this feature's. On a tree that has moved past later features, their new blocks run too. Without the stamped commit a modified document's examples are `not measured` |
+| `$ # README.md example 2, a transcript: …` | a block with `$ ` prompts: each `$ ` command runs in one shell, in order, with stdout and stderr together, must end 0, and the lines under it are compared with what it printed (trailing blanks ignored); a difference fails the block and prints a diff | that a command with no lines under it printed anything in particular — only its exit is checked |
+| `⚠ N documentation example block(s) keep a failing command from failing the block` | a plain block (or a transcript command with no lines under it) holds `\|\| echo`, `\|\| true`, `; true`, `set +e`, `$?` or a leading `!`, and ended 0: it would end 0 whatever the command did. **Not counted as a passing example**, and its task is not counted as passed; `documentation examples masking a failure N` | that the command failed. Measured: a mistyped `--too` behind `\|\| echo` (a usage error) and a README "refused" line that succeeded both ended 0 (R21 r3, r4). A transcript with the output under the command is how a refusal is shown |
 | `Shared command results …` | one command claimed by several tasks; its result is the suite's | that each claiming task is implemented — a half-built feature shows every claimant red, and an emptied test file shows its task green |
 | `⚠ human review declared, human evidence not supplied` | the task's Verification hands a check to a person and the feature's `human-evidence.md` has no line for it; that part is **not run and not counted as passed**. The evidence line prints the exact line to record | that the task failed — it is counted, not failed. A backticked example inside a `Human review:` line is never executed |
 | `Human evidence supplied: T010 (alice 2026-10-20)` / `⚠ human evidence is stale` | a line `T010: <reviewer> <YYYY-MM-DD> path@sha …` names every file the task declares at its current `git hash-object`; stale when a file changed since | that the review was good — only that a person recorded one for these bytes |
@@ -142,12 +144,12 @@ Verification measured, and it is a different question:
 **Exit policy, for automation.** Exit 1 means a command failed, or (with `--verify-scope
 feature`) a selected task has neither a command nor a human review line and no feature-scoped
 header covers it. Exit 2 is a refused gate (an unspecified `**Test**` scope, a feature directory
-outside the root's `specs/`). Shared-only, non-discriminating, blind-to-target, human-evidence and
-green-while-target-red and unmeasured-test rows **never change the exit code**: exit 0 says the commands passed, not that every task is
+outside the root's `specs/`). Shared-only, non-discriminating, blind-to-target, human-evidence,
+green-while-target-red, masked-example and unmeasured-test rows **never change the exit code**: exit 0 says the commands passed, not that every task is
 proven. A pipeline that needs per-task proof reads the `Proof summary` line and requires
 `test tasks non-discriminating 0, not measured 0`, `shared-only 0`, `not supplied 0`,
-`test files unmeasured 0`, `test tasks blind to their target 0` and `test tasks green while their target is red 0` — each of them reachable on a finished tree, the human one by
-recording the review in `human-evidence.md`.
+`test files unmeasured 0`, `test tasks blind to their target 0`, `test tasks green while their target is red 0` and `documentation examples masking a failure 0` — each of them reachable on a finished tree, the human one by
+recording the review in `human-evidence.md`. The line no longer carries `(N behind a failed dependency)`.
 
 A failed verification is reported as a fact about **your tree**, on its own line, and never as
 `Blueprint did NOT apply cleanly`: the document placed and compiled, and telling a developer
@@ -246,6 +248,22 @@ toward passing. A task some of whose regions moved and some did not is counted o
 failed: a reviewer typed one of a task's three hunks and `--done` passed, but on every finished
 tree of the same feature two tasks read 1 of 2 as well, their code typed a few lines from where
 the marker sat.
+
+Where a hunk's code goes is the generator's suggestion, not part of the work. A task whose
+regions all read as stamped, but whose lines bring names into the file (an import of
+`unfreezeAccount`, a new function) that the file now has every one of, wrote its code
+somewhere else: it is a warning, `(modify) task(s) left their hunks' lines as HEAD … had them,
+and every name their lines bring is in the file elsewhere — placed differently, not missing:
+T005 (src/cli.js: unfreezeAccount)`, and `--done` does not fail on it. A finished tree with its
+three CLI branches in another order and its import split in two failed here for two tasks
+(R21 `d5`). Names are read outside comments and string literals, so a marker's prose brings
+none. A task whose hunks bring no name — a marker comment over existing code, as every guard
+in a guide blueprint is — has nothing to look for, and a guard never started reads exactly
+like that, so it still fails on its lines alone (R21 `d1`, R19 `d3`); a guard placed elsewhere
+in the function fails too. Names are not the whole test: every code line the task adds must
+also be in the file as written (whitespace aside), unless it is an import, where the names
+are enough. An unstarted task whose one code line destructured `since` and `until`, beside a
+helper that used both names, read as placed elsewhere until this was added (R20 `d1b`).
 
 A JavaScript or TypeScript declaration the blueprint exports by name (`export function f`) must
 be exported by name on disk — `export function`, `export const`, an `export { f }` list,
